@@ -1,0 +1,162 @@
+
+/*
+DevLens - Database Design (MVP)
+
+Related Documents
+- 01-business-logic-architecture.md
+- 04-metric-definitions.md
+
+Legend
+[PG] = PostgreSQL
+[CH] = ClickHouse (Logical model only)
+*/
+
+/* ===========================
+   PostgreSQL
+=========================== */
+
+Table users {
+  id uuid [pk]
+  email varchar [unique, not null]
+  name varchar
+  avatar_url varchar
+  created_at timestamp
+}
+
+Table organizations {
+  id uuid [pk]
+  github_id bigint [unique, not null]
+  name varchar
+  created_at timestamp
+}
+
+Table organization_members {
+  id uuid [pk]
+  organization_id uuid [ref: > organizations.id]
+  user_id uuid [ref: > users.id]
+  role varchar
+}
+
+Table github_installations {
+  id uuid [pk]
+  organization_id uuid [ref: > organizations.id]
+  installation_id bigint [unique]
+  installed_at timestamp
+}
+
+Table repositories {
+  id uuid [pk]
+  organization_id uuid [ref: > organizations.id]
+  github_id bigint [unique]
+  name varchar
+  full_name varchar
+  default_branch varchar
+  is_active boolean
+  last_synced_at timestamp
+}
+
+Table sync_jobs {
+  id uuid [pk]
+  repository_id uuid [ref: > repositories.id]
+  status varchar
+  progress int
+  started_at timestamp
+  finished_at timestamp
+}
+
+Table webhook_deliveries {
+  id uuid [pk]
+  repository_id uuid [ref: > repositories.id]
+  github_delivery_id varchar [unique]
+  event_type varchar
+  processed boolean
+  received_at timestamp
+}
+
+/* ===========================
+   ClickHouse (Logical Tables)
+=========================== */
+
+Table pull_requests {
+  id uuid [pk]
+  repository_id uuid
+  github_pr_id bigint
+  number int
+  title varchar
+  author varchar
+  state varchar
+  created_at timestamp
+  merged_at timestamp
+  closed_at timestamp
+  additions int
+  deletions int
+  files_changed int
+}
+
+Table pull_request_reviews {
+  id uuid [pk]
+  pull_request_id uuid
+  reviewer varchar
+  review_requested_at timestamp
+  first_review_at timestamp
+  review_submitted_at timestamp
+  state varchar
+}
+
+Table deployments {
+  id uuid [pk]
+  repository_id uuid
+  environment varchar
+  status varchar
+  deployed_at timestamp
+}
+
+Table file_changes {
+  id uuid [pk]
+  pull_request_id uuid
+  file_path varchar
+  additions int
+  deletions int
+  commit_count int
+}
+
+Table metrics_daily {
+  id uuid [pk]
+  repository_id uuid
+  metric_date date
+  pr_cycle_time_minutes int
+  review_wait_minutes int
+  deployment_frequency int
+  change_failure_rate decimal
+  review_coverage decimal
+}
+
+/*
+Metric Mapping
+
+PR Cycle Time
+-> pull_requests.created_at
+-> pull_requests.merged_at
+
+Review Wait Time
+-> pull_request_reviews.review_requested_at
+-> pull_request_reviews.first_review_at
+
+PR Size
+-> pull_requests.files_changed
+-> pull_requests.additions
+-> pull_requests.deletions
+
+Deployment Frequency
+-> deployments.status
+-> deployments.deployed_at
+
+Change Failure Rate
+-> deployments.status
+
+Hotspot Score
+-> file_changes.file_path
+-> file_changes.additions
+-> file_changes.deletions
+-> file_changes.commit_count
+*/

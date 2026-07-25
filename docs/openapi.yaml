@@ -1,0 +1,998 @@
+openapi: 3.0.3
+
+info:
+  title: DevLens API
+  version: 1.0.0
+  description: |
+    API contract สำหรับ DevLens Engineering Intelligence Platform
+
+    Related documents:
+    - 01-business-logic-architecture.md
+    - 03-backend-roadmap.md
+    - 04-metric-definitions.md
+    - 05-database-design.dbml
+    - 06-api-design.md
+
+servers:
+  - url: /api/v1
+    description: Current API version
+
+tags:
+  - name: Health
+  - name: Organizations
+  - name: Repositories
+  - name: Sync Jobs
+  - name: Dashboard
+  - name: Pull Request Metrics
+  - name: Review Metrics
+  - name: Deployment Metrics
+  - name: Hotspots
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Check API health
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /organizations:
+    get:
+      tags:
+        - Organizations
+      summary: Get organizations accessible by current user
+      operationId: listOrganizations
+      responses:
+        "200":
+          description: Organization list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /organizations/{organizationId}:
+    get:
+      tags:
+        - Organizations
+      summary: Get organization detail
+      operationId: getOrganization
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Organization detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /organizations/{organizationId}/repositories:
+    get:
+      tags:
+        - Repositories
+      summary: Get repositories in an organization
+      operationId: listRepositories
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/RepositoryStatus"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SortBy"
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Repository list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repositories/{repositoryId}:
+    get:
+      tags:
+        - Repositories
+      summary: Get repository detail
+      operationId: getRepository
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+      responses:
+        "200":
+          description: Repository detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repositories/{repositoryId}/sync:
+    post:
+      tags:
+        - Sync Jobs
+      summary: Start repository synchronization
+      operationId: createRepositorySync
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSyncRequest"
+      responses:
+        "202":
+          description: Sync job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /repositories/{repositoryId}/sync-jobs:
+    get:
+      tags:
+        - Sync Jobs
+      summary: Get repository synchronization history
+      operationId: listRepositorySyncJobs
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SyncStatus"
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Sync job list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJobListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sync-jobs/{syncJobId}:
+    get:
+      tags:
+        - Sync Jobs
+      summary: Get synchronization job detail
+      operationId: getSyncJob
+      parameters:
+        - $ref: "#/components/parameters/SyncJobId"
+      responses:
+        "200":
+          description: Sync job detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repositories/{repositoryId}/dashboard/summary:
+    get:
+      tags:
+        - Dashboard
+      summary: Get repository dashboard summary
+      operationId: getDashboardSummary
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummaryResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/metrics/pull-requests:
+    get:
+      tags:
+        - Pull Request Metrics
+      summary: Get pull request metrics
+      operationId: getPullRequestMetrics
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Pull request metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequestMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/metrics/reviews:
+    get:
+      tags:
+        - Review Metrics
+      summary: Get review metrics
+      operationId: getReviewMetrics
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Review metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/metrics/deployments:
+    get:
+      tags:
+        - Deployment Metrics
+      summary: Get deployment metrics
+      operationId: getDeploymentMetrics
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/Environment"
+      responses:
+        "200":
+          description: Deployment metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeploymentMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/metrics/hotspots:
+    get:
+      tags:
+        - Hotspots
+      summary: Get hotspot files
+      operationId: getHotspotMetrics
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Hotspot file metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HotspotMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    OrganizationId:
+      name: organizationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RepositoryId:
+      name: repositoryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    SyncJobId:
+      name: syncJobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PageSize:
+      name: pageSize
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    Search:
+      name: search
+      in: query
+      schema:
+        type: string
+
+    SortBy:
+      name: sortBy
+      in: query
+      schema:
+        type: string
+        example: createdAt
+
+    SortOrder:
+      name: sortOrder
+      in: query
+      schema:
+        type: string
+        enum:
+          - asc
+          - desc
+        default: desc
+
+    RepositoryStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+          - active
+          - inactive
+          - archived
+
+    SyncStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+          - pending
+          - running
+          - completed
+          - failed
+
+    DateFrom:
+      name: from
+      in: query
+      required: true
+      description: Inclusive start date
+      schema:
+        type: string
+        format: date
+
+    DateTo:
+      name: to
+      in: query
+      required: true
+      description: Inclusive end date
+      schema:
+        type: string
+        format: date
+
+    Interval:
+      name: interval
+      in: query
+      schema:
+        type: string
+        enum:
+          - day
+          - week
+          - month
+        default: day
+
+    Environment:
+      name: environment
+      in: query
+      schema:
+        type: string
+        example: production
+
+  responses:
+    Unauthorized:
+      description: Authentication is required or token is invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    Forbidden:
+      description: User does not have permission to access the resource
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    NotFound:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    Conflict:
+      description: Request conflicts with current resource state
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+
+    PaginationMeta:
+      type: object
+      required:
+        - page
+        - pageSize
+        - totalItems
+        - totalPages
+      properties:
+        page:
+          type: integer
+          example: 1
+        pageSize:
+          type: integer
+          example: 20
+        totalItems:
+          type: integer
+          example: 42
+        totalPages:
+          type: integer
+          example: 3
+
+    Organization:
+      type: object
+      required:
+        - id
+        - githubId
+        - name
+        - role
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        githubId:
+          type: integer
+          format: int64
+        name:
+          type: string
+          example: DevLens Labs
+        role:
+          type: string
+          enum:
+            - owner
+            - admin
+            - maintainer
+            - viewer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrganizationResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/Organization"
+
+    OrganizationListResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organization"
+
+    Repository:
+      type: object
+      required:
+        - id
+        - organizationId
+        - githubId
+        - name
+        - fullName
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        githubId:
+          type: integer
+          format: int64
+        name:
+          type: string
+          example: devlens-api
+        fullName:
+          type: string
+          example: devlens-labs/devlens-api
+        defaultBranch:
+          type: string
+          example: main
+          nullable: true
+        isActive:
+          type: boolean
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSyncedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    RepositoryResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/Repository"
+
+    RepositoryListResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Repository"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    CreateSyncRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            - incremental
+            - full
+          default: incremental
+        from:
+          type: string
+          format: date
+          nullable: true
+
+    SyncJob:
+      type: object
+      required:
+        - id
+        - repositoryId
+        - status
+        - progress
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        repositoryId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        triggeredBy:
+          type: string
+          format: uuid
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    SyncJobResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/SyncJob"
+
+    SyncJobListResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncJob"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    DashboardSummary:
+      type: object
+      required:
+        - repositoryId
+        - from
+        - to
+        - prCycleTimeMinutes
+        - reviewWaitMinutes
+        - deploymentFrequency
+        - changeFailureRate
+        - reviewCoverage
+      properties:
+        repositoryId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        prCycleTimeMinutes:
+          type: number
+          format: double
+        reviewWaitMinutes:
+          type: number
+          format: double
+        deploymentFrequency:
+          type: number
+          format: double
+        changeFailureRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        reviewCoverage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    DashboardSummaryResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/DashboardSummary"
+
+    MetricPoint:
+      type: object
+      required:
+        - date
+        - value
+      properties:
+        date:
+          type: string
+          format: date
+        value:
+          type: number
+          format: double
+
+    PullRequestMetrics:
+      type: object
+      required:
+        - averageCycleTimeMinutes
+        - averageFilesChanged
+        - averageAdditions
+        - averageDeletions
+        - cycleTimeTrend
+      properties:
+        averageCycleTimeMinutes:
+          type: number
+          format: double
+        averageFilesChanged:
+          type: number
+          format: double
+        averageAdditions:
+          type: number
+          format: double
+        averageDeletions:
+          type: number
+          format: double
+        cycleTimeTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+
+    PullRequestMetricsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/PullRequestMetrics"
+
+    ReviewMetrics:
+      type: object
+      required:
+        - averageWaitMinutes
+        - averageReviewMinutes
+        - reviewCoverage
+        - waitTimeTrend
+      properties:
+        averageWaitMinutes:
+          type: number
+          format: double
+        averageReviewMinutes:
+          type: number
+          format: double
+        reviewCoverage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        waitTimeTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+
+    ReviewMetricsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/ReviewMetrics"
+
+    DeploymentMetrics:
+      type: object
+      required:
+        - deploymentCount
+        - deploymentFrequency
+        - changeFailureRate
+        - deploymentTrend
+      properties:
+        deploymentCount:
+          type: integer
+        deploymentFrequency:
+          type: number
+          format: double
+        changeFailureRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        deploymentTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+
+    DeploymentMetricsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/DeploymentMetrics"
+
+    HotspotFile:
+      type: object
+      required:
+        - filePath
+        - hotspotScore
+        - additions
+        - deletions
+        - commitCount
+      properties:
+        filePath:
+          type: string
+          example: internal/metrics/calculator.go
+        hotspotScore:
+          type: number
+          format: double
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        commitCount:
+          type: integer
+
+    HotspotMetricsResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/HotspotFile"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: REPOSITORY_NOT_FOUND
+        message:
+          type: string
+          example: Repository not found
+        requestId:
+          type: string
+          example: req_01JABCXYZ
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    ValidationIssue:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          example: from
+        message:
+          type: string
+          example: from must be before or equal to to
+
+    ValidationErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          allOf:
+            - $ref: "#/components/schemas/ErrorDetail"
+            - type: object
+              properties:
+                details:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ValidationIssue"
