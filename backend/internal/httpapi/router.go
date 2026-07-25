@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
-	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -17,7 +16,7 @@ type PostgresHealthChecker interface {
 
 type Dependencies struct {
 	Postgres      PostgresHealthChecker
-	Organizations *organization.Handler
+	Organizations *OrganizationHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
@@ -43,9 +42,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", NewHealthHandler(deps.Postgres).ServeHTTP)
-
-		// Organization routes will be registered in the next API foundation steps.
-		_ = deps.Organizations
+		if deps.Organizations != nil {
+			deps.Organizations.RegisterRoutes(r)
+		}
 	})
 
 	return router

@@ -36,7 +36,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	organizationRepository := organization.NewRepository(postgresDB)
 	organizationService := organization.NewService(organizationRepository)
-	organizationHandler := organization.NewHandler(organizationService)
+	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:      postgresDB,

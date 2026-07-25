@@ -48,11 +48,36 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
 
   /organizations:
+    post:
+      tags:
+        - Organizations
+      summary: Create organization
+      operationId: createOrganization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationRequest"
+      responses:
+        "201":
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
     get:
       tags:
         - Organizations
       summary: Get organizations accessible by current user
       operationId: listOrganizations
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
       responses:
         "200":
           description: Organization list
@@ -60,8 +85,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OrganizationListResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /organizations/{organizationId}:
     get:
@@ -78,10 +103,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OrganizationResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -555,8 +578,8 @@ components:
       required:
         - id
         - githubId
+        - slug
         - name
-        - role
         - createdAt
       properties:
         id:
@@ -565,16 +588,12 @@ components:
         githubId:
           type: integer
           format: int64
+        slug:
+          type: string
+          example: devlens
         name:
           type: string
-          example: DevLens Labs
-        role:
-          type: string
-          enum:
-            - owner
-            - admin
-            - maintainer
-            - viewer
+          example: DevLens
         createdAt:
           type: string
           format: date-time
@@ -582,6 +601,24 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    CreateOrganizationRequest:
+      type: object
+      required:
+        - githubId
+        - slug
+        - name
+      properties:
+        githubId:
+          type: integer
+          format: int64
+          example: 123456
+        slug:
+          type: string
+          example: devlens
+        name:
+          type: string
+          example: DevLens
 
     OrganizationResponse:
       type: object
@@ -595,11 +632,14 @@ components:
       type: object
       required:
         - data
+        - pagination
       properties:
         data:
           type: array
           items:
             $ref: "#/components/schemas/Organization"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
 
     Repository:
       type: object
