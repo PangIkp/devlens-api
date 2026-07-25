@@ -8,6 +8,9 @@ This repository currently contains the initial backend foundation in [`backend`]
 
 - Go API bootstrap
 - `/api/v1/health`
+- `POST /api/v1/organizations`
+- `GET /api/v1/organizations`
+- `GET /api/v1/organizations/{organizationId}`
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -49,6 +52,35 @@ make test
 
 ```sh
 make run
+```
+
+## Organization API
+
+Current `Organization` shape:
+
+- `id`
+- `githubId`
+- `slug`
+- `name`
+- `createdAt`
+- `updatedAt`
+
+Behavior notes:
+
+- `slug` must be lowercase and may contain letters, numbers, and hyphens
+- `GET` queries exclude soft-deleted organizations (`deleted_at IS NOT NULL`)
+- `updatedAt` is nullable until update behavior is implemented
+
+Example requests:
+
+```sh
+curl -i -X POST http://localhost:8080/api/v1/organizations \
+  -H "Content-Type: application/json" \
+  -d '{"githubId":123456,"slug":"devlens","name":"DevLens"}'
+
+curl -i "http://localhost:8080/api/v1/organizations?page=1&pageSize=20"
+
+curl -i http://localhost:8080/api/v1/organizations/{organizationId}
 ```
 
 ## Local Services

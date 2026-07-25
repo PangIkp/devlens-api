@@ -20,6 +20,9 @@ type Organization struct {
 	GithubID  int64
 	Name      pgtype.Text
 	CreatedAt pgtype.Timestamptz
+	Slug      string
+	UpdatedAt pgtype.Timestamptz
+	DeletedAt pgtype.Timestamptz
 }
 
 type OrganizationMember struct {

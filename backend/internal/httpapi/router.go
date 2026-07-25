@@ -15,7 +15,8 @@ type PostgresHealthChecker interface {
 }
 
 type Dependencies struct {
-	Postgres PostgresHealthChecker
+	Postgres      PostgresHealthChecker
+	Organizations *OrganizationHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
@@ -41,6 +42,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", NewHealthHandler(deps.Postgres).ServeHTTP)
+		if deps.Organizations != nil {
+			deps.Organizations.RegisterRoutes(r)
+		}
 	})
 
 	return router

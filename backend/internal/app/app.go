@@ -12,6 +12,7 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
+	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
 )
 
@@ -33,8 +34,13 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
+	organizationRepository := organization.NewRepository(postgresDB)
+	organizationService := organization.NewService(organizationRepository)
+	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
+
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
-		Postgres: postgresDB,
+		Postgres:      postgresDB,
+		Organizations: organizationHandler,
 	})
 
 	server := &http.Server{

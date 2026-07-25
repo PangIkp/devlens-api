@@ -60,3 +60,7 @@ func (db *DB) Close() {
 
 	db.pool.Close()
 }
+
+func (db *DB) Queries() *sqlcgen.Queries {
+	return db.queries
+}
