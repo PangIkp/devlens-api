@@ -2,6 +2,7 @@
 .env
 
 # Go
+.cache/
 backend/bin/
 backend/.cache/
 backend/coverage.out
