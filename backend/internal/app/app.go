@@ -15,6 +15,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
+	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
 )
 
 type App struct {
@@ -41,11 +42,15 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	organizationMemberRepository := organizationmember.NewRepository(postgresDB)
 	organizationMemberService := organizationmember.NewService(organizationMemberRepository)
 	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService)
+	repositoryStore := devrepository.NewRepository(postgresDB)
+	repositoryService := devrepository.NewService(repositoryStore)
+	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
+		Repositories:        repositoryHandler,
 	})
 
 	server := &http.Server{

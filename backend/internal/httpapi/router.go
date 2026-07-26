@@ -18,6 +18,7 @@ type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
+	Repositories        *RepositoryHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
@@ -48,6 +49,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.OrganizationMembers != nil {
 			deps.OrganizationMembers.RegisterRoutes(r)
+		}
+		if deps.Repositories != nil {
+			deps.Repositories.RegisterRoutes(r)
 		}
 	})
 

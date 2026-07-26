@@ -241,6 +241,32 @@ paths:
           $ref: "#/components/responses/Conflict"
 
   /organizations/{organizationId}/repositories:
+    post:
+      tags:
+        - Repositories
+      summary: Create repository under an organization
+      operationId: createRepository
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepositoryRequest"
+      responses:
+        "201":
+          description: Repository created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
     get:
       tags:
         - Repositories
@@ -267,6 +293,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /repositories/{repositoryId}:
     get:
@@ -289,6 +317,35 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+    patch:
+      tags:
+        - Repositories
+      summary: Update repository state or metadata
+      operationId: updateRepository
+      description: Use this endpoint to rename, change default branch, deactivate, or archive a repository without deleting historical records.
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRepositoryRequest"
+      responses:
+        "200":
+          description: Repository updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /repositories/{repositoryId}/sync:
     post:
@@ -909,6 +966,46 @@ components:
           format: date-time
           nullable: true
 
+    CreateRepositoryRequest:
+      type: object
+      required:
+        - githubId
+        - name
+        - fullName
+      properties:
+        githubId:
+          type: integer
+          format: int64
+          example: 123456789
+        name:
+          type: string
+          example: devlens-api
+        fullName:
+          type: string
+          example: devlens-labs/devlens-api
+        defaultBranch:
+          type: string
+          example: main
+          nullable: true
+
+    UpdateRepositoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: devlens-api
+        fullName:
+          type: string
+          example: devlens-labs/devlens-api
+        defaultBranch:
+          type: string
+          example: main
+          nullable: true
+        isActive:
+          type: boolean
+        archived:
+          type: boolean
+
     RepositoryResponse:
       type: object
       required:
@@ -921,13 +1018,13 @@ components:
       type: object
       required:
         - data
-        - meta
+        - pagination
       properties:
         data:
           type: array
           items:
             $ref: "#/components/schemas/Repository"
-        meta:
+        pagination:
           $ref: "#/components/schemas/PaginationMeta"
 
     CreateSyncRequest:
