@@ -30,3 +30,20 @@ OFFSET $2;
 SELECT COUNT(*)::bigint
 FROM organizations
 WHERE deleted_at IS NULL;
+
+-- name: UpdateOrganization :one
+UPDATE organizations
+SET slug = $2,
+    name = $3,
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, github_id, slug, name, created_at, updated_at;
+
+-- name: SoftDeleteOrganization :one
+UPDATE organizations
+SET deleted_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id;

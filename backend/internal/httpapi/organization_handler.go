@@ -14,6 +14,8 @@ type OrganizationService interface {
 	Create(context.Context, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
 	GetByID(context.Context, string) (organization.OrganizationResponse, error)
 	List(context.Context, organization.ListParams) (organization.ListResult, error)
+	Update(context.Context, string, organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error)
+	SoftDelete(context.Context, string) error
 }
 
 type OrganizationHandler struct {
@@ -28,6 +30,8 @@ func (h *OrganizationHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/organizations", h.create)
 	r.Get("/organizations", h.list)
 	r.Get("/organizations/{organizationId}", h.get)
+	r.Patch("/organizations/{organizationId}", h.update)
+	r.Delete("/organizations/{organizationId}", h.softDelete)
 }
 
 func (h *OrganizationHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -67,11 +71,8 @@ func (h *OrganizationHandler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *OrganizationHandler) get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "organizationId")
-	if !isValidUUID(id) {
-		WriteError(w, r, http.StatusBadRequest, NewValidationError(
-			"request validation failed",
-			FieldInvalid("organizationId", "must be a valid UUID"),
-		))
+	if err := validateOrganizationID(id); err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
 		return
 	}
 
@@ -82,6 +83,43 @@ func (h *OrganizationHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteData(w, http.StatusOK, org)
+}
+
+func (h *OrganizationHandler) update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "organizationId")
+	if err := validateOrganizationID(id); err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	var req organization.UpdateOrganizationRequest
+	if err := DecodeJSON(r, &req); err != nil {
+		WriteError(w, r, http.StatusBadRequest, DecodeError(err))
+		return
+	}
+
+	org, err := h.service.Update(r.Context(), id, req)
+	if err != nil {
+		writeOrganizationError(w, r, err)
+		return
+	}
+
+	WriteData(w, http.StatusOK, org)
+}
+
+func (h *OrganizationHandler) softDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "organizationId")
+	if err := validateOrganizationID(id); err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	if err := h.service.SoftDelete(r.Context(), id); err != nil {
+		writeOrganizationError(w, r, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeOrganizationError(w http.ResponseWriter, r *http.Request, err error) {
@@ -112,4 +150,16 @@ func writeOrganizationError(w http.ResponseWriter, r *http.Request, err error) {
 func isValidUUID(value string) bool {
 	var id pgtype.UUID
 	return id.Scan(value) == nil
+}
+
+func validateOrganizationID(value string) *Error {
+	if isValidUUID(value) {
+		return nil
+	}
+
+	err := NewValidationError(
+		"request validation failed",
+		FieldInvalid("organizationId", "must be a valid UUID"),
+	)
+	return &err
 }

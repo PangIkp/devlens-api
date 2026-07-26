@@ -81,6 +81,12 @@ curl -i -X POST http://localhost:8080/api/v1/organizations \
 curl -i "http://localhost:8080/api/v1/organizations?page=1&pageSize=20"
 
 curl -i http://localhost:8080/api/v1/organizations/{organizationId}
+
+curl -i -X PATCH http://localhost:8080/api/v1/organizations/{organizationId} \
+  -H "Content-Type: application/json" \
+  -d '{"name":"DevLens Platform"}'
+
+curl -i -X DELETE http://localhost:8080/api/v1/organizations/{organizationId}
 ```
 
 ## Local Services

@@ -25,6 +25,12 @@ type CreateParams struct {
 	Name     string
 }
 
+type UpdateParams struct {
+	ID   string
+	Slug string
+	Name string
+}
+
 type ListParams struct {
 	Page     int
 	PageSize int
@@ -100,6 +106,39 @@ func (r *Repository) List(ctx context.Context, params ListParams) (ListResult, e
 	return result, nil
 }
 
+func (r *Repository) Update(ctx context.Context, params UpdateParams) (OrganizationResponse, error) {
+	row, err := r.queries.UpdateOrganization(ctx, sqlcgen.UpdateOrganizationParams{
+		ID:   parseUUID(params.ID),
+		Slug: params.Slug,
+		Name: textValue(params.Name),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OrganizationResponse{}, ErrOrganizationNotFound
+		}
+		if isUniqueViolation(err) {
+			return OrganizationResponse{}, ErrOrganizationConflict
+		}
+
+		return OrganizationResponse{}, fmt.Errorf("update organization: %w", err)
+	}
+
+	return toUpdateResponse(row), nil
+}
+
+func (r *Repository) SoftDelete(ctx context.Context, id string) error {
+	_, err := r.queries.SoftDeleteOrganization(ctx, parseUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrOrganizationNotFound
+		}
+
+		return fmt.Errorf("soft delete organization: %w", err)
+	}
+
+	return nil
+}
+
 func toCreateResponse(row sqlcgen.CreateOrganizationRow) OrganizationResponse {
 	return OrganizationResponse{
 		ID:        uuidString(row.ID),
@@ -123,6 +162,17 @@ func toGetResponse(row sqlcgen.GetOrganizationByIDRow) OrganizationResponse {
 }
 
 func toListResponse(row sqlcgen.ListOrganizationsRow) OrganizationResponse {
+	return OrganizationResponse{
+		ID:        uuidString(row.ID),
+		GithubID:  row.GithubID,
+		Slug:      row.Slug,
+		Name:      row.Name.String,
+		CreatedAt: timeValue(row.CreatedAt),
+		UpdatedAt: optionalTimeValue(row.UpdatedAt),
+	}
+}
+
+func toUpdateResponse(row sqlcgen.UpdateOrganizationRow) OrganizationResponse {
 	return OrganizationResponse{
 		ID:        uuidString(row.ID),
 		GithubID:  row.GithubID,

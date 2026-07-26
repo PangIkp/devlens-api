@@ -107,6 +107,46 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Organizations
+      summary: Update organization
+      operationId: updateOrganization
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationRequest"
+      responses:
+        "200":
+          description: Organization updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags:
+        - Organizations
+      summary: Soft delete organization
+      operationId: deleteOrganization
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "204":
+          description: Organization deleted
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /organizations/{organizationId}/repositories:
     get:
@@ -619,6 +659,16 @@ components:
         name:
           type: string
           example: DevLens
+
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        slug:
+          type: string
+          example: devlens-platform
+        name:
+          type: string
+          example: DevLens Platform
 
     OrganizationResponse:
       type: object

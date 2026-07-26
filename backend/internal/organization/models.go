@@ -9,6 +9,12 @@ type CreateOrganizationRequest struct {
 	Name     string `json:"name"`
 }
 
+// UpdateOrganizationRequest is the HTTP request model for partially updating organizations.
+type UpdateOrganizationRequest struct {
+	Slug *string `json:"slug"`
+	Name *string `json:"name"`
+}
+
 // OrganizationResponse is the HTTP response model for organization payloads.
 type OrganizationResponse struct {
 	ID        string     `json:"id"`
