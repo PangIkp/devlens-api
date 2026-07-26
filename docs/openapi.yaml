@@ -148,6 +148,98 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /organizations/{organizationId}/members:
+    get:
+      tags:
+        - Organizations
+      summary: Get organization members
+      operationId: listOrganizationMembers
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Organization member list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags:
+        - Organizations
+      summary: Add organization member
+      operationId: createOrganizationMember
+      description: Authentication is deferred in the current milestone, so `userId` is provided in the request body.
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationMemberRequest"
+      responses:
+        "201":
+          description: Organization member created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /organizations/{organizationId}/members/{memberId}:
+    patch:
+      tags:
+        - Organizations
+      summary: Update organization member role
+      operationId: updateOrganizationMember
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/MemberId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationMemberRequest"
+      responses:
+        "200":
+          description: Organization member updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - Organizations
+      summary: Remove organization member
+      operationId: deleteOrganizationMember
+      description: This milestone uses hard delete for organization members because `organization_members.deleted_at` is not defined in PostgreSQL schema yet.
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/MemberId"
+      responses:
+        "204":
+          description: Organization member removed
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /organizations/{organizationId}/repositories:
     get:
       tags:
@@ -437,6 +529,14 @@ components:
         type: string
         format: uuid
 
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
     SyncJobId:
       name: syncJobId
       in: path
@@ -690,6 +790,76 @@ components:
             $ref: "#/components/schemas/Organization"
         pagination:
           $ref: "#/components/schemas/PaginationMeta"
+
+    CreateOrganizationMemberRequest:
+      type: object
+      required:
+        - userId
+        - role
+      properties:
+        userId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - owner
+            - admin
+            - member
+
+    UpdateOrganizationMemberRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum:
+            - owner
+            - admin
+            - member
+
+    OrganizationMember:
+      type: object
+      required:
+        - id
+        - organizationId
+        - userId
+        - role
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+            - owner
+            - admin
+            - member
+
+    OrganizationMemberResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/OrganizationMember"
+
+    OrganizationMemberListResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrganizationMember"
 
     Repository:
       type: object

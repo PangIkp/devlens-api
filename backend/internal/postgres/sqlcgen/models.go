@@ -29,7 +29,7 @@ type OrganizationMember struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID
 	UserID         pgtype.UUID
-	Role           pgtype.Text
+	Role           string
 }
 
 type Repository struct {
