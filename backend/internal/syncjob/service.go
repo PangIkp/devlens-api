@@ -20,6 +20,7 @@ type store interface {
 	UpdateProgress(context.Context, string, int, time.Time) (SyncJobResponse, error)
 	MarkFailed(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	SyncRepositoryMetadata(context.Context, string, repositoryMetadata, time.Time) error
+	UpsertPullRequestBundle(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	Complete(context.Context, string, string, time.Time) (SyncJobResponse, error)
 }
 
@@ -173,7 +174,7 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		return SyncJobResponse{}, err
 	}
 
-	pullRequests, err := s.syncPullRequests(ctx, owner, repoName, cutoff)
+	pullRequests, err := s.syncPullRequests(ctx, job.RepositoryID, owner, repoName, cutoff)
 	if err != nil {
 		return s.failJob(ctx, job, err)
 	}
@@ -204,7 +205,7 @@ func (s *Service) failJob(ctx context.Context, job SyncJobResponse, err error) (
 	return failedJob, nil
 }
 
-func (s *Service) syncPullRequests(ctx context.Context, owner string, repoName string, cutoff *time.Time) (int, error) {
+func (s *Service) syncPullRequests(ctx context.Context, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
 	total := 0
 	page := 1
 
@@ -223,10 +224,21 @@ func (s *Service) syncPullRequests(ctx context.Context, owner string, repoName s
 				continue
 			}
 
-			total++
-			if _, err := s.syncReviews(ctx, owner, repoName, pullRequest.Number, cutoff); err != nil {
+			detail, err := s.githubClient.GetPullRequest(ctx, owner, repoName, pullRequest.Number)
+			if err != nil {
+				return 0, fmt.Errorf("get pull request %d: %w", pullRequest.Number, err)
+			}
+
+			reviews, err := s.syncReviews(ctx, owner, repoName, pullRequest.Number, cutoff)
+			if err != nil {
 				return 0, err
 			}
+
+			if err := s.store.UpsertPullRequestBundle(ctx, buildPullRequestInput(detail, pullRequest, repositoryID), buildReviewInputs(reviews)); err != nil {
+				return 0, fmt.Errorf("persist pull request %d: %w", pullRequest.Number, err)
+			}
+
+			total++
 		}
 
 		if result.NextPage == 0 {
@@ -236,8 +248,8 @@ func (s *Service) syncPullRequests(ctx context.Context, owner string, repoName s
 	}
 }
 
-func (s *Service) syncReviews(ctx context.Context, owner string, repoName string, pullNumber int, cutoff *time.Time) (int, error) {
-	total := 0
+func (s *Service) syncReviews(ctx context.Context, owner string, repoName string, pullNumber int, cutoff *time.Time) ([]githubclient.Review, error) {
+	items := make([]githubclient.Review, 0)
 	page := 1
 
 	for {
@@ -246,18 +258,18 @@ func (s *Service) syncReviews(ctx context.Context, owner string, repoName string
 			PerPage: 100,
 		})
 		if err != nil {
-			return 0, fmt.Errorf("list reviews for pull request %d: %w", pullNumber, err)
+			return nil, fmt.Errorf("list reviews for pull request %d: %w", pullNumber, err)
 		}
 
 		for _, review := range result.Items {
 			if !includeReview(review, cutoff) {
 				continue
 			}
-			total++
+			items = append(items, review)
 		}
 
 		if result.NextPage == 0 {
-			return total, nil
+			return items, nil
 		}
 		page = result.NextPage
 	}
@@ -343,4 +355,108 @@ func archivedAt(archived bool, at time.Time) *time.Time {
 	}
 	utc := at.UTC()
 	return &utc
+}
+
+func buildPullRequestInput(detail githubclient.PullRequest, fallback githubclient.PullRequest, repositoryID string) pullRequestInput {
+	author := detail.User.Login
+	if strings.TrimSpace(author) == "" {
+		author = fallback.User.Login
+	}
+
+	title := detail.Title
+	if strings.TrimSpace(title) == "" {
+		title = fallback.Title
+	}
+
+	state := detail.State
+	if strings.TrimSpace(state) == "" {
+		state = fallback.State
+	}
+
+	createdAt := detail.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = fallback.CreatedAt
+	}
+
+	closedAt := detail.ClosedAt
+	if closedAt == nil {
+		closedAt = fallback.ClosedAt
+	}
+
+	mergedAt := detail.MergedAt
+	if mergedAt == nil {
+		mergedAt = fallback.MergedAt
+	}
+
+	return pullRequestInput{
+		RepositoryID: repositoryID,
+		GitHubPRID:   fallbackInt64(detail.ID, fallback.ID),
+		Number:       fallbackInt(detail.Number, fallback.Number),
+		Title:        title,
+		Author:       author,
+		State:        state,
+		CreatedAt:    createdAt.UTC(),
+		MergedAt:     normalizeTime(mergedAt),
+		ClosedAt:     normalizeTime(closedAt),
+		Additions:    detail.Additions,
+		Deletions:    detail.Deletions,
+		FilesChanged: detail.ChangedFiles,
+	}
+}
+
+func buildReviewInputs(reviews []githubclient.Review) []pullRequestReviewInput {
+	if len(reviews) == 0 {
+		return nil
+	}
+
+	firstReviewAt := earliestSubmittedAt(reviews)
+	items := make([]pullRequestReviewInput, 0, len(reviews))
+	for _, review := range reviews {
+		items = append(items, pullRequestReviewInput{
+			GitHubReviewID:    review.ID,
+			Reviewer:          review.User.Login,
+			ReviewRequestedAt: nil,
+			FirstReviewAt:     firstReviewAt,
+			ReviewSubmittedAt: normalizeTime(review.SubmittedAt),
+			State:             review.State,
+		})
+	}
+	return items
+}
+
+func earliestSubmittedAt(reviews []githubclient.Review) *time.Time {
+	var earliest *time.Time
+	for _, review := range reviews {
+		if review.SubmittedAt == nil {
+			continue
+		}
+		candidate := review.SubmittedAt.UTC()
+		if earliest == nil || candidate.Before(*earliest) {
+			value := candidate
+			earliest = &value
+		}
+	}
+	return earliest
+}
+
+func normalizeTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
+}
+
+func fallbackInt(value int, fallback int) int {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
+func fallbackInt64(value int64, fallback int64) int64 {
+	if value == 0 {
+		return fallback
+	}
+	return value
 }

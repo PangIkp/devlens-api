@@ -17,16 +17,19 @@ type User struct {
 }
 
 type PullRequest struct {
-	ID        int64      `json:"id"`
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	State     string     `json:"state"`
-	Draft     bool       `json:"draft"`
-	User      User       `json:"user"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	ClosedAt  *time.Time `json:"closed_at"`
-	MergedAt  *time.Time `json:"merged_at"`
+	ID           int64      `json:"id"`
+	Number       int        `json:"number"`
+	Title        string     `json:"title"`
+	State        string     `json:"state"`
+	Draft        bool       `json:"draft"`
+	User         User       `json:"user"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	ClosedAt     *time.Time `json:"closed_at"`
+	MergedAt     *time.Time `json:"merged_at"`
+	Additions    int        `json:"additions"`
+	Deletions    int        `json:"deletions"`
+	ChangedFiles int        `json:"changed_files"`
 }
 
 type Review struct {

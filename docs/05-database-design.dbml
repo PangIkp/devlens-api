@@ -79,35 +79,40 @@ Table webhook_deliveries {
   received_at timestamp
 }
 
-/* ===========================
-   ClickHouse (Logical Tables)
-=========================== */
-
 Table pull_requests {
   id uuid [pk]
-  repository_id uuid
-  github_pr_id bigint
-  number int
-  title varchar
-  author varchar
-  state varchar
-  created_at timestamp
+  repository_id uuid [ref: > repositories.id, not null]
+  github_pr_id bigint [unique, not null]
+  number int [not null]
+  title varchar [not null]
+  author varchar [not null]
+  state varchar [not null]
+  created_at timestamp [not null]
   merged_at timestamp
   closed_at timestamp
-  additions int
-  deletions int
-  files_changed int
+  additions int [not null]
+  deletions int [not null]
+  files_changed int [not null]
+
+  indexes {
+    (repository_id, number) [unique]
+  }
 }
 
 Table pull_request_reviews {
   id uuid [pk]
-  pull_request_id uuid
-  reviewer varchar
+  pull_request_id uuid [ref: > pull_requests.id, not null]
+  github_review_id bigint [unique, not null]
+  reviewer varchar [not null]
   review_requested_at timestamp
   first_review_at timestamp
   review_submitted_at timestamp
-  state varchar
+  state varchar [not null]
 }
+
+/* ===========================
+   ClickHouse (Logical Tables)
+=========================== */
 
 Table deployments {
   id uuid [pk]

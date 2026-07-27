@@ -32,6 +32,33 @@ type OrganizationMember struct {
 	Role           string
 }
 
+type PullRequest struct {
+	ID           pgtype.UUID
+	RepositoryID pgtype.UUID
+	GithubPrID   int64
+	Number       int32
+	Title        string
+	Author       string
+	State        string
+	CreatedAt    pgtype.Timestamptz
+	MergedAt     pgtype.Timestamptz
+	ClosedAt     pgtype.Timestamptz
+	Additions    int32
+	Deletions    int32
+	FilesChanged int32
+}
+
+type PullRequestReview struct {
+	ID                pgtype.UUID
+	PullRequestID     pgtype.UUID
+	GithubReviewID    int64
+	Reviewer          string
+	ReviewRequestedAt pgtype.Timestamptz
+	FirstReviewAt     pgtype.Timestamptz
+	ReviewSubmittedAt pgtype.Timestamptz
+	State             string
+}
+
 type Repository struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID

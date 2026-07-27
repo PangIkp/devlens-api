@@ -122,6 +122,39 @@ func TestListPullRequestsParsesPaginationAndRateLimit(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestReturnsDetailFields(t *testing.T) {
+	t.Parallel()
+
+	doer := &stubHTTPDoer{
+		doFn: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/repos/devlens-labs/devlens-api/pulls/7" {
+				t.Fatalf("unexpected path %q", req.URL.Path)
+			}
+
+			return jsonResponse(http.StatusOK, PullRequest{
+				ID:           1001,
+				Number:       7,
+				Title:        "Add github sync",
+				State:        "closed",
+				User:         User{Login: "alice"},
+				Additions:    120,
+				Deletions:    15,
+				ChangedFiles: 4,
+			}), nil
+		},
+	}
+
+	client := newTestClient(t, doer)
+
+	item, err := client.GetPullRequest(context.Background(), "devlens-labs", "devlens-api", 7)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if item.Additions != 120 || item.Deletions != 15 || item.ChangedFiles != 4 {
+		t.Fatalf("unexpected pull request %+v", item)
+	}
+}
+
 func TestListReviewsAndCommitsUseDefaultPagination(t *testing.T) {
 	t.Parallel()
 

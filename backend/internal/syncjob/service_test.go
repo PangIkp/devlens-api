@@ -10,17 +10,18 @@ import (
 )
 
 type stubStore struct {
-	ensureRepositoryExistsFn func(context.Context, string) error
-	hasActiveJobFn           func(context.Context, string) (bool, error)
-	createFn                 func(context.Context, createParams) (SyncJobResponse, error)
-	getByIDFn                func(context.Context, string) (SyncJobResponse, error)
-	listByRepositoryFn       func(context.Context, ListParams) (ListResult, error)
-	getRepositoryTargetFn    func(context.Context, string) (repositoryTarget, error)
-	markRunningFn            func(context.Context, string, int, time.Time) (SyncJobResponse, error)
-	updateProgressFn         func(context.Context, string, int, time.Time) (SyncJobResponse, error)
-	markFailedFn             func(context.Context, string, string, time.Time) (SyncJobResponse, error)
-	syncRepositoryMetadataFn func(context.Context, string, repositoryMetadata, time.Time) error
-	completeFn               func(context.Context, string, string, time.Time) (SyncJobResponse, error)
+	ensureRepositoryExistsFn  func(context.Context, string) error
+	hasActiveJobFn            func(context.Context, string) (bool, error)
+	createFn                  func(context.Context, createParams) (SyncJobResponse, error)
+	getByIDFn                 func(context.Context, string) (SyncJobResponse, error)
+	listByRepositoryFn        func(context.Context, ListParams) (ListResult, error)
+	getRepositoryTargetFn     func(context.Context, string) (repositoryTarget, error)
+	markRunningFn             func(context.Context, string, int, time.Time) (SyncJobResponse, error)
+	updateProgressFn          func(context.Context, string, int, time.Time) (SyncJobResponse, error)
+	markFailedFn              func(context.Context, string, string, time.Time) (SyncJobResponse, error)
+	syncRepositoryMetadataFn  func(context.Context, string, repositoryMetadata, time.Time) error
+	upsertPullRequestBundleFn func(context.Context, pullRequestInput, []pullRequestReviewInput) error
+	completeFn                func(context.Context, string, string, time.Time) (SyncJobResponse, error)
 }
 
 func (s stubStore) EnsureRepositoryExists(ctx context.Context, repositoryID string) error {
@@ -63,19 +64,28 @@ func (s stubStore) SyncRepositoryMetadata(ctx context.Context, repositoryID stri
 	return s.syncRepositoryMetadataFn(ctx, repositoryID, metadata, at)
 }
 
+func (s stubStore) UpsertPullRequestBundle(ctx context.Context, pullRequest pullRequestInput, reviews []pullRequestReviewInput) error {
+	return s.upsertPullRequestBundleFn(ctx, pullRequest, reviews)
+}
+
 func (s stubStore) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
 	return s.completeFn(ctx, id, repositoryID, at)
 }
 
 type stubGitHubClient struct {
-	getRepositoryFn func(context.Context, string, string) (githubclient.Repository, error)
-	listPullsFn     func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error)
-	listReviewsFn   func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error)
-	listCommitsFn   func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error)
+	getRepositoryFn  func(context.Context, string, string) (githubclient.Repository, error)
+	getPullRequestFn func(context.Context, string, string, int) (githubclient.PullRequest, error)
+	listPullsFn      func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error)
+	listReviewsFn    func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error)
+	listCommitsFn    func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error)
 }
 
 func (s stubGitHubClient) GetRepository(ctx context.Context, owner string, repo string) (githubclient.Repository, error) {
 	return s.getRepositoryFn(ctx, owner, repo)
+}
+
+func (s stubGitHubClient) GetPullRequest(ctx context.Context, owner string, repo string, pullNumber int) (githubclient.PullRequest, error) {
+	return s.getPullRequestFn(ctx, owner, repo, pullNumber)
 }
 
 func (s stubGitHubClient) ListPullRequests(ctx context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error) {
@@ -95,6 +105,7 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 
 	now := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
 	progressUpdates := 0
+	upserted := 0
 
 	svc := NewService(stubStore{
 		ensureRepositoryExistsFn: func(_ context.Context, repositoryID string) error {
@@ -132,6 +143,19 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 			}
 			return nil
 		},
+		upsertPullRequestBundleFn: func(_ context.Context, pullRequest pullRequestInput, reviews []pullRequestReviewInput) error {
+			upserted++
+			if pullRequest.RepositoryID != "repo-1" || pullRequest.GitHubPRID != 1001 || pullRequest.Number != 7 {
+				t.Fatalf("unexpected pull request %+v", pullRequest)
+			}
+			if pullRequest.Additions != 120 || pullRequest.Deletions != 15 || pullRequest.FilesChanged != 4 {
+				t.Fatalf("unexpected pull request stats %+v", pullRequest)
+			}
+			if len(reviews) != 1 || reviews[0].GitHubReviewID != 1 || reviews[0].Reviewer != "bob" {
+				t.Fatalf("unexpected reviews %+v", reviews)
+			}
+			return nil
+		},
 		completeFn: func(_ context.Context, id string, repositoryID string, _ time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{ID: id, RepositoryID: repositoryID, Status: StatusCompleted, Progress: 100, CreatedAt: now}, nil
 		},
@@ -147,14 +171,31 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 				t.Fatalf("expected state=all, got %q", options.State)
 			}
 			return githubclient.Page[githubclient.PullRequest]{
-				Items: []githubclient.PullRequest{{Number: 7, UpdatedAt: now}},
+				Items: []githubclient.PullRequest{{ID: 1001, Number: 7, Title: "Add github sync", UpdatedAt: now, CreatedAt: now, User: githubclient.User{Login: "alice"}}},
+			}, nil
+		},
+		getPullRequestFn: func(_ context.Context, owner string, repo string, pullNumber int) (githubclient.PullRequest, error) {
+			if pullNumber != 7 {
+				t.Fatalf("unexpected pull number %d", pullNumber)
+			}
+			return githubclient.PullRequest{
+				ID:           1001,
+				Number:       7,
+				Title:        "Add github sync",
+				State:        "closed",
+				User:         githubclient.User{Login: "alice"},
+				CreatedAt:    now,
+				UpdatedAt:    now,
+				Additions:    120,
+				Deletions:    15,
+				ChangedFiles: 4,
 			}, nil
 		},
 		listReviewsFn: func(_ context.Context, owner string, repo string, pullNumber int, options githubclient.ListOptions) (githubclient.Page[githubclient.Review], error) {
 			if pullNumber != 7 || options.PerPage != 100 {
 				t.Fatalf("unexpected review request %+v %d", options, pullNumber)
 			}
-			return githubclient.Page[githubclient.Review]{Items: []githubclient.Review{{ID: 1}}}, nil
+			return githubclient.Page[githubclient.Review]{Items: []githubclient.Review{{ID: 1, State: "APPROVED", User: githubclient.User{Login: "bob"}, SubmittedAt: &now}}}, nil
 		},
 		listCommitsFn: func(_ context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 			return githubclient.Page[githubclient.Commit]{
@@ -173,6 +214,9 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 	}
 	if progressUpdates < 2 {
 		t.Fatalf("expected progress updates, got %d", progressUpdates)
+	}
+	if upserted != 1 {
+		t.Fatalf("expected one upsert, got %d", upserted)
 	}
 }
 
@@ -194,7 +238,8 @@ func TestServiceCreateConflictWhenActiveJobExists(t *testing.T) {
 		markFailedFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
-		syncRepositoryMetadataFn: func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
 		completeFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
@@ -231,13 +276,17 @@ func TestServiceCreateMarksFailedWhenGitHubErrors(t *testing.T) {
 			failedMessage = message
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusFailed, CreatedAt: now}, nil
 		},
-		syncRepositoryMetadataFn: func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
 		completeFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
 	}, stubGitHubClient{
 		getRepositoryFn: func(context.Context, string, string) (githubclient.Repository, error) {
 			return githubclient.Repository{}, errors.New("upstream unavailable")
+		},
+		getPullRequestFn: func(context.Context, string, string, int) (githubclient.PullRequest, error) {
+			return githubclient.PullRequest{}, nil
 		},
 		listPullsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error) {
 			return githubclient.Page[githubclient.PullRequest]{}, nil
@@ -281,7 +330,8 @@ func TestServiceListValidation(t *testing.T) {
 		markFailedFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
-		syncRepositoryMetadataFn: func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
 		completeFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},

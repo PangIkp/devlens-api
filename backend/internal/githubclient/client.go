@@ -23,6 +23,7 @@ type HTTPDoer interface {
 
 type Client interface {
 	GetRepository(context.Context, string, string) (Repository, error)
+	GetPullRequest(context.Context, string, string, int) (PullRequest, error)
 	ListPullRequests(context.Context, string, string, ListOptions) (Page[PullRequest], error)
 	ListReviews(context.Context, string, string, int, ListOptions) (Page[Review], error)
 	ListCommits(context.Context, string, string, ListOptions) (Page[Commit], error)
@@ -117,6 +118,15 @@ func (c *HTTPClient) GetRepository(ctx context.Context, owner, repo string) (Rep
 	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", owner, repo), nil, &result)
 	if err != nil {
 		return Repository{}, err
+	}
+	return result, nil
+}
+
+func (c *HTTPClient) GetPullRequest(ctx context.Context, owner, repo string, pullNumber int) (PullRequest, error) {
+	var result PullRequest
+	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, pullNumber), nil, &result)
+	if err != nil {
+		return PullRequest{}, err
 	}
 	return result, nil
 }

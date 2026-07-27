@@ -23,6 +23,7 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `GET /api/v1/repositories/{repositoryId}/sync-jobs`
 - `GET /api/v1/sync-jobs/{syncJobId}`
 - GitHub REST client foundation for repository, pull request, review, and commit ingestion
+- PostgreSQL persistence for `pull_requests` and `pull_request_reviews`
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -86,6 +87,9 @@ Behavior notes:
 - organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
 - repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
 - repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
+- manual sync persists pull requests and pull request reviews into PostgreSQL
+- incremental sync currently uses `repositories.last_synced_at` as the cutoff
+- `last_synced_at` is a coarse repository-level checkpoint and may need to evolve into finer-grained sync checkpoints in a future phase
 
 Example requests:
 
@@ -186,7 +190,9 @@ Notes:
 - GitHub App installation token support is intentionally deferred in this phase
 - sync jobs now persist `status`, `progress`, `startedAt`, `finishedAt`, and `errorMessage` in PostgreSQL
 - sync execution is currently inline for the current milestone; webhook processing and asynchronous workers are still deferred
-- pull request and review persistence is still deferred to the next step
+- pull request upsert uses `github_pr_id` as the primary external identity
+- pull request data also enforces `(repository_id, number)` as a secondary consistency constraint
+- pull request review upsert uses `github_review_id` as the provider identity
 
 ## Local Services
 

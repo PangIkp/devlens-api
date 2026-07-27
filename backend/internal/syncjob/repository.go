@@ -172,6 +172,55 @@ func (r *Repository) SyncRepositoryMetadata(ctx context.Context, repositoryID st
 	return nil
 }
 
+func (r *Repository) UpsertPullRequestBundle(ctx context.Context, pullRequest pullRequestInput, reviews []pullRequestReviewInput) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin pull request upsert transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := r.queries.WithTx(tx)
+	pullRequestID, err := queries.UpsertPullRequest(ctx, sqlcgen.UpsertPullRequestParams{
+		ID:           newUUID(),
+		RepositoryID: parseUUID(pullRequest.RepositoryID),
+		GithubPrID:   pullRequest.GitHubPRID,
+		Number:       int32(pullRequest.Number),
+		Title:        pullRequest.Title,
+		Author:       pullRequest.Author,
+		State:        pullRequest.State,
+		CreatedAt:    toNullableTimestamp(&pullRequest.CreatedAt),
+		MergedAt:     toNullableTimestamp(pullRequest.MergedAt),
+		ClosedAt:     toNullableTimestamp(pullRequest.ClosedAt),
+		Additions:    int32(pullRequest.Additions),
+		Deletions:    int32(pullRequest.Deletions),
+		FilesChanged: int32(pullRequest.FilesChanged),
+	})
+	if err != nil {
+		return fmt.Errorf("upsert pull request: %w", err)
+	}
+
+	for _, review := range reviews {
+		if err := queries.UpsertPullRequestReview(ctx, sqlcgen.UpsertPullRequestReviewParams{
+			ID:                newUUID(),
+			PullRequestID:     pullRequestID,
+			GithubReviewID:    review.GitHubReviewID,
+			Reviewer:          review.Reviewer,
+			ReviewRequestedAt: toNullableTimestamp(review.ReviewRequestedAt),
+			FirstReviewAt:     toNullableTimestamp(review.FirstReviewAt),
+			ReviewSubmittedAt: toNullableTimestamp(review.ReviewSubmittedAt),
+			State:             review.State,
+		}); err != nil {
+			return fmt.Errorf("upsert pull request review: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit pull request upsert transaction: %w", err)
+	}
+
+	return nil
+}
+
 func (r *Repository) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {

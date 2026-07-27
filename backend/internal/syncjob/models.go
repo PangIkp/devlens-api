@@ -61,3 +61,27 @@ type repositoryMetadata struct {
 	IsActive      bool
 	ArchivedAt    *time.Time
 }
+
+type pullRequestInput struct {
+	RepositoryID string
+	GitHubPRID   int64
+	Number       int
+	Title        string
+	Author       string
+	State        string
+	CreatedAt    time.Time
+	MergedAt     *time.Time
+	ClosedAt     *time.Time
+	Additions    int
+	Deletions    int
+	FilesChanged int
+}
+
+type pullRequestReviewInput struct {
+	GitHubReviewID    int64
+	Reviewer          string
+	ReviewRequestedAt *time.Time
+	FirstReviewAt     *time.Time
+	ReviewSubmittedAt *time.Time
+	State             string
+}
