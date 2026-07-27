@@ -8,6 +8,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Deployment struct {
+	ID           pgtype.UUID
+	RepositoryID pgtype.UUID
+	Environment  string
+	Status       string
+	DeployedAt   pgtype.Timestamptz
+}
+
+type FileChange struct {
+	ID            pgtype.UUID
+	PullRequestID pgtype.UUID
+	FilePath      string
+	Additions     int32
+	Deletions     int32
+	CommitCount   int32
+}
+
 type GithubInstallation struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID
@@ -46,6 +63,7 @@ type PullRequest struct {
 	Additions    int32
 	Deletions    int32
 	FilesChanged int32
+	IsDraft      bool
 }
 
 type PullRequestReview struct {

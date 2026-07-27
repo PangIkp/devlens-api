@@ -69,6 +69,7 @@ type pullRequestInput struct {
 	Title        string
 	Author       string
 	State        string
+	IsDraft      bool
 	CreatedAt    time.Time
 	MergedAt     *time.Time
 	ClosedAt     *time.Time

@@ -19,6 +19,11 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `GET /api/v1/organizations/{organizationId}/repositories`
 - `GET /api/v1/repositories/{repositoryId}`
 - `PATCH /api/v1/repositories/{repositoryId}`
+- `GET /api/v1/repositories/{repositoryId}/dashboard/summary`
+- `GET /api/v1/repositories/{repositoryId}/metrics/pull-requests`
+- `GET /api/v1/repositories/{repositoryId}/metrics/reviews`
+- `GET /api/v1/repositories/{repositoryId}/metrics/deployments`
+- `GET /api/v1/repositories/{repositoryId}/metrics/hotspots`
 - `POST /api/v1/repositories/{repositoryId}/sync`
 - `GET /api/v1/repositories/{repositoryId}/sync-jobs`
 - `GET /api/v1/sync-jobs/{syncJobId}`
@@ -26,6 +31,8 @@ This repository currently contains the initial backend foundation in [`backend`]
 - GitHub REST client foundation for repository, pull request, review, and commit ingestion
 - PostgreSQL persistence for `pull_requests` and `pull_request_reviews`
 - transactional webhook delivery persistence and sync job enqueue
+- ClickHouse-backed daily metrics storage for dashboard queries
+- NATS JetStream trigger for repository metric recalculation after sync completion
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -93,6 +100,10 @@ Behavior notes:
 - incremental sync currently uses `repositories.last_synced_at` as the cutoff
 - `last_synced_at` is a coarse repository-level checkpoint and may need to evolve into finer-grained sync checkpoints in a future phase
 - webhook handling validates `X-Hub-Signature-256`, stores `github_delivery_id`, and enqueues sync jobs asynchronously
+- metrics are calculated from PostgreSQL raw data and stored in ClickHouse `metrics_daily`
+- `deployments` and `file_changes` raw schema exist in PostgreSQL for analytics completeness, but ingestion for those sources is intentionally deferred
+- hotspot ranking reads raw `file_changes` from ClickHouse
+- deployment filtering by `environment` reads raw deployment analytics data from ClickHouse when available
 
 Example requests:
 
@@ -134,6 +145,16 @@ curl -i http://localhost:8080/api/v1/repositories/{repositoryId}
 curl -i -X PATCH http://localhost:8080/api/v1/repositories/{repositoryId} \
   -H "Content-Type: application/json" \
   -d '{"isActive":false,"archived":true}'
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/dashboard/summary?from=2026-07-01&to=2026-07-31"
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/metrics/pull-requests?from=2026-07-01&to=2026-07-31&interval=week"
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/metrics/reviews?from=2026-07-01&to=2026-07-31&interval=week"
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/metrics/deployments?from=2026-07-01&to=2026-07-31&interval=day&environment=production"
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/metrics/hotspots?from=2026-07-01&to=2026-07-31&page=1&pageSize=10&sortOrder=desc"
 
 curl -i -X POST http://localhost:8080/api/v1/repositories/{repositoryId}/sync \
   -H "Content-Type: application/json" \
@@ -186,6 +207,8 @@ New environment variables:
 - `GITHUB_MAX_BACKOFF`
 - `GITHUB_WEBHOOK_SECRET`
 - `SYNC_WORKER_POLL_INTERVAL`
+- `CLICKHOUSE_HTTP_TIMEOUT`
+- `NATS_URL`
 
 Example:
 
@@ -199,6 +222,8 @@ GITHUB_INITIAL_BACKOFF=500ms
 GITHUB_MAX_BACKOFF=5s
 GITHUB_WEBHOOK_SECRET=replace-me
 SYNC_WORKER_POLL_INTERVAL=2s
+CLICKHOUSE_HTTP_TIMEOUT=5s
+NATS_URL=nats://nats:4222
 ```
 
 Notes:
@@ -212,6 +237,8 @@ Notes:
 - pull request data also enforces `(repository_id, number)` as a secondary consistency constraint
 - pull request review upsert uses `github_review_id` as the provider identity
 - full repository sync from webhook and direct event projection are intentionally deferred
+- metrics recalculation is triggered by `repository.sync.completed` events on NATS JetStream
+- deployment ingestion and file change ingestion are intentionally deferred in this branch; the schema and repositories are prepared so dashboards can safely return `0` or empty lists until those sources are populated
 
 ## Local Services
 

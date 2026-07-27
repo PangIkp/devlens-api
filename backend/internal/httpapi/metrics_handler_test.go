@@ -1,0 +1,101 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/PangIkp/devlens/backend/internal/metrics"
+	"github.com/go-chi/chi/v5"
+)
+
+type stubMetricsService struct {
+	getHotspotsFn func(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error)
+}
+
+func (s stubMetricsService) GetDashboardSummary(context.Context, string, metrics.QueryParams) (metrics.DashboardSummary, error) {
+	return metrics.DashboardSummary{}, nil
+}
+
+func (s stubMetricsService) GetPullRequestMetrics(context.Context, string, metrics.QueryParams) (metrics.PullRequestMetrics, error) {
+	return metrics.PullRequestMetrics{}, nil
+}
+
+func (s stubMetricsService) GetReviewMetrics(context.Context, string, metrics.QueryParams) (metrics.ReviewMetrics, error) {
+	return metrics.ReviewMetrics{}, nil
+}
+
+func (s stubMetricsService) GetDeploymentMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.DeploymentMetrics, error) {
+	return metrics.DeploymentMetrics{}, nil
+}
+
+func (s stubMetricsService) GetHotspots(ctx context.Context, repositoryID string, params metrics.HotspotQueryParams) (metrics.HotspotResult, error) {
+	return s.getHotspotsFn(ctx, repositoryID, params)
+}
+
+func TestMetricsHandlerHotspotsUsesMetaField(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMetricsHandler(stubMetricsService{
+		getHotspotsFn: func(_ context.Context, repositoryID string, params metrics.HotspotQueryParams) (metrics.HotspotResult, error) {
+			if repositoryID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected repository id %s", repositoryID)
+			}
+			if params.SortOrder != "desc" {
+				t.Fatalf("unexpected sort order %s", params.SortOrder)
+			}
+			return metrics.HotspotResult{
+				Items:      []metrics.HotspotFile{{FilePath: "internal/metrics/service.go", HotspotScore: 12}},
+				TotalItems: 1,
+			}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics/hotspots?from=2026-07-01&to=2026-07-07&page=1&pageSize=10", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if _, ok := body["meta"]; !ok {
+		t.Fatalf("expected meta field in response, got %s", rec.Body.String())
+	}
+	if _, ok := body["pagination"]; ok {
+		t.Fatalf("did not expect pagination field in response")
+	}
+}
+
+func TestMetricsHandlerRequiresDateRange(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMetricsHandler(stubMetricsService{
+		getHotspotsFn: func(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error) {
+			t.Fatal("service should not be called")
+			return metrics.HotspotResult{}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics/hotspots?page=1&pageSize=10", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}

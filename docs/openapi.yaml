@@ -784,6 +784,7 @@ components:
       required:
         - status
         - timestamp
+        - dependencies
       properties:
         status:
           type: string
@@ -791,6 +792,27 @@ components:
         timestamp:
           type: string
           format: date-time
+        dependencies:
+          type: object
+          required:
+            - postgres
+            - clickhouse
+          properties:
+            postgres:
+              $ref: "#/components/schemas/DependencyStatus"
+            clickhouse:
+              $ref: "#/components/schemas/DependencyStatus"
+
+    DependencyStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: ok
+        message:
+          type: string
 
     PaginationMeta:
       type: object

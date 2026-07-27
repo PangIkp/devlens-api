@@ -51,3 +51,16 @@ func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestLoadClickHouseTimeoutFromEnv(t *testing.T) {
+	t.Setenv("CLICKHOUSE_HTTP_TIMEOUT", "7s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.ClickHouse.Timeout != 7*time.Second {
+		t.Fatalf("unexpected clickhouse timeout %s", cfg.ClickHouse.Timeout)
+	}
+}
