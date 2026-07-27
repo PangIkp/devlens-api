@@ -52,6 +52,7 @@ type ClickHouseConfig struct {
 	Password string
 	Database string
 	DSN      string
+	Timeout  time.Duration
 }
 
 type GitHubConfig struct {
@@ -115,6 +116,11 @@ func Load() (Config, error) {
 	}
 
 	pgConnectTimeout, err := getDuration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	clickhouseTimeout, err := getDuration("CLICKHOUSE_HTTP_TIMEOUT", 5*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -188,6 +194,7 @@ func Load() (Config, error) {
 			Password: getEnv("CLICKHOUSE_PASSWORD", ""),
 			Database: getEnv("CLICKHOUSE_DATABASE", "devlens"),
 			DSN:      getEnv("CLICKHOUSE_DSN", "http://clickhouse:8123"),
+			Timeout:  clickhouseTimeout,
 		},
 		GitHub: GitHubConfig{
 			Token:          strings.TrimSpace(getEnv("GITHUB_TOKEN", "")),
@@ -257,6 +264,14 @@ func Load() (Config, error) {
 
 	if cfg.Sync.WorkerPollInterval <= 0 {
 		return Config{}, fmt.Errorf("SYNC_WORKER_POLL_INTERVAL must be greater than 0")
+	}
+
+	if cfg.ClickHouse.Timeout <= 0 {
+		return Config{}, fmt.Errorf("CLICKHOUSE_HTTP_TIMEOUT must be greater than 0")
+	}
+
+	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
+		return Config{}, fmt.Errorf("CLICKHOUSE_DSN must be a valid URL: %w", err)
 	}
 
 	return cfg, nil

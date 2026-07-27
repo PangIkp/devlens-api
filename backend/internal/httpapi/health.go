@@ -11,8 +11,14 @@ type PostgresDependencyStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
+type ClickHouseDependencyStatus struct {
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
 type HealthDependencies struct {
-	Postgres PostgresDependencyStatus `json:"postgres"`
+	Postgres   PostgresDependencyStatus   `json:"postgres"`
+	ClickHouse ClickHouseDependencyStatus `json:"clickhouse"`
 }
 
 type HealthResponse struct {
@@ -22,11 +28,12 @@ type HealthResponse struct {
 }
 
 type HealthHandler struct {
-	postgres PostgresHealthChecker
+	postgres   PostgresHealthChecker
+	clickhouse ClickHouseHealthChecker
 }
 
-func NewHealthHandler(postgres PostgresHealthChecker) HealthHandler {
-	return HealthHandler{postgres: postgres}
+func NewHealthHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker) HealthHandler {
+	return HealthHandler{postgres: postgres, clickhouse: clickhouse}
 }
 
 func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +41,8 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Status:    "ok",
 		Timestamp: time.Now().UTC(),
 		Dependencies: HealthDependencies{
-			Postgres: PostgresDependencyStatus{Status: "ok"},
+			Postgres:   PostgresDependencyStatus{Status: "ok"},
+			ClickHouse: ClickHouseDependencyStatus{Status: "ok"},
 		},
 	}
 
@@ -49,6 +57,14 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := h.checkClickHouse(r.Context()); err != nil {
+		response.Status = "degraded"
+		response.Dependencies.ClickHouse = ClickHouseDependencyStatus{
+			Status:  "unavailable",
+			Message: "ClickHouse unavailable",
+		}
+	}
+
 	writeJSON(w, statusCode, response)
 }
 
@@ -58,4 +74,12 @@ func (h HealthHandler) checkPostgres(ctx context.Context) error {
 	}
 
 	return h.postgres.Check(ctx)
+}
+
+func (h HealthHandler) checkClickHouse(ctx context.Context) error {
+	if h.clickhouse == nil {
+		return nil
+	}
+
+	return h.clickhouse.Check(ctx)
 }

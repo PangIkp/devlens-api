@@ -90,6 +90,36 @@ func TestHealthHandlerUnavailablePostgres(t *testing.T) {
 	}
 }
 
+func TestHealthHandlerDegradedClickHouse(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{err: errors.New("clickhouse unavailable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "degraded" {
+		t.Fatalf("expected degraded status, got %q", body.Status)
+	}
+
+	if body.Dependencies.ClickHouse.Status != "unavailable" {
+		t.Fatalf("expected unavailable clickhouse status, got %q", body.Dependencies.ClickHouse.Status)
+	}
+}
+
 func TestHealthHandlerMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 

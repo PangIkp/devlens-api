@@ -201,6 +201,7 @@ func (r *Repository) UpsertPullRequestBundle(ctx context.Context, pullRequest pu
 		Title:        pullRequest.Title,
 		Author:       pullRequest.Author,
 		State:        pullRequest.State,
+		IsDraft:      pullRequest.IsDraft,
 		CreatedAt:    toNullableTimestamp(&pullRequest.CreatedAt),
 		MergedAt:     toNullableTimestamp(pullRequest.MergedAt),
 		ClosedAt:     toNullableTimestamp(pullRequest.ClosedAt),

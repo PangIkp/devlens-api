@@ -10,10 +10,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
+	"github.com/PangIkp/devlens/backend/internal/metrics"
+	"github.com/PangIkp/devlens/backend/internal/metricsbus"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -22,11 +25,14 @@ import (
 )
 
 type App struct {
-	cfg      config.Config
-	logger   *slog.Logger
-	server   *http.Server
-	postgres *postgres.DB
-	worker   *syncjob.Worker
+	cfg             config.Config
+	logger          *slog.Logger
+	server          *http.Server
+	postgres        *postgres.DB
+	clickhouse      *clickhouse.DB
+	worker          *syncjob.Worker
+	metricsBus      *metricsbus.Client
+	metricsConsumer *metricsbus.Consumer
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -40,6 +46,18 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
+	var clickhouseDB *clickhouse.DB
+	if db, err := clickhouse.Open(cfg.ClickHouse); err != nil {
+		logger.Warn("clickhouse unavailable during startup", "error", err)
+	} else {
+		if err := clickhouse.EnsureSchema(ctx, db); err != nil {
+			logger.Warn("clickhouse schema initialization failed", "error", err)
+			db.Close()
+		} else {
+			clickhouseDB = db
+		}
+	}
+
 	organizationRepository := organization.NewRepository(postgresDB)
 	organizationService := organization.NewService(organizationRepository)
 	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
@@ -49,6 +67,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
+	metricsService := metrics.NewService(postgresDB, clickhouseDB)
+	metricsHandler := httpapi.NewMetricsHandler(metricsService)
 	githubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
 		UserAgent:      cfg.GitHub.UserAgent,
@@ -68,11 +88,23 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
 
+	var metricsBusClient *metricsbus.Client
+	var metricsConsumer *metricsbus.Consumer
+	if client, err := metricsbus.Open(cfg.NATS.URL); err != nil {
+		logger.Warn("metrics bus unavailable during startup", "error", err)
+	} else {
+		metricsBusClient = client
+		syncJobService.SetCompletionPublisher(client)
+		metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
+	}
+
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
+		ClickHouse:          clickhouseDB,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
 		Repositories:        repositoryHandler,
+		Metrics:             metricsHandler,
 		SyncJobs:            syncJobHandler,
 		GitHubWebhook:       webhookHandler,
 	})
@@ -86,11 +118,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	return &App{
-		cfg:      cfg,
-		logger:   logger,
-		server:   server,
-		postgres: postgresDB,
-		worker:   syncWorker,
+		cfg:             cfg,
+		logger:          logger,
+		server:          server,
+		postgres:        postgresDB,
+		clickhouse:      clickhouseDB,
+		worker:          syncWorker,
+		metricsBus:      metricsBusClient,
+		metricsConsumer: metricsConsumer,
 	}, nil
 }
 
@@ -112,6 +147,13 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.worker != nil {
 		go a.worker.Run(ctx)
+	}
+	if a.metricsConsumer != nil {
+		go func() {
+			if err := a.metricsConsumer.Run(ctx); err != nil {
+				a.logger.Error("metrics consumer stopped", "error", err)
+			}
+		}()
 	}
 
 	select {
@@ -137,6 +179,12 @@ func (a *App) Logger() *slog.Logger {
 func (a *App) close() {
 	if a.postgres != nil {
 		a.postgres.Close()
+	}
+	if a.clickhouse != nil {
+		a.clickhouse.Close()
+	}
+	if a.metricsBus != nil {
+		a.metricsBus.Close()
 	}
 }
 

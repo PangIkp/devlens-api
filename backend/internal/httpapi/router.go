@@ -14,11 +14,17 @@ type PostgresHealthChecker interface {
 	Check(context.Context) error
 }
 
+type ClickHouseHealthChecker interface {
+	Check(context.Context) error
+}
+
 type Dependencies struct {
 	Postgres            PostgresHealthChecker
+	ClickHouse          ClickHouseHealthChecker
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
 	Repositories        *RepositoryHandler
+	Metrics             *MetricsHandler
 	SyncJobs            *SyncJobHandler
 	GitHubWebhook       *GitHubWebhookHandler
 }
@@ -45,7 +51,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	})
 
 	router.Route("/api/v1", func(r chi.Router) {
-		r.Get("/health", NewHealthHandler(deps.Postgres).ServeHTTP)
+		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
 		if deps.Organizations != nil {
 			deps.Organizations.RegisterRoutes(r)
 		}
@@ -54,6 +60,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.Repositories != nil {
 			deps.Repositories.RegisterRoutes(r)
+		}
+		if deps.Metrics != nil {
+			deps.Metrics.RegisterRoutes(r)
 		}
 		if deps.SyncJobs != nil {
 			deps.SyncJobs.RegisterRoutes(r)

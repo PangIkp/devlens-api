@@ -12,7 +12,8 @@ INSERT INTO pull_requests (
     closed_at,
     additions,
     deletions,
-    files_changed
+    files_changed,
+    is_draft
 ) VALUES (
     $1,
     $2,
@@ -26,7 +27,8 @@ INSERT INTO pull_requests (
     $10,
     $11,
     $12,
-    $13
+    $13,
+    $14
 )
 ON CONFLICT (github_pr_id) DO UPDATE SET
     repository_id = EXCLUDED.repository_id,
@@ -39,7 +41,8 @@ ON CONFLICT (github_pr_id) DO UPDATE SET
     closed_at = EXCLUDED.closed_at,
     additions = EXCLUDED.additions,
     deletions = EXCLUDED.deletions,
-    files_changed = EXCLUDED.files_changed
+    files_changed = EXCLUDED.files_changed,
+    is_draft = EXCLUDED.is_draft
 RETURNING id;
 
 -- name: UpsertPullRequestReview :exec

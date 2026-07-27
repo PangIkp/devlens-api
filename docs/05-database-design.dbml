@@ -94,6 +94,7 @@ Table pull_requests {
   title varchar [not null]
   author varchar [not null]
   state varchar [not null]
+  is_draft boolean [not null, default: false]
   created_at timestamp [not null]
   merged_at timestamp
   closed_at timestamp
@@ -117,36 +118,51 @@ Table pull_request_reviews {
   state varchar [not null]
 }
 
-/* ===========================
-   ClickHouse (Logical Tables)
-=========================== */
-
 Table deployments {
   id uuid [pk]
-  repository_id uuid
-  environment varchar
-  status varchar
-  deployed_at timestamp
+  repository_id uuid [ref: > repositories.id, not null]
+  environment varchar [not null]
+  status varchar [not null]
+  deployed_at timestamp [not null]
 }
 
 Table file_changes {
   id uuid [pk]
-  pull_request_id uuid
-  file_path varchar
-  additions int
-  deletions int
-  commit_count int
+  pull_request_id uuid [ref: > pull_requests.id, not null]
+  file_path varchar [not null]
+  additions int [not null]
+  deletions int [not null]
+  commit_count int [not null]
 }
 
+/* ===========================
+   ClickHouse (Logical Tables)
+=========================== */
+
 Table metrics_daily {
-  id uuid [pk]
   repository_id uuid
   metric_date date
-  pr_cycle_time_minutes int
-  review_wait_minutes int
-  deployment_frequency int
+  pr_cycle_time_minutes decimal
+  review_wait_minutes decimal
+  average_review_minutes decimal
+  average_files_changed decimal
+  average_additions decimal
+  average_deletions decimal
+  deployment_frequency decimal
   change_failure_rate decimal
   review_coverage decimal
+  pr_count int
+  merged_pr_count int
+  reviewed_pr_count int
+  review_wait_sample_count int
+  review_time_sample_count int
+  successful_deployment_count int
+  failed_deployment_count int
+  calculated_at timestamp
+
+  indexes {
+    (repository_id, metric_date) [pk]
+  }
 }
 
 /*

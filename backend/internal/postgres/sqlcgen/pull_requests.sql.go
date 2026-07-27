@@ -25,7 +25,8 @@ INSERT INTO pull_requests (
     closed_at,
     additions,
     deletions,
-    files_changed
+    files_changed,
+    is_draft
 ) VALUES (
     $1,
     $2,
@@ -39,7 +40,8 @@ INSERT INTO pull_requests (
     $10,
     $11,
     $12,
-    $13
+    $13,
+    $14
 )
 ON CONFLICT (github_pr_id) DO UPDATE SET
     repository_id = EXCLUDED.repository_id,
@@ -52,7 +54,8 @@ ON CONFLICT (github_pr_id) DO UPDATE SET
     closed_at = EXCLUDED.closed_at,
     additions = EXCLUDED.additions,
     deletions = EXCLUDED.deletions,
-    files_changed = EXCLUDED.files_changed
+    files_changed = EXCLUDED.files_changed,
+    is_draft = EXCLUDED.is_draft
 RETURNING id
 `
 
@@ -70,6 +73,7 @@ type UpsertPullRequestParams struct {
 	Additions    int32
 	Deletions    int32
 	FilesChanged int32
+	IsDraft      bool
 }
 
 func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestParams) (pgtype.UUID, error) {
@@ -87,6 +91,7 @@ func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestPa
 		arg.Additions,
 		arg.Deletions,
 		arg.FilesChanged,
+		arg.IsDraft,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)

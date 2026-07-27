@@ -27,7 +27,19 @@ type store interface {
 type Service struct {
 	store        store
 	githubClient githubclient.Client
+	publisher    completionPublisher
 	now          func() time.Time
+}
+
+type SyncCompletedEvent struct {
+	RepositoryID string    `json:"repositoryId"`
+	SyncJobID    string    `json:"syncJobId"`
+	OccurredAt   time.Time `json:"occurredAt"`
+	EventType    string    `json:"eventType"`
+}
+
+type completionPublisher interface {
+	PublishRepositorySyncCompleted(context.Context, SyncCompletedEvent) error
 }
 
 func NewService(store store, githubClient githubclient.Client) *Service {
@@ -36,6 +48,10 @@ func NewService(store store, githubClient githubclient.Client) *Service {
 		githubClient: githubClient,
 		now:          time.Now,
 	}
+}
+
+func (s *Service) SetCompletionPublisher(publisher completionPublisher) {
+	s.publisher = publisher
 }
 
 func (s *Service) Create(ctx context.Context, repositoryID string, req CreateSyncRequest) (SyncJobResponse, error) {
@@ -204,7 +220,21 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	completedAt := s.now().UTC()
-	return s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
+	completedJob, err := s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	if s.publisher != nil {
+		_ = s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
+			EventType:    "repository.sync.completed",
+			RepositoryID: job.RepositoryID,
+			SyncJobID:    job.ID,
+			OccurredAt:   completedAt,
+		})
+	}
+
+	return completedJob, nil
 }
 
 func (s *Service) failJob(ctx context.Context, job SyncJobResponse, err error) (SyncJobResponse, error) {
@@ -406,6 +436,7 @@ func buildPullRequestInput(detail githubclient.PullRequest, fallback githubclien
 		Title:        title,
 		Author:       author,
 		State:        state,
+		IsDraft:      detail.Draft || fallback.Draft,
 		CreatedAt:    createdAt.UTC(),
 		MergedAt:     normalizeTime(mergedAt),
 		ClosedAt:     normalizeTime(closedAt),
