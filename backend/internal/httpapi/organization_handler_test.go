@@ -18,6 +18,8 @@ type stubOrganizationService struct {
 	createFn func(context.Context, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
 	getFn    func(context.Context, string) (organization.OrganizationResponse, error)
 	listFn   func(context.Context, organization.ListParams) (organization.ListResult, error)
+	updateFn func(context.Context, string, organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error)
+	deleteFn func(context.Context, string) error
 }
 
 func (s stubOrganizationService) Create(ctx context.Context, req organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
@@ -30,6 +32,14 @@ func (s stubOrganizationService) GetByID(ctx context.Context, id string) (organi
 
 func (s stubOrganizationService) List(ctx context.Context, params organization.ListParams) (organization.ListResult, error) {
 	return s.listFn(ctx, params)
+}
+
+func (s stubOrganizationService) Update(ctx context.Context, id string, req organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error) {
+	return s.updateFn(ctx, id, req)
+}
+
+func (s stubOrganizationService) SoftDelete(ctx context.Context, id string) error {
+	return s.deleteFn(ctx, id)
 }
 
 func TestCreateOrganizationHandlerSuccess(t *testing.T) {
@@ -268,4 +278,109 @@ func TestGetOrganizationHandlerInternalError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", rec.Code)
 	}
+}
+
+func TestUpdateOrganizationHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewOrganizationHandler(stubOrganizationService{
+		updateFn: func(_ context.Context, id string, req organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error) {
+			if id != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected id %q", id)
+			}
+			if req.Name == nil || *req.Name != "DevLens Platform" {
+				t.Fatalf("unexpected request %+v", req)
+			}
+			return organization.OrganizationResponse{
+				ID:        id,
+				GithubID:  123,
+				Slug:      "devlens",
+				Name:      "DevLens Platform",
+				CreatedAt: time.Now().UTC(),
+				UpdatedAt: timePointer(time.Now().UTC()),
+			}, nil
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPatch, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", strings.NewReader(`{"name":"DevLens Platform"}`))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestUpdateOrganizationHandlerInvalidUpdate(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewOrganizationHandler(stubOrganizationService{
+		updateFn: func(_ context.Context, _ string, _ organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error) {
+			return organization.OrganizationResponse{}, &organization.ValidationError{
+				Message: "request validation failed",
+				Details: []organization.ValidationIssue{
+					{Field: "body", Message: "must include at least one updatable field"},
+				},
+			}
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPatch, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestDeleteOrganizationHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewOrganizationHandler(stubOrganizationService{
+		deleteFn: func(_ context.Context, id string) error {
+			if id != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected id %q", id)
+			}
+			return nil
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodDelete, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+}
+
+func TestGetDeletedOrganizationReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewOrganizationHandler(stubOrganizationService{
+		getFn: func(_ context.Context, _ string) (organization.OrganizationResponse, error) {
+			return organization.OrganizationResponse{}, organization.ErrOrganizationNotFound
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }

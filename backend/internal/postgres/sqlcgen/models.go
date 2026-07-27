@@ -29,18 +29,21 @@ type OrganizationMember struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID
 	UserID         pgtype.UUID
-	Role           pgtype.Text
+	Role           string
 }
 
 type Repository struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID
-	GithubID       pgtype.Int8
-	Name           pgtype.Text
-	FullName       pgtype.Text
+	GithubID       int64
+	Name           string
+	FullName       string
 	DefaultBranch  pgtype.Text
 	IsActive       bool
 	LastSyncedAt   pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ArchivedAt     pgtype.Timestamptz
 }
 
 type SyncJob struct {

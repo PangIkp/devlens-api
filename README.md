@@ -11,6 +11,14 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `POST /api/v1/organizations`
 - `GET /api/v1/organizations`
 - `GET /api/v1/organizations/{organizationId}`
+- `GET /api/v1/organizations/{organizationId}/members`
+- `POST /api/v1/organizations/{organizationId}/members`
+- `PATCH /api/v1/organizations/{organizationId}/members/{memberId}`
+- `DELETE /api/v1/organizations/{organizationId}/members/{memberId}`
+- `POST /api/v1/organizations/{organizationId}/repositories`
+- `GET /api/v1/organizations/{organizationId}/repositories`
+- `GET /api/v1/repositories/{repositoryId}`
+- `PATCH /api/v1/repositories/{repositoryId}`
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -70,6 +78,10 @@ Behavior notes:
 - `slug` must be lowercase and may contain letters, numbers, and hyphens
 - `GET` queries exclude soft-deleted organizations (`deleted_at IS NOT NULL`)
 - `updatedAt` is nullable until update behavior is implemented
+- authentication is still deferred, so member write endpoints currently accept `userId` in request body
+- organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
+- repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
+- repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
 
 Example requests:
 
@@ -81,6 +93,36 @@ curl -i -X POST http://localhost:8080/api/v1/organizations \
 curl -i "http://localhost:8080/api/v1/organizations?page=1&pageSize=20"
 
 curl -i http://localhost:8080/api/v1/organizations/{organizationId}
+
+curl -i -X PATCH http://localhost:8080/api/v1/organizations/{organizationId} \
+  -H "Content-Type: application/json" \
+  -d '{"name":"DevLens Platform"}'
+
+curl -i -X DELETE http://localhost:8080/api/v1/organizations/{organizationId}
+
+curl -i http://localhost:8080/api/v1/organizations/{organizationId}/members
+
+curl -i -X POST http://localhost:8080/api/v1/organizations/{organizationId}/members \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"d18e6bc5-f4e9-4f27-8eb8-634becf5092e","role":"member"}'
+
+curl -i -X PATCH http://localhost:8080/api/v1/organizations/{organizationId}/members/{memberId} \
+  -H "Content-Type: application/json" \
+  -d '{"role":"admin"}'
+
+curl -i -X DELETE http://localhost:8080/api/v1/organizations/{organizationId}/members/{memberId}
+
+curl -i -X POST http://localhost:8080/api/v1/organizations/{organizationId}/repositories \
+  -H "Content-Type: application/json" \
+  -d '{"githubId":42,"name":"devlens-api","fullName":"devlens-labs/devlens-api","defaultBranch":"main"}'
+
+curl -i "http://localhost:8080/api/v1/organizations/{organizationId}/repositories?page=1&pageSize=20&status=active&search=devlens&sortBy=createdAt&sortOrder=desc"
+
+curl -i http://localhost:8080/api/v1/repositories/{repositoryId}
+
+curl -i -X PATCH http://localhost:8080/api/v1/repositories/{repositoryId} \
+  -H "Content-Type: application/json" \
+  -d '{"isActive":false,"archived":true}'
 ```
 
 ## Local Services

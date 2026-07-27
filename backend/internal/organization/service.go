@@ -12,6 +12,8 @@ type repository interface {
 	Create(context.Context, CreateParams) (OrganizationResponse, error)
 	GetByID(context.Context, string) (OrganizationResponse, error)
 	List(context.Context, ListParams) (ListResult, error)
+	Update(context.Context, UpdateParams) (OrganizationResponse, error)
+	SoftDelete(context.Context, string) error
 }
 
 // Service owns organization business rules.
@@ -41,6 +43,28 @@ func (s *Service) GetByID(ctx context.Context, id string) (OrganizationResponse,
 
 func (s *Service) List(ctx context.Context, params ListParams) (ListResult, error) {
 	return s.repository.List(ctx, params)
+}
+
+func (s *Service) Update(ctx context.Context, id string, req UpdateOrganizationRequest) (OrganizationResponse, error) {
+	current, err := s.repository.GetByID(ctx, id)
+	if err != nil {
+		return OrganizationResponse{}, err
+	}
+
+	merged, err := validateAndMergeUpdateRequest(current, req)
+	if err != nil {
+		return OrganizationResponse{}, err
+	}
+
+	return s.repository.Update(ctx, UpdateParams{
+		ID:   id,
+		Slug: merged.Slug,
+		Name: merged.Name,
+	})
+}
+
+func (s *Service) SoftDelete(ctx context.Context, id string) error {
+	return s.repository.SoftDelete(ctx, id)
 }
 
 func validateCreateRequest(req CreateOrganizationRequest) error {
@@ -81,4 +105,54 @@ func validateCreateRequest(req CreateOrganizationRequest) error {
 	}
 
 	return nil
+}
+
+func validateAndMergeUpdateRequest(current OrganizationResponse, req UpdateOrganizationRequest) (UpdateParams, error) {
+	var issues []ValidationIssue
+
+	if req.Name == nil && req.Slug == nil {
+		issues = append(issues, ValidationIssue{
+			Field:   "body",
+			Message: "must include at least one updatable field",
+		})
+	}
+
+	name := current.Name
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+		if name == "" {
+			issues = append(issues, ValidationIssue{
+				Field:   "name",
+				Message: "is required",
+			})
+		}
+	}
+
+	slug := current.Slug
+	if req.Slug != nil {
+		slug = strings.TrimSpace(*req.Slug)
+		if slug == "" {
+			issues = append(issues, ValidationIssue{
+				Field:   "slug",
+				Message: "is required",
+			})
+		} else if !slugPattern.MatchString(slug) {
+			issues = append(issues, ValidationIssue{
+				Field:   "slug",
+				Message: "must contain only lowercase letters, numbers, and hyphens",
+			})
+		}
+	}
+
+	if len(issues) > 0 {
+		return UpdateParams{}, &ValidationError{
+			Message: "request validation failed",
+			Details: issues,
+		}
+	}
+
+	return UpdateParams{
+		Slug: slug,
+		Name: name,
+	}, nil
 }

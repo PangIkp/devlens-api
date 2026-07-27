@@ -11,6 +11,8 @@ type stubRepository struct {
 	createFn func(context.Context, CreateParams) (OrganizationResponse, error)
 	getFn    func(context.Context, string) (OrganizationResponse, error)
 	listFn   func(context.Context, ListParams) (ListResult, error)
+	updateFn func(context.Context, UpdateParams) (OrganizationResponse, error)
+	deleteFn func(context.Context, string) error
 }
 
 func (s stubRepository) Create(ctx context.Context, params CreateParams) (OrganizationResponse, error) {
@@ -23,6 +25,14 @@ func (s stubRepository) GetByID(ctx context.Context, id string) (OrganizationRes
 
 func (s stubRepository) List(ctx context.Context, params ListParams) (ListResult, error) {
 	return s.listFn(ctx, params)
+}
+
+func (s stubRepository) Update(ctx context.Context, params UpdateParams) (OrganizationResponse, error) {
+	return s.updateFn(ctx, params)
+}
+
+func (s stubRepository) SoftDelete(ctx context.Context, id string) error {
+	return s.deleteFn(ctx, id)
 }
 
 func TestServiceCreateSuccess(t *testing.T) {
@@ -128,6 +138,74 @@ func TestServiceCreateConflictPassThrough(t *testing.T) {
 	})
 	if !errors.Is(err, ErrOrganizationConflict) {
 		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
+func TestServiceUpdateSuccess(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubRepository{
+		getFn: func(_ context.Context, id string) (OrganizationResponse, error) {
+			return OrganizationResponse{
+				ID:       id,
+				GithubID: 123,
+				Slug:     "devlens",
+				Name:     "DevLens",
+			}, nil
+		},
+		updateFn: func(_ context.Context, params UpdateParams) (OrganizationResponse, error) {
+			if params.Slug != "devlens-platform" || params.Name != "DevLens" {
+				t.Fatalf("unexpected params %+v", params)
+			}
+			return OrganizationResponse{ID: params.ID, Slug: params.Slug, Name: params.Name}, nil
+		},
+	})
+
+	slug := "devlens-platform"
+	_, err := svc.Update(context.Background(), "org-1", UpdateOrganizationRequest{Slug: &slug})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestServiceInvalidUpdate(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubRepository{
+		getFn: func(_ context.Context, id string) (OrganizationResponse, error) {
+			return OrganizationResponse{
+				ID:       id,
+				GithubID: 123,
+				Slug:     "devlens",
+				Name:     "DevLens",
+			}, nil
+		},
+		updateFn: func(_ context.Context, _ UpdateParams) (OrganizationResponse, error) {
+			t.Fatal("repository update should not be called")
+			return OrganizationResponse{}, nil
+		},
+	})
+
+	_, err := svc.Update(context.Background(), "org-1", UpdateOrganizationRequest{})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestServiceSoftDelete(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubRepository{
+		deleteFn: func(_ context.Context, id string) error {
+			if id != "org-1" {
+				t.Fatalf("unexpected id %q", id)
+			}
+			return nil
+		},
+	})
+
+	if err := svc.SoftDelete(context.Background(), "org-1"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
 }
 

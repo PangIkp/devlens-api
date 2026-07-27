@@ -153,3 +153,57 @@ func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsPa
 	}
 	return items, nil
 }
+
+const softDeleteOrganization = `-- name: SoftDeleteOrganization :one
+UPDATE organizations
+SET deleted_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id
+`
+
+func (q *Queries) SoftDeleteOrganization(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, softDeleteOrganization, id)
+	err := row.Scan(&id)
+	return id, err
+}
+
+const updateOrganization = `-- name: UpdateOrganization :one
+UPDATE organizations
+SET slug = $2,
+    name = $3,
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, github_id, slug, name, created_at, updated_at
+`
+
+type UpdateOrganizationParams struct {
+	ID   pgtype.UUID
+	Slug string
+	Name pgtype.Text
+}
+
+type UpdateOrganizationRow struct {
+	ID        pgtype.UUID
+	GithubID  int64
+	Slug      string
+	Name      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateOrganization(ctx context.Context, arg UpdateOrganizationParams) (UpdateOrganizationRow, error) {
+	row := q.db.QueryRow(ctx, updateOrganization, arg.ID, arg.Slug, arg.Name)
+	var i UpdateOrganizationRow
+	err := row.Scan(
+		&i.ID,
+		&i.GithubID,
+		&i.Slug,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

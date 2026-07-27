@@ -49,13 +49,16 @@ Table github_installations {
 
 Table repositories {
   id uuid [pk]
-  organization_id uuid [ref: > organizations.id]
-  github_id bigint [unique]
-  name varchar
-  full_name varchar
+  organization_id uuid [ref: > organizations.id, not null]
+  github_id bigint [unique, not null]
+  name varchar [not null]
+  full_name varchar [unique, not null]
   default_branch varchar
-  is_active boolean
+  is_active boolean [not null]
+  archived_at timestamp
   last_synced_at timestamp
+  created_at timestamp [not null]
+  updated_at timestamp
 }
 
 Table sync_jobs {
