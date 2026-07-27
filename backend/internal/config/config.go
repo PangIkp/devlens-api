@@ -16,6 +16,7 @@ type Config struct {
 	HTTP       HTTPConfig
 	Postgres   PostgresConfig
 	ClickHouse ClickHouseConfig
+	GitHub     GitHubConfig
 	NATS       NATSConfig
 }
 
@@ -50,6 +51,16 @@ type ClickHouseConfig struct {
 	Password string
 	Database string
 	DSN      string
+}
+
+type GitHubConfig struct {
+	Token          string
+	BaseURL        string
+	UserAgent      string
+	HTTPTimeout    time.Duration
+	MaxRetries     int
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
 }
 
 type NATSConfig struct {
@@ -112,6 +123,26 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	githubHTTPTimeout, err := getDuration("GITHUB_HTTP_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	githubInitialBackoff, err := getDuration("GITHUB_INITIAL_BACKOFF", 500*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+
+	githubMaxBackoff, err := getDuration("GITHUB_MAX_BACKOFF", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	githubMaxRetries, err := getInt("GITHUB_MAX_RETRIES", 3)
+	if err != nil {
+		return Config{}, err
+	}
+
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
 		ReadTimeout:     readTimeout,
@@ -147,6 +178,15 @@ func Load() (Config, error) {
 			Database: getEnv("CLICKHOUSE_DATABASE", "devlens"),
 			DSN:      getEnv("CLICKHOUSE_DSN", "http://clickhouse:8123"),
 		},
+		GitHub: GitHubConfig{
+			Token:          strings.TrimSpace(getEnv("GITHUB_TOKEN", "")),
+			BaseURL:        strings.TrimSpace(getEnv("GITHUB_API_BASE_URL", "https://api.github.com")),
+			UserAgent:      strings.TrimSpace(getEnv("GITHUB_USER_AGENT", "devlens-api")),
+			HTTPTimeout:    githubHTTPTimeout,
+			MaxRetries:     githubMaxRetries,
+			InitialBackoff: githubInitialBackoff,
+			MaxBackoff:     githubMaxBackoff,
+		},
 		NATS: NATSConfig{
 			URL: getEnv("NATS_URL", "nats://nats:4222"),
 		},
@@ -170,6 +210,34 @@ func Load() (Config, error) {
 
 	if cfg.Postgres.MinConns > cfg.Postgres.MaxConns {
 		return Config{}, fmt.Errorf("POSTGRES_MIN_CONNS must be less than or equal to POSTGRES_MAX_CONNS")
+	}
+
+	if _, err := url.ParseRequestURI(cfg.GitHub.BaseURL); err != nil {
+		return Config{}, fmt.Errorf("GITHUB_API_BASE_URL must be a valid URL: %w", err)
+	}
+
+	if cfg.GitHub.UserAgent == "" {
+		return Config{}, fmt.Errorf("GITHUB_USER_AGENT must not be empty")
+	}
+
+	if cfg.GitHub.HTTPTimeout <= 0 {
+		return Config{}, fmt.Errorf("GITHUB_HTTP_TIMEOUT must be greater than 0")
+	}
+
+	if cfg.GitHub.MaxRetries < 0 {
+		return Config{}, fmt.Errorf("GITHUB_MAX_RETRIES must be greater than or equal to 0")
+	}
+
+	if cfg.GitHub.InitialBackoff <= 0 {
+		return Config{}, fmt.Errorf("GITHUB_INITIAL_BACKOFF must be greater than 0")
+	}
+
+	if cfg.GitHub.MaxBackoff <= 0 {
+		return Config{}, fmt.Errorf("GITHUB_MAX_BACKOFF must be greater than 0")
+	}
+
+	if cfg.GitHub.InitialBackoff > cfg.GitHub.MaxBackoff {
+		return Config{}, fmt.Errorf("GITHUB_INITIAL_BACKOFF must be less than or equal to GITHUB_MAX_BACKOFF")
 	}
 
 	return cfg, nil
@@ -227,6 +295,20 @@ func getInt32(key string, fallback int32) (int32, error) {
 	}
 
 	return int32(value), nil
+}
+
+func getInt(key string, fallback int) (int, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer for %s: %w", key, err)
+	}
+
+	return value, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

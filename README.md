@@ -19,6 +19,7 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `GET /api/v1/organizations/{organizationId}/repositories`
 - `GET /api/v1/repositories/{repositoryId}`
 - `PATCH /api/v1/repositories/{repositoryId}`
+- GitHub REST client foundation for repository, pull request, review, and commit ingestion
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -124,6 +125,55 @@ curl -i -X PATCH http://localhost:8080/api/v1/repositories/{repositoryId} \
   -H "Content-Type: application/json" \
   -d '{"isActive":false,"archived":true}'
 ```
+
+## GitHub Client Foundation
+
+The current backend includes a dedicated GitHub REST client package at `backend/internal/githubclient`.
+
+Current capabilities:
+
+- `GetRepository`
+- `ListPullRequests`
+- `ListReviews`
+- `ListCommits`
+
+Implementation notes:
+
+- uses GitHub REST API with `Authorization: Bearer <token>`
+- sends `User-Agent` and `X-GitHub-Api-Version` headers on every request
+- supports page-based pagination with `page` and `per_page`
+- parses `Link` headers to expose the next page number
+- tracks rate limit headers from GitHub responses
+- retries temporary failures such as `429`, `500`, `502`, `503`, `504`, and secondary rate limit responses
+- accepts a `TokenProvider` so future GitHub App installation tokens can be introduced without changing sync orchestration code
+
+New environment variables:
+
+- `GITHUB_TOKEN`
+- `GITHUB_API_BASE_URL`
+- `GITHUB_USER_AGENT`
+- `GITHUB_HTTP_TIMEOUT`
+- `GITHUB_MAX_RETRIES`
+- `GITHUB_INITIAL_BACKOFF`
+- `GITHUB_MAX_BACKOFF`
+
+Example:
+
+```sh
+GITHUB_TOKEN=ghp_xxx
+GITHUB_API_BASE_URL=https://api.github.com
+GITHUB_USER_AGENT=devlens-api
+GITHUB_HTTP_TIMEOUT=10s
+GITHUB_MAX_RETRIES=3
+GITHUB_INITIAL_BACKOFF=500ms
+GITHUB_MAX_BACKOFF=5s
+```
+
+Notes:
+
+- `ListPullRequests` accepts caller-provided `state`; the Step 2 sync flow will use `state=all` by default
+- GitHub App installation token support is intentionally deferred in this phase
+- This step does not add sync jobs, pull request persistence, or webhook endpoints yet
 
 ## Local Services
 
