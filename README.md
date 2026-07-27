@@ -19,6 +19,13 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `GET /api/v1/organizations/{organizationId}/repositories`
 - `GET /api/v1/repositories/{repositoryId}`
 - `PATCH /api/v1/repositories/{repositoryId}`
+- `POST /api/v1/repositories/{repositoryId}/sync`
+- `GET /api/v1/repositories/{repositoryId}/sync-jobs`
+- `GET /api/v1/sync-jobs/{syncJobId}`
+- `POST /api/v1/github/webhook`
+- GitHub REST client foundation for repository, pull request, review, and commit ingestion
+- PostgreSQL persistence for `pull_requests` and `pull_request_reviews`
+- transactional webhook delivery persistence and sync job enqueue
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -82,6 +89,10 @@ Behavior notes:
 - organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
 - repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
 - repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
+- manual sync persists pull requests and pull request reviews into PostgreSQL
+- incremental sync currently uses `repositories.last_synced_at` as the cutoff
+- `last_synced_at` is a coarse repository-level checkpoint and may need to evolve into finer-grained sync checkpoints in a future phase
+- webhook handling validates `X-Hub-Signature-256`, stores `github_delivery_id`, and enqueues sync jobs asynchronously
 
 Example requests:
 
@@ -123,7 +134,84 @@ curl -i http://localhost:8080/api/v1/repositories/{repositoryId}
 curl -i -X PATCH http://localhost:8080/api/v1/repositories/{repositoryId} \
   -H "Content-Type: application/json" \
   -d '{"isActive":false,"archived":true}'
+
+curl -i -X POST http://localhost:8080/api/v1/repositories/{repositoryId}/sync \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"incremental"}'
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/sync-jobs?page=1&pageSize=20&status=completed&sortOrder=desc"
+
+curl -i http://localhost:8080/api/v1/sync-jobs/{syncJobId}
+
+payload='{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"}}'
+signature=$(printf "%s" "$payload" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | sed 's/^.* //')
+
+curl -i -X POST http://localhost:8080/api/v1/github/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: pull_request" \
+  -H "X-GitHub-Delivery: delivery-123" \
+  -H "X-Hub-Signature-256: sha256=$signature" \
+  -d "$payload"
 ```
+
+## GitHub Client Foundation
+
+The current backend includes a dedicated GitHub REST client package at `backend/internal/githubclient`.
+
+Current capabilities:
+
+- `GetRepository`
+- `ListPullRequests`
+- `ListReviews`
+- `ListCommits`
+
+Implementation notes:
+
+- uses GitHub REST API with `Authorization: Bearer <token>`
+- sends `User-Agent` and `X-GitHub-Api-Version` headers on every request
+- supports page-based pagination with `page` and `per_page`
+- parses `Link` headers to expose the next page number
+- tracks rate limit headers from GitHub responses
+- retries temporary failures such as `429`, `500`, `502`, `503`, `504`, and secondary rate limit responses
+- accepts a `TokenProvider` so future GitHub App installation tokens can be introduced without changing sync orchestration code
+
+New environment variables:
+
+- `GITHUB_TOKEN`
+- `GITHUB_API_BASE_URL`
+- `GITHUB_USER_AGENT`
+- `GITHUB_HTTP_TIMEOUT`
+- `GITHUB_MAX_RETRIES`
+- `GITHUB_INITIAL_BACKOFF`
+- `GITHUB_MAX_BACKOFF`
+- `GITHUB_WEBHOOK_SECRET`
+- `SYNC_WORKER_POLL_INTERVAL`
+
+Example:
+
+```sh
+GITHUB_TOKEN=ghp_xxx
+GITHUB_API_BASE_URL=https://api.github.com
+GITHUB_USER_AGENT=devlens-api
+GITHUB_HTTP_TIMEOUT=10s
+GITHUB_MAX_RETRIES=3
+GITHUB_INITIAL_BACKOFF=500ms
+GITHUB_MAX_BACKOFF=5s
+GITHUB_WEBHOOK_SECRET=replace-me
+SYNC_WORKER_POLL_INTERVAL=2s
+```
+
+Notes:
+
+- `ListPullRequests` accepts caller-provided `state`; the Step 2 sync flow will use `state=all` by default
+- GitHub App installation token support is intentionally deferred in this phase
+- sync jobs now persist `status`, `progress`, `startedAt`, `finishedAt`, and `errorMessage` in PostgreSQL
+- manual sync execution is currently inline for the current milestone
+- webhook events are accepted asynchronously: the handler stores the delivery and enqueues a pending sync job, then an in-process worker processes that job
+- pull request upsert uses `github_pr_id` as the primary external identity
+- pull request data also enforces `(repository_id, number)` as a secondary consistency constraint
+- pull request review upsert uses `github_review_id` as the provider identity
+- full repository sync from webhook and direct event projection are intentionally deferred
 
 ## Local Services
 

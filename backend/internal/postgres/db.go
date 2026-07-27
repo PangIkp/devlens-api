@@ -6,6 +6,7 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/postgres/sqlcgen"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -63,4 +64,8 @@ func (db *DB) Close() {
 
 func (db *DB) Queries() *sqlcgen.Queries {
 	return db.queries
+}
+
+func (db *DB) Begin(ctx context.Context) (pgx.Tx, error) {
+	return db.pool.Begin(ctx)
 }

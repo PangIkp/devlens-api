@@ -22,6 +22,7 @@ tags:
   - name: Organizations
   - name: Repositories
   - name: Sync Jobs
+  - name: GitHub Webhooks
   - name: Dashboard
   - name: Pull Request Metrics
   - name: Review Metrics
@@ -424,6 +425,48 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /github/webhook:
+    post:
+      tags:
+        - GitHub Webhooks
+      summary: Receive GitHub webhook deliveries
+      operationId: handleGitHubWebhook
+      security: []
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202":
+          description: Webhook accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubWebhookResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /repositories/{repositoryId}/dashboard/summary:
     get:
@@ -1079,6 +1122,9 @@ components:
           type: string
           format: date-time
           nullable: true
+        errorMessage:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -1107,6 +1153,42 @@ components:
             $ref: "#/components/schemas/SyncJob"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
+
+    GitHubWebhookDelivery:
+      type: object
+      required:
+        - deliveryId
+        - eventType
+        - duplicate
+        - enqueued
+        - receivedAt
+      properties:
+        deliveryId:
+          type: string
+        eventType:
+          type: string
+        duplicate:
+          type: boolean
+        enqueued:
+          type: boolean
+        syncJobId:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+          nullable: true
+        receivedAt:
+          type: string
+          format: date-time
+
+    GitHubWebhookResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/GitHubWebhookDelivery"
 
     DashboardSummary:
       type: object

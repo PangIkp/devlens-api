@@ -19,6 +19,8 @@ type Dependencies struct {
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
 	Repositories        *RepositoryHandler
+	SyncJobs            *SyncJobHandler
+	GitHubWebhook       *GitHubWebhookHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
@@ -52,6 +54,12 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.Repositories != nil {
 			deps.Repositories.RegisterRoutes(r)
+		}
+		if deps.SyncJobs != nil {
+			deps.SyncJobs.RegisterRoutes(r)
+		}
+		if deps.GitHubWebhook != nil {
+			deps.GitHubWebhook.RegisterRoutes(r)
 		}
 	})
 
