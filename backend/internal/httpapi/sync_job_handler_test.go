@@ -1,0 +1,139 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/syncjob"
+	"github.com/go-chi/chi/v5"
+)
+
+type stubSyncJobService struct {
+	createFn func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	getFn    func(context.Context, string) (syncjob.SyncJobResponse, error)
+	listFn   func(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
+}
+
+func (s stubSyncJobService) Create(ctx context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+	return s.createFn(ctx, repositoryID, req)
+}
+
+func (s stubSyncJobService) GetByID(ctx context.Context, id string) (syncjob.SyncJobResponse, error) {
+	return s.getFn(ctx, id)
+}
+
+func (s stubSyncJobService) ListByRepository(ctx context.Context, params syncjob.ListParams) (syncjob.ListResult, error) {
+	return s.listFn(ctx, params)
+}
+
+func TestCreateSyncJobHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewSyncJobHandler(stubSyncJobService{
+		createFn: func(_ context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			if repositoryID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" || req.Mode != "full" {
+				t.Fatalf("unexpected request %q %+v", repositoryID, req)
+			}
+			return syncjob.SyncJobResponse{
+				ID:           "5fb3c674-6992-4ba9-a227-c1c66517e3f6",
+				RepositoryID: repositoryID,
+				Status:       syncjob.StatusCompleted,
+				Progress:     100,
+				CreatedAt:    time.Now().UTC(),
+			}, nil
+		},
+		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) { return syncjob.SyncJobResponse{}, nil },
+		listFn: func(context.Context, syncjob.ListParams) (syncjob.ListResult, error) {
+			return syncjob.ListResult{}, nil
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/sync", strings.NewReader(`{"mode":"full"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+}
+
+func TestListSyncJobsHandlerUsesMetaShape(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewSyncJobHandler(stubSyncJobService{
+		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) { return syncjob.SyncJobResponse{}, nil },
+		listFn: func(_ context.Context, params syncjob.ListParams) (syncjob.ListResult, error) {
+			if params.Page != 2 || params.PageSize != 10 || params.Status != "completed" || params.SortOrder != "asc" {
+				t.Fatalf("unexpected params %+v", params)
+			}
+			return syncjob.ListResult{
+				Items: []syncjob.SyncJobResponse{{
+					ID:           "job-1",
+					RepositoryID: params.RepositoryID,
+					Status:       syncjob.StatusCompleted,
+					Progress:     100,
+					CreatedAt:    time.Now().UTC(),
+				}},
+				TotalItems: 1,
+			}, nil
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/sync-jobs?page=2&pageSize=10&status=completed&sortOrder=asc", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Data []syncjob.SyncJobResponse `json:"data"`
+		Meta PaginationMeta            `json:"meta"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Data) != 1 || body.Meta.Page != 2 {
+		t.Fatalf("unexpected body %+v", body)
+	}
+}
+
+func TestGetSyncJobHandlerNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	NewSyncJobHandler(stubSyncJobService{
+		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, syncjob.ErrSyncJobNotFound
+		},
+		listFn: func(context.Context, syncjob.ListParams) (syncjob.ListResult, error) {
+			return syncjob.ListResult{}, nil
+		},
+	}).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/sync-jobs/5fb3c674-6992-4ba9-a227-c1c66517e3f6", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}

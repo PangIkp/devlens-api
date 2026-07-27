@@ -19,6 +19,9 @@ This repository currently contains the initial backend foundation in [`backend`]
 - `GET /api/v1/organizations/{organizationId}/repositories`
 - `GET /api/v1/repositories/{repositoryId}`
 - `PATCH /api/v1/repositories/{repositoryId}`
+- `POST /api/v1/repositories/{repositoryId}/sync`
+- `GET /api/v1/repositories/{repositoryId}/sync-jobs`
+- `GET /api/v1/sync-jobs/{syncJobId}`
 - GitHub REST client foundation for repository, pull request, review, and commit ingestion
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
@@ -124,6 +127,14 @@ curl -i http://localhost:8080/api/v1/repositories/{repositoryId}
 curl -i -X PATCH http://localhost:8080/api/v1/repositories/{repositoryId} \
   -H "Content-Type: application/json" \
   -d '{"isActive":false,"archived":true}'
+
+curl -i -X POST http://localhost:8080/api/v1/repositories/{repositoryId}/sync \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"incremental"}'
+
+curl -i "http://localhost:8080/api/v1/repositories/{repositoryId}/sync-jobs?page=1&pageSize=20&status=completed&sortOrder=desc"
+
+curl -i http://localhost:8080/api/v1/sync-jobs/{syncJobId}
 ```
 
 ## GitHub Client Foundation
@@ -173,7 +184,9 @@ Notes:
 
 - `ListPullRequests` accepts caller-provided `state`; the Step 2 sync flow will use `state=all` by default
 - GitHub App installation token support is intentionally deferred in this phase
-- This step does not add sync jobs, pull request persistence, or webhook endpoints yet
+- sync jobs now persist `status`, `progress`, `startedAt`, `finishedAt`, and `errorMessage` in PostgreSQL
+- sync execution is currently inline for the current milestone; webhook processing and asynchronous workers are still deferred
+- pull request and review persistence is still deferred to the next step
 
 ## Local Services
 

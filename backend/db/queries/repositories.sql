@@ -78,6 +78,22 @@ SET name = $2,
 WHERE id = $1
 RETURNING id, organization_id, github_id, name, full_name, default_branch, is_active, archived_at, last_synced_at, created_at, updated_at;
 
+-- name: SyncRepositoryMetadata :exec
+UPDATE repositories
+SET name = $2,
+    full_name = $3,
+    default_branch = $4,
+    is_active = $5,
+    archived_at = $6,
+    updated_at = $7
+WHERE id = $1;
+
+-- name: UpdateRepositoryLastSyncedAt :exec
+UPDATE repositories
+SET last_synced_at = $2,
+    updated_at = $2
+WHERE id = $1;
+
 -- name: RepositoryOrganizationExists :one
 SELECT EXISTS (
     SELECT 1
@@ -85,4 +101,3 @@ SELECT EXISTS (
     WHERE id = $1
       AND deleted_at IS NULL
 ) AS exists;
-

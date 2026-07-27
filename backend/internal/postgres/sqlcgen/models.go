@@ -49,10 +49,14 @@ type Repository struct {
 type SyncJob struct {
 	ID           pgtype.UUID
 	RepositoryID pgtype.UUID
-	Status       pgtype.Text
+	Status       string
 	Progress     int32
 	StartedAt    pgtype.Timestamptz
 	FinishedAt   pgtype.Timestamptz
+	TriggeredBy  pgtype.UUID
+	ErrorMessage pgtype.Text
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 type User struct {

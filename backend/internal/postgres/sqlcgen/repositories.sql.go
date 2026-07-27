@@ -263,6 +263,40 @@ func (q *Queries) RepositoryOrganizationExists(ctx context.Context, id pgtype.UU
 	return exists, err
 }
 
+const syncRepositoryMetadata = `-- name: SyncRepositoryMetadata :exec
+UPDATE repositories
+SET name = $2,
+    full_name = $3,
+    default_branch = $4,
+    is_active = $5,
+    archived_at = $6,
+    updated_at = $7
+WHERE id = $1
+`
+
+type SyncRepositoryMetadataParams struct {
+	ID            pgtype.UUID
+	Name          string
+	FullName      string
+	DefaultBranch pgtype.Text
+	IsActive      bool
+	ArchivedAt    pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+func (q *Queries) SyncRepositoryMetadata(ctx context.Context, arg SyncRepositoryMetadataParams) error {
+	_, err := q.db.Exec(ctx, syncRepositoryMetadata,
+		arg.ID,
+		arg.Name,
+		arg.FullName,
+		arg.DefaultBranch,
+		arg.IsActive,
+		arg.ArchivedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const updateRepository = `-- name: UpdateRepository :one
 UPDATE repositories
 SET name = $2,
@@ -322,4 +356,21 @@ func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateRepositoryLastSyncedAt = `-- name: UpdateRepositoryLastSyncedAt :exec
+UPDATE repositories
+SET last_synced_at = $2,
+    updated_at = $2
+WHERE id = $1
+`
+
+type UpdateRepositoryLastSyncedAtParams struct {
+	ID           pgtype.UUID
+	LastSyncedAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateRepositoryLastSyncedAt(ctx context.Context, arg UpdateRepositoryLastSyncedAtParams) error {
+	_, err := q.db.Exec(ctx, updateRepositoryLastSyncedAt, arg.ID, arg.LastSyncedAt)
+	return err
 }

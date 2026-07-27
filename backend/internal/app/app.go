@@ -11,11 +11,13 @@ import (
 	"syscall"
 
 	"github.com/PangIkp/devlens/backend/internal/config"
+	"github.com/PangIkp/devlens/backend/internal/githubclient"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
+	"github.com/PangIkp/devlens/backend/internal/syncjob"
 )
 
 type App struct {
@@ -45,12 +47,27 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
+	githubClient, err := githubclient.New(githubclient.Config{
+		BaseURL:        cfg.GitHub.BaseURL,
+		UserAgent:      cfg.GitHub.UserAgent,
+		HTTPTimeout:    cfg.GitHub.HTTPTimeout,
+		MaxRetries:     cfg.GitHub.MaxRetries,
+		InitialBackoff: cfg.GitHub.InitialBackoff,
+		MaxBackoff:     cfg.GitHub.MaxBackoff,
+	}, githubclient.StaticTokenProvider{Value: cfg.GitHub.Token})
+	if err != nil {
+		return nil, fmt.Errorf("initialize github client: %w", err)
+	}
+	syncJobRepository := syncjob.NewRepository(postgresDB)
+	syncJobService := syncjob.NewService(syncJobRepository, githubClient)
+	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
 		Repositories:        repositoryHandler,
+		SyncJobs:            syncJobHandler,
 	})
 
 	server := &http.Server{
