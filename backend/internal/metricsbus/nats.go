@@ -27,6 +27,10 @@ type Client struct {
 	js   nats.JetStreamContext
 }
 
+type fallbackCalculator interface {
+	CalculateRepositoryMetrics(context.Context, string, metrics.CalculationRequest) error
+}
+
 func Open(url string) (*Client, error) {
 	conn, err := nats.Connect(url, nats.Name("devlens-metrics"))
 	if err != nil {
@@ -76,6 +80,54 @@ func (c *Client) PublishRepositorySyncCompleted(ctx context.Context, event syncj
 	}
 
 	return nil
+}
+
+type Publisher struct {
+	logger     *slog.Logger
+	client     *Client
+	calculator fallbackCalculator
+}
+
+func NewPublisher(logger *slog.Logger, client *Client, calculator fallbackCalculator) *Publisher {
+	return &Publisher{
+		logger:     logger,
+		client:     client,
+		calculator: calculator,
+	}
+}
+
+func (p *Publisher) PublishRepositorySyncCompleted(ctx context.Context, event syncjob.SyncCompletedEvent) error {
+	var publishErr error
+
+	if p.client != nil {
+		publishErr = p.client.PublishRepositorySyncCompleted(ctx, event)
+		if publishErr == nil {
+			return nil
+		}
+		if p.logger != nil {
+			p.logger.Warn("publish metrics event failed, falling back to inline calculation", "sync_job_id", event.SyncJobID, "repository_id", event.RepositoryID, "error", publishErr)
+		}
+	}
+
+	if p.calculator != nil {
+		from, _ := time.Parse("2006-01-02", historyStart)
+		if err := p.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, metrics.CalculationRequest{
+			From: from.UTC(),
+			To:   event.OccurredAt.UTC(),
+		}); err != nil {
+			if publishErr != nil {
+				return fmt.Errorf("publish metrics event: %w; fallback calculation: %w", publishErr, err)
+			}
+			return fmt.Errorf("fallback metrics calculation: %w", err)
+		}
+		return nil
+	}
+
+	if publishErr != nil {
+		return publishErr
+	}
+
+	return fmt.Errorf("metrics publisher is not configured")
 }
 
 type Consumer struct {

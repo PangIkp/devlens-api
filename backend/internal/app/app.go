@@ -90,12 +90,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer
-	if client, err := metricsbus.Open(cfg.NATS.URL); err != nil {
-		logger.Warn("metrics bus unavailable during startup", "error", err)
-	} else {
-		metricsBusClient = client
-		syncJobService.SetCompletionPublisher(client)
-		metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
+	if clickhouseDB != nil {
+		if client, err := metricsbus.Open(cfg.NATS.URL); err != nil {
+			logger.Warn("metrics bus unavailable during startup", "error", err)
+		} else {
+			metricsBusClient = client
+			metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
+		}
+		syncJobService.SetCompletionPublisher(metricsbus.NewPublisher(logger, metricsBusClient, metricsService))
 	}
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{

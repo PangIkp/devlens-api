@@ -272,10 +272,22 @@ SELECT
   fc.additions,
   fc.deletions,
   fc.commit_count
-FROM file_changes fc
-FINAL
-INNER JOIN pull_requests pr ON pr.id = fc.pull_request_id
-FINAL
+FROM (
+  SELECT
+    pull_request_id,
+    file_path,
+    additions,
+    deletions,
+    commit_count
+  FROM file_changes FINAL
+) AS fc
+INNER JOIN (
+  SELECT
+    id,
+    repository_id,
+    created_at
+  FROM pull_requests FINAL
+) AS pr ON pr.id = fc.pull_request_id
 WHERE pr.repository_id = '%s'
   AND pr.created_at >= toDateTime64('%s', 3, 'UTC')
   AND pr.created_at < toDateTime64('%s', 3, 'UTC')

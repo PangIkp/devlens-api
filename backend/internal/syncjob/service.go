@@ -226,12 +226,14 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	if s.publisher != nil {
-		_ = s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
+		if err := s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
 			EventType:    "repository.sync.completed",
 			RepositoryID: job.RepositoryID,
 			SyncJobID:    job.ID,
 			OccurredAt:   completedAt,
-		})
+		}); err != nil {
+			return completedJob, fmt.Errorf("trigger metrics calculation: %w", err)
+		}
 	}
 
 	return completedJob, nil
