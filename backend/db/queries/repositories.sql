@@ -25,6 +25,11 @@ SELECT id, organization_id, github_id, name, full_name, default_branch, is_activ
 FROM repositories
 WHERE id = $1;
 
+-- name: GetRepositoryByGithubID :one
+SELECT id, organization_id, github_id, name, full_name, default_branch, is_active, archived_at, last_synced_at, created_at, updated_at
+FROM repositories
+WHERE github_id = $1;
+
 -- name: ListRepositories :many
 SELECT id, organization_id, github_id, name, full_name, default_branch, is_active, archived_at, last_synced_at, created_at, updated_at
 FROM repositories

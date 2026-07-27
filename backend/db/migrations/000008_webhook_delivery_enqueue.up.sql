@@ -1,0 +1,8 @@
+ALTER TABLE webhook_deliveries
+    ALTER COLUMN repository_id DROP NOT NULL;
+
+ALTER TABLE webhook_deliveries
+    ADD COLUMN IF NOT EXISTS action VARCHAR(128),
+    ADD COLUMN IF NOT EXISTS payload JSONB,
+    ADD COLUMN IF NOT EXISTS sync_job_id UUID REFERENCES sync_jobs(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;

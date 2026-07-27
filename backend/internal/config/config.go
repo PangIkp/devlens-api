@@ -18,6 +18,7 @@ type Config struct {
 	ClickHouse ClickHouseConfig
 	GitHub     GitHubConfig
 	NATS       NATSConfig
+	Sync       SyncConfig
 }
 
 type HTTPConfig struct {
@@ -57,6 +58,7 @@ type GitHubConfig struct {
 	Token          string
 	BaseURL        string
 	UserAgent      string
+	WebhookSecret  string
 	HTTPTimeout    time.Duration
 	MaxRetries     int
 	InitialBackoff time.Duration
@@ -65,6 +67,10 @@ type GitHubConfig struct {
 
 type NATSConfig struct {
 	URL string
+}
+
+type SyncConfig struct {
+	WorkerPollInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -143,6 +149,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	syncWorkerPollInterval, err := getDuration("SYNC_WORKER_POLL_INTERVAL", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
 		ReadTimeout:     readTimeout,
@@ -182,6 +193,7 @@ func Load() (Config, error) {
 			Token:          strings.TrimSpace(getEnv("GITHUB_TOKEN", "")),
 			BaseURL:        strings.TrimSpace(getEnv("GITHUB_API_BASE_URL", "https://api.github.com")),
 			UserAgent:      strings.TrimSpace(getEnv("GITHUB_USER_AGENT", "devlens-api")),
+			WebhookSecret:  getEnv("GITHUB_WEBHOOK_SECRET", ""),
 			HTTPTimeout:    githubHTTPTimeout,
 			MaxRetries:     githubMaxRetries,
 			InitialBackoff: githubInitialBackoff,
@@ -189,6 +201,9 @@ func Load() (Config, error) {
 		},
 		NATS: NATSConfig{
 			URL: getEnv("NATS_URL", "nats://nats:4222"),
+		},
+		Sync: SyncConfig{
+			WorkerPollInterval: syncWorkerPollInterval,
 		},
 	}
 
@@ -238,6 +253,10 @@ func Load() (Config, error) {
 
 	if cfg.GitHub.InitialBackoff > cfg.GitHub.MaxBackoff {
 		return Config{}, fmt.Errorf("GITHUB_INITIAL_BACKOFF must be less than or equal to GITHUB_MAX_BACKOFF")
+	}
+
+	if cfg.Sync.WorkerPollInterval <= 0 {
+		return Config{}, fmt.Errorf("SYNC_WORKER_POLL_INTERVAL must be greater than 0")
 	}
 
 	return cfg, nil

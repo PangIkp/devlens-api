@@ -49,6 +49,13 @@ SELECT id, repository_id, status, progress, triggered_by, error_message, started
 FROM sync_jobs
 WHERE id = $1;
 
+-- name: ListPendingSyncJobs :many
+SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+FROM sync_jobs
+WHERE status = 'pending'
+ORDER BY created_at ASC
+LIMIT $1;
+
 -- name: ListSyncJobsByRepository :many
 SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
 FROM sync_jobs

@@ -64,6 +64,17 @@ func (s *Service) Create(ctx context.Context, repositoryID string, req CreateSyn
 	return s.run(ctx, job, options)
 }
 
+func (s *Service) ProcessPending(ctx context.Context, id string) (SyncJobResponse, error) {
+	job, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if job.Status != StatusPending {
+		return job, nil
+	}
+	return s.run(ctx, job, syncOptions{mode: ModeIncremental})
+}
+
 func (s *Service) GetByID(ctx context.Context, id string) (SyncJobResponse, error) {
 	return s.store.GetByID(ctx, id)
 }

@@ -180,6 +180,58 @@ func (q *Queries) HasActiveSyncJob(ctx context.Context, repositoryID pgtype.UUID
 	return exists, err
 }
 
+const listPendingSyncJobs = `-- name: ListPendingSyncJobs :many
+SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+FROM sync_jobs
+WHERE status = 'pending'
+ORDER BY created_at ASC
+LIMIT $1
+`
+
+type ListPendingSyncJobsRow struct {
+	ID           pgtype.UUID
+	RepositoryID pgtype.UUID
+	Status       string
+	Progress     int32
+	TriggeredBy  pgtype.UUID
+	ErrorMessage pgtype.Text
+	StartedAt    pgtype.Timestamptz
+	FinishedAt   pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) ListPendingSyncJobs(ctx context.Context, limit int32) ([]ListPendingSyncJobsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingSyncJobs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPendingSyncJobsRow
+	for rows.Next() {
+		var i ListPendingSyncJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepositoryID,
+			&i.Status,
+			&i.Progress,
+			&i.TriggeredBy,
+			&i.ErrorMessage,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSyncJobsByRepository = `-- name: ListSyncJobsByRepository :many
 SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
 FROM sync_jobs

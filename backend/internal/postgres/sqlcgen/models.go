@@ -101,4 +101,8 @@ type WebhookDelivery struct {
 	EventType        pgtype.Text
 	Processed        bool
 	ReceivedAt       pgtype.Timestamptz
+	Action           pgtype.Text
+	Payload          []byte
+	SyncJobID        pgtype.UUID
+	UpdatedAt        pgtype.Timestamptz
 }

@@ -117,6 +117,45 @@ func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryPara
 	return i, err
 }
 
+const getRepositoryByGithubID = `-- name: GetRepositoryByGithubID :one
+SELECT id, organization_id, github_id, name, full_name, default_branch, is_active, archived_at, last_synced_at, created_at, updated_at
+FROM repositories
+WHERE github_id = $1
+`
+
+type GetRepositoryByGithubIDRow struct {
+	ID             pgtype.UUID
+	OrganizationID pgtype.UUID
+	GithubID       int64
+	Name           string
+	FullName       string
+	DefaultBranch  pgtype.Text
+	IsActive       bool
+	ArchivedAt     pgtype.Timestamptz
+	LastSyncedAt   pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+func (q *Queries) GetRepositoryByGithubID(ctx context.Context, githubID int64) (GetRepositoryByGithubIDRow, error) {
+	row := q.db.QueryRow(ctx, getRepositoryByGithubID, githubID)
+	var i GetRepositoryByGithubIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.GithubID,
+		&i.Name,
+		&i.FullName,
+		&i.DefaultBranch,
+		&i.IsActive,
+		&i.ArchivedAt,
+		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRepositoryByID = `-- name: GetRepositoryByID :one
 SELECT id, organization_id, github_id, name, full_name, default_branch, is_active, archived_at, last_synced_at, created_at, updated_at
 FROM repositories

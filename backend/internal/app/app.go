@@ -12,6 +12,7 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
+	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
@@ -25,6 +26,7 @@ type App struct {
 	logger   *slog.Logger
 	server   *http.Server
 	postgres *postgres.DB
+	worker   *syncjob.Worker
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -61,6 +63,10 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	syncJobRepository := syncjob.NewRepository(postgresDB)
 	syncJobService := syncjob.NewService(syncJobRepository, githubClient)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService)
+	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval)
+	webhookRepository := githubwebhook.NewRepository(postgresDB)
+	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret)
+	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
@@ -68,6 +74,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		OrganizationMembers: organizationMemberHandler,
 		Repositories:        repositoryHandler,
 		SyncJobs:            syncJobHandler,
+		GitHubWebhook:       webhookHandler,
 	})
 
 	server := &http.Server{
@@ -83,6 +90,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		logger:   logger,
 		server:   server,
 		postgres: postgresDB,
+		worker:   syncWorker,
 	}, nil
 }
 
@@ -101,6 +109,10 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		serverErr <- nil
 	}()
+
+	if a.worker != nil {
+		go a.worker.Run(ctx)
+	}
 
 	select {
 	case <-ctx.Done():

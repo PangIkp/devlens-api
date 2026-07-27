@@ -66,8 +66,11 @@ Table sync_jobs {
   repository_id uuid [ref: > repositories.id]
   status varchar
   progress int
+  error_message text
   started_at timestamp
   finished_at timestamp
+  created_at timestamp
+  updated_at timestamp
 }
 
 Table webhook_deliveries {
@@ -75,8 +78,12 @@ Table webhook_deliveries {
   repository_id uuid [ref: > repositories.id]
   github_delivery_id varchar [unique]
   event_type varchar
+  action varchar
+  payload json
+  sync_job_id uuid [ref: > sync_jobs.id]
   processed boolean
   received_at timestamp
+  updated_at timestamp
 }
 
 Table pull_requests {

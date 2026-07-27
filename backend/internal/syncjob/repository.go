@@ -73,6 +73,19 @@ func (r *Repository) GetByID(ctx context.Context, id string) (SyncJobResponse, e
 	return syncJobResponseFromGetRow(row), nil
 }
 
+func (r *Repository) ListPendingIDs(ctx context.Context, limit int) ([]string, error) {
+	rows, err := r.queries.ListPendingSyncJobs(ctx, int32(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list pending sync jobs: %w", err)
+	}
+
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID.String())
+	}
+	return ids, nil
+}
+
 func (r *Repository) ListByRepository(ctx context.Context, params ListParams) (ListResult, error) {
 	rows, err := r.queries.ListSyncJobsByRepository(ctx, sqlcgen.ListSyncJobsByRepositoryParams{
 		RepositoryID: parseUUID(params.RepositoryID),
