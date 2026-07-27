@@ -220,11 +220,6 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	completedAt := s.now().UTC()
-	completedJob, err := s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
-	if err != nil {
-		return SyncJobResponse{}, err
-	}
-
 	if s.publisher != nil {
 		if err := s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
 			EventType:    "repository.sync.completed",
@@ -232,11 +227,11 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 			SyncJobID:    job.ID,
 			OccurredAt:   completedAt,
 		}); err != nil {
-			return completedJob, fmt.Errorf("trigger metrics calculation: %w", err)
+			return s.failJob(ctx, job, fmt.Errorf("trigger metrics calculation: %w", err))
 		}
 	}
 
-	return completedJob, nil
+	return s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
 }
 
 func (s *Service) failJob(ctx context.Context, job SyncJobResponse, err error) (SyncJobResponse, error) {
