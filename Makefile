@@ -4,8 +4,14 @@ GO_TOOL_CACHE_DIR := $(PWD)/backend/.cache/go-build
 GO_TOOL_MOD_CACHE_DIR := $(PWD)/backend/.cache/gomodcache
 GO_TOOL_ENV = GOCACHE="$(GO_TOOL_CACHE_DIR)" GOMODCACHE="$(GO_TOOL_MOD_CACHE_DIR)"
 POSTGRES_DSN ?= postgres://devlens:devlens@localhost:5432/devlens?sslmode=disable
+ENV_FILE := $(PWD)/.env
 
 .PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate
+
+ifneq ("$(wildcard $(ENV_FILE))","")
+include $(ENV_FILE)
+export
+endif
 
 fmt:
 	$(GO_RUN) gofmt -w .

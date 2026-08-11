@@ -188,12 +188,12 @@ func Load() (Config, error) {
 			ConnectTimeout:    pgConnectTimeout,
 		},
 		ClickHouse: ClickHouseConfig{
-			Host:     getEnv("CLICKHOUSE_HOST", "clickhouse"),
+			Host:     getEnv("CLICKHOUSE_HOST", "localhost"),
 			Port:     getEnv("CLICKHOUSE_PORT", "8123"),
 			User:     getEnv("CLICKHOUSE_USER", "default"),
 			Password: getEnv("CLICKHOUSE_PASSWORD", ""),
 			Database: getEnv("CLICKHOUSE_DATABASE", "devlens"),
-			DSN:      getEnv("CLICKHOUSE_DSN", "http://clickhouse:8123"),
+			DSN:      getEnv("CLICKHOUSE_DSN", "http://localhost:8123"),
 			Timeout:  clickhouseTimeout,
 		},
 		GitHub: GitHubConfig{
@@ -207,7 +207,7 @@ func Load() (Config, error) {
 			MaxBackoff:     githubMaxBackoff,
 		},
 		NATS: NATSConfig{
-			URL: getEnv("NATS_URL", "nats://nats:4222"),
+			URL: getEnv("NATS_URL", "nats://localhost:4222"),
 		},
 		Sync: SyncConfig{
 			WorkerPollInterval: syncWorkerPollInterval,
