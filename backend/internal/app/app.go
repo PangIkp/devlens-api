@@ -100,9 +100,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		syncJobService.SetCompletionPublisher(metricsbus.NewPublisher(logger, metricsBusClient, metricsService))
 	}
 
+	var clickhouseHealthChecker httpapi.ClickHouseHealthChecker
+	if clickhouseDB != nil {
+		clickhouseHealthChecker = clickhouseDB
+	}
+
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
-		ClickHouse:          clickhouseDB,
+		ClickHouse:          clickhouseHealthChecker,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
 		Repositories:        repositoryHandler,

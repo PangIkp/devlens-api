@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"time"
 )
 
@@ -69,7 +70,7 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h HealthHandler) checkPostgres(ctx context.Context) error {
-	if h.postgres == nil {
+	if isNilChecker(h.postgres) {
 		return nil
 	}
 
@@ -77,9 +78,23 @@ func (h HealthHandler) checkPostgres(ctx context.Context) error {
 }
 
 func (h HealthHandler) checkClickHouse(ctx context.Context) error {
-	if h.clickhouse == nil {
+	if isNilChecker(h.clickhouse) {
 		return nil
 	}
 
 	return h.clickhouse.Check(ctx)
+}
+
+func isNilChecker(checker any) bool {
+	if checker == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(checker)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

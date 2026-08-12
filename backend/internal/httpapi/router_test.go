@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 )
 
 type stubHealthChecker struct {
@@ -117,6 +119,34 @@ func TestHealthHandlerDegradedClickHouse(t *testing.T) {
 
 	if body.Dependencies.ClickHouse.Status != "unavailable" {
 		t.Fatalf("expected unavailable clickhouse status, got %q", body.Dependencies.ClickHouse.Status)
+	}
+}
+
+func TestHealthHandlerIgnoresTypedNilClickHouse(t *testing.T) {
+	t.Parallel()
+
+	var clickhouseDB *clickhouse.DB
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: clickhouseDB,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "ok" {
+		t.Fatalf("expected status ok, got %q", body.Status)
 	}
 }
 
