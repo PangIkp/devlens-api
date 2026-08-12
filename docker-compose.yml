@@ -20,13 +20,16 @@ services:
     image: clickhouse/clickhouse-server:25.3
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-devlens}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-devlens}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-devlens}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      test: ["CMD-SHELL", "clickhouse-client --user \"$${CLICKHOUSE_USER}\" --password \"$${CLICKHOUSE_PASSWORD}\" --query 'SELECT 1'"]
       interval: 10s
       timeout: 5s
       retries: 10
