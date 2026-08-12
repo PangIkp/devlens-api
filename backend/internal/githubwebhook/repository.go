@@ -52,7 +52,7 @@ func (r *Repository) FindRepositoryByGithubID(ctx context.Context, githubID int6
 	return &repositoryMatch{ID: row.ID.String()}, nil
 }
 
-func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *string, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return enqueueResult{}, fmt.Errorf("begin webhook transaction: %w", err)
@@ -62,6 +62,10 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 	queries := r.queries.WithTx(tx)
 	now := time.Now().UTC()
 	payloadJSON, err := jsonValue(payload)
+	if err != nil {
+		return enqueueResult{}, err
+	}
+	installationUUID, err := r.findInstallationUUID(ctx, tx, installationID)
 	if err != nil {
 		return enqueueResult{}, err
 	}
@@ -84,19 +88,40 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 		syncJobID = &row.ID
 	}
 
-	delivery, err := queries.CreateWebhookDelivery(ctx, sqlcgen.CreateWebhookDeliveryParams{
-		ID:               newUUID(),
-		RepositoryID:     nullableUUID(repositoryID),
-		GithubDeliveryID: textValue(deliveryID),
-		EventType:        textValue(eventType),
-		Processed:        !enqueueJob,
-		Action:           textPointerValue(action),
-		Payload:          payloadJSON,
-		SyncJobID:        nullableUUIDFromValue(syncJobID),
-		UpdatedAt:        toNullableTimestamp(&now),
-	})
+	var createdDeliveryID pgtype.Text
+	var createdSyncJobID pgtype.UUID
+	var receivedAt pgtype.Timestamptz
+	err = tx.QueryRow(ctx, `
+		INSERT INTO webhook_deliveries (
+			id,
+			repository_id,
+			github_installation_id,
+			github_delivery_id,
+			event_type,
+			processed,
+			received_at,
+			action,
+			payload,
+			sync_job_id,
+			updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10
+		)
+		ON CONFLICT (github_delivery_id) DO NOTHING
+		RETURNING github_delivery_id, sync_job_id, received_at`,
+		newUUID(),
+		nullableUUID(repositoryID),
+		installationUUID,
+		deliveryID,
+		eventType,
+		!enqueueJob,
+		textPointerValue(action),
+		payloadJSON,
+		nullableUUIDFromValue(syncJobID),
+		toNullableTimestamp(&now),
+	).Scan(&createdDeliveryID, &createdSyncJobID, &receivedAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			existing, getErr := queries.GetWebhookDeliveryByGithubDeliveryID(ctx, textValue(deliveryID))
 			if getErr != nil {
 				return enqueueResult{}, fmt.Errorf("load duplicate webhook delivery: %w", getErr)
@@ -122,10 +147,10 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 	result := enqueueResult{
 		deliveryID: deliveryID,
 		duplicate:  false,
-		receivedAt: delivery.ReceivedAt.Time.UTC(),
+		receivedAt: receivedAt.Time.UTC(),
 	}
-	if delivery.SyncJobID.Valid {
-		value := delivery.SyncJobID.String()
+	if createdSyncJobID.Valid {
+		value := createdSyncJobID.String()
 		result.syncJobID = &value
 	}
 	return result, nil
@@ -155,6 +180,22 @@ func nullableUUIDFromValue(value *pgtype.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return *value
+}
+
+func (r *Repository) findInstallationUUID(ctx context.Context, tx pgx.Tx, installationID *int64) (pgtype.UUID, error) {
+	if installationID == nil || *installationID < 1 {
+		return pgtype.UUID{}, nil
+	}
+
+	var id pgtype.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM github_installations WHERE installation_id = $1`, *installationID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, nil
+		}
+		return pgtype.UUID{}, fmt.Errorf("find github installation uuid: %w", err)
+	}
+	return id, nil
 }
 
 func textValue(value string) pgtype.Text {

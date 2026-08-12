@@ -20,7 +20,10 @@ type HandleResult struct {
 }
 
 type payloadEnvelope struct {
-	Action     string `json:"action"`
+	Action       string `json:"action"`
+	Installation struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
 	Repository struct {
 		ID       int64  `json:"id"`
 		FullName string `json:"full_name"`

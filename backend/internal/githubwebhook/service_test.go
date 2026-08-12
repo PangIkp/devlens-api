@@ -12,15 +12,23 @@ import (
 
 type stubStore struct {
 	findRepositoryByGithubIDFn func(context.Context, int64) (*repositoryMatch, error)
-	enqueueWebhookSyncFn       func(context.Context, *string, string, string, *string, []byte, bool) (enqueueResult, error)
+	enqueueWebhookSyncFn       func(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error)
 }
 
 func (s stubStore) FindRepositoryByGithubID(ctx context.Context, githubID int64) (*repositoryMatch, error) {
 	return s.findRepositoryByGithubIDFn(ctx, githubID)
 }
 
-func (s stubStore) EnqueueWebhookSync(ctx context.Context, repositoryID *string, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
-	return s.enqueueWebhookSyncFn(ctx, repositoryID, deliveryID, eventType, action, payload, enqueueJob)
+func (s stubStore) EnqueueWebhookSync(ctx context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+	return s.enqueueWebhookSyncFn(ctx, repositoryID, installationID, deliveryID, eventType, action, payload, enqueueJob)
+}
+
+type stubInstallationHandler struct {
+	handleFn func(context.Context, string, int64, string) error
+}
+
+func (s stubInstallationHandler) HandleInstallationEvent(ctx context.Context, eventType string, installationID int64, action string) error {
+	return s.handleFn(ctx, eventType, installationID, action)
 }
 
 func TestHandleEnqueuesSupportedEvent(t *testing.T) {
@@ -34,16 +42,19 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 			}
 			return &repositoryMatch{ID: "repo-1"}, nil
 		},
-		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 			if repositoryID == nil || *repositoryID != "repo-1" {
 				t.Fatalf("unexpected repository id %v", repositoryID)
+			}
+			if installationID != nil {
+				t.Fatalf("did not expect installation id %v", installationID)
 			}
 			if deliveryID != "delivery-1" || eventType != "pull_request" || action == nil || *action != "opened" || !enqueueJob {
 				t.Fatalf("unexpected enqueue args")
 			}
 			return enqueueResult{deliveryID: deliveryID, syncJobID: stringPtr("job-1"), receivedAt: now}, nil
 		},
-	}, "top-secret")
+	}, "top-secret", nil)
 
 	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -65,10 +76,10 @@ func TestHandleTreatsDuplicateAsIdempotent(t *testing.T) {
 
 	service := NewService(stubStore{
 		findRepositoryByGithubIDFn: func(context.Context, int64) (*repositoryMatch, error) { return &repositoryMatch{ID: "repo-1"}, nil },
-		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 			return enqueueResult{deliveryID: deliveryID, duplicate: true, receivedAt: time.Now().UTC()}, nil
 		},
-	}, "top-secret")
+	}, "top-secret", nil)
 
 	body := []byte(`{"repository":{"id":42}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -88,17 +99,29 @@ func TestHandleTreatsDuplicateAsIdempotent(t *testing.T) {
 func TestHandleUnsupportedEventStoresWithoutEnqueue(t *testing.T) {
 	t.Parallel()
 
+	var handled bool
 	service := NewService(stubStore{
 		findRepositoryByGithubIDFn: func(context.Context, int64) (*repositoryMatch, error) { return &repositoryMatch{ID: "repo-1"}, nil },
-		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 			if enqueueJob {
 				t.Fatal("enqueueJob should be false")
 			}
+			if installationID == nil || *installationID != 99 {
+				t.Fatalf("expected installation id 99, got %v", installationID)
+			}
 			return enqueueResult{deliveryID: deliveryID, receivedAt: time.Now().UTC()}, nil
 		},
-	}, "top-secret")
+	}, "top-secret", stubInstallationHandler{
+		handleFn: func(_ context.Context, eventType string, installationID int64, action string) error {
+			handled = true
+			if eventType != "installation" || installationID != 99 || action != "created" {
+				t.Fatalf("unexpected installation event args")
+			}
+			return nil
+		},
+	})
 
-	body := []byte(`{"repository":{"id":42}}`)
+	body := []byte(`{"action":"created","installation":{"id":99},"repository":{"id":42}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
 		DeliveryID: "delivery-2",
 		EventType:  "installation",
@@ -111,6 +134,9 @@ func TestHandleUnsupportedEventStoresWithoutEnqueue(t *testing.T) {
 	if result.Enqueued {
 		t.Fatalf("expected not enqueued %+v", result)
 	}
+	if !handled {
+		t.Fatal("expected installation handler to be called")
+	}
 }
 
 func TestHandleRejectsInvalidSignature(t *testing.T) {
@@ -118,11 +144,11 @@ func TestHandleRejectsInvalidSignature(t *testing.T) {
 
 	service := NewService(stubStore{
 		findRepositoryByGithubIDFn: func(context.Context, int64) (*repositoryMatch, error) { return nil, nil },
-		enqueueWebhookSyncFn: func(context.Context, *string, string, string, *string, []byte, bool) (enqueueResult, error) {
+		enqueueWebhookSyncFn: func(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error) {
 			t.Fatal("enqueue should not be called")
 			return enqueueResult{}, nil
 		},
-	}, "top-secret")
+	}, "top-secret", nil)
 
 	_, err := service.Handle(context.Background(), HandleRequest{
 		DeliveryID: "delivery-3",

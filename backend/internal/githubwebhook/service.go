@@ -13,19 +13,25 @@ import (
 
 type store interface {
 	FindRepositoryByGithubID(context.Context, int64) (*repositoryMatch, error)
-	EnqueueWebhookSync(context.Context, *string, string, string, *string, []byte, bool) (enqueueResult, error)
+	EnqueueWebhookSync(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error)
+}
+
+type installationEventHandler interface {
+	HandleInstallationEvent(context.Context, string, int64, string) error
 }
 
 type Service struct {
 	store         store
 	webhookSecret string
+	installations installationEventHandler
 	now           func() time.Time
 }
 
-func NewService(store store, webhookSecret string) *Service {
+func NewService(store store, webhookSecret string, installations installationEventHandler) *Service {
 	return &Service{
 		store:         store,
 		webhookSecret: webhookSecret,
+		installations: installations,
 		now:           time.Now,
 	}
 }
@@ -59,9 +65,16 @@ func (s *Service) Handle(ctx context.Context, req HandleRequest) (HandleResult, 
 
 	enqueueJob := isSupportedEvent(req.EventType) && repositoryID != nil
 	action := optionalString(payload.Action)
-	result, err := s.store.EnqueueWebhookSync(ctx, repositoryID, req.DeliveryID, req.EventType, action, req.Body, enqueueJob)
+	installationID := optionalInt64(payload.Installation.ID)
+	result, err := s.store.EnqueueWebhookSync(ctx, repositoryID, installationID, req.DeliveryID, req.EventType, action, req.Body, enqueueJob)
 	if err != nil {
 		return HandleResult{}, err
+	}
+
+	if !result.duplicate && isInstallationEvent(req.EventType) && installationID != nil && s.installations != nil {
+		if err := s.installations.HandleInstallationEvent(ctx, req.EventType, *installationID, payload.Action); err != nil {
+			return HandleResult{}, err
+		}
 	}
 
 	return HandleResult{
@@ -114,10 +127,27 @@ func isSupportedEvent(eventType string) bool {
 	}
 }
 
+func isInstallationEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "installation", "installation_repositories":
+		return true
+	default:
+		return false
+	}
+}
+
 func optionalString(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil
 	}
 	return &trimmed
+}
+
+func optionalInt64(value int64) *int64 {
+	if value < 1 {
+		return nil
+	}
+	copy := value
+	return &copy
 }

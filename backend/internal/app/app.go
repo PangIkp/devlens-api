@@ -12,7 +12,9 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 	"github.com/PangIkp/devlens/backend/internal/config"
+	"github.com/PangIkp/devlens/backend/internal/githubapp"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
+	"github.com/PangIkp/devlens/backend/internal/githubconnection"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
@@ -69,7 +71,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
 	metricsService := metrics.NewService(postgresDB, clickhouseDB)
 	metricsHandler := httpapi.NewMetricsHandler(metricsService)
-	githubClient, err := githubclient.New(githubclient.Config{
+	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
 		UserAgent:      cfg.GitHub.UserAgent,
 		HTTPTimeout:    cfg.GitHub.HTTPTimeout,
@@ -80,12 +82,20 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize github client: %w", err)
 	}
+	githubAppClient, err := githubapp.New(cfg.GitHub)
+	if err != nil {
+		return nil, fmt.Errorf("initialize github app client: %w", err)
+	}
+	githubConnectionRepository := githubconnection.NewRepository(postgresDB)
+	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
-	syncJobService := syncjob.NewService(syncJobRepository, githubClient)
+	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService)
 	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval)
+	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
+	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService)
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
-	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret)
+	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
 
 	var metricsBusClient *metricsbus.Client
@@ -110,6 +120,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		ClickHouse:          clickhouseHealthChecker,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
+		GitHubConnections:   githubConnectionHandler,
 		Repositories:        repositoryHandler,
 		Metrics:             metricsHandler,
 		SyncJobs:            syncJobHandler,
