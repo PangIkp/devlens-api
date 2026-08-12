@@ -19,8 +19,10 @@ servers:
 
 tags:
   - name: Health
+  - name: Users
   - name: Organizations
   - name: GitHub Connections
+  - name: Pull Requests
   - name: Repositories
   - name: Sync Jobs
   - name: GitHub Webhooks
@@ -35,6 +37,27 @@ security:
   - bearerAuth: []
 
 paths:
+  /me:
+    get:
+      tags:
+        - Users
+      summary: Get current user profile
+      description: Authentication is deferred in the current milestone, so `userId` is provided as a query parameter.
+      operationId: getMe
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /health:
     get:
       tags:
@@ -485,6 +508,26 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /pull-requests/{pullRequestId}:
+    get:
+      tags:
+        - Pull Requests
+      summary: Get pull request detail
+      operationId: getPullRequest
+      parameters:
+        - $ref: "#/components/parameters/PullRequestId"
+      responses:
+        "200":
+          description: Pull request detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequestResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "400":
           $ref: "#/components/responses/ValidationError"
     patch:
@@ -780,6 +823,34 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
+  /repositories/{repositoryId}/metrics:
+    get:
+      tags:
+        - Dashboard
+      summary: Get consolidated repository metrics
+      operationId: getRepositoryMetrics
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/Environment"
+      responses:
+        "200":
+          description: Consolidated repository metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /repositories/{repositoryId}/metrics/pull-requests:
     get:
       tags:
@@ -1061,6 +1132,22 @@ components:
     RepositoryId:
       name: repositoryId
       in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PullRequestId:
+      name: pullRequestId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    UserId:
+      name: userId
+      in: query
       required: true
       schema:
         type: string
@@ -1770,6 +1857,175 @@ components:
         pagination:
           $ref: "#/components/schemas/PaginationMeta"
 
+    UserProfile:
+      type: object
+      required:
+        - id
+        - email
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        avatarUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    MeResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/UserProfile"
+
+    PullRequestReview:
+      type: object
+      required:
+        - id
+        - githubReviewId
+        - reviewer
+        - state
+      properties:
+        id:
+          type: string
+          format: uuid
+        githubReviewId:
+          type: integer
+          format: int64
+        reviewer:
+          type: string
+        state:
+          type: string
+        reviewRequestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        firstReviewAt:
+          type: string
+          format: date-time
+          nullable: true
+        reviewSubmittedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    PullRequestFileChange:
+      type: object
+      required:
+        - id
+        - filePath
+        - additions
+        - deletions
+        - commitCount
+      properties:
+        id:
+          type: string
+          format: uuid
+        filePath:
+          type: string
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        commitCount:
+          type: integer
+
+    PullRequestRepositoryRef:
+      type: object
+      required:
+        - id
+        - fullName
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+
+    PullRequestDetail:
+      type: object
+      required:
+        - id
+        - repository
+        - githubPrId
+        - number
+        - title
+        - author
+        - state
+        - createdAt
+        - additions
+        - deletions
+        - filesChanged
+        - isDraft
+        - reviews
+        - fileChanges
+      properties:
+        id:
+          type: string
+          format: uuid
+        repository:
+          $ref: "#/components/schemas/PullRequestRepositoryRef"
+        githubPrId:
+          type: integer
+          format: int64
+        number:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+        state:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        mergedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        filesChanged:
+          type: integer
+        isDraft:
+          type: boolean
+        reviews:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestReview"
+        fileChanges:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestFileChange"
+
+    PullRequestResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/PullRequestDetail"
+
     CreateSyncRequest:
       type: object
       properties:
@@ -2093,6 +2349,51 @@ components:
             $ref: "#/components/schemas/HotspotFile"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
+
+    RepositoryMetricsPayload:
+      type: object
+      required:
+        - repositoryId
+        - from
+        - to
+        - interval
+        - summary
+        - pullRequests
+        - reviews
+        - deployments
+        - hotspots
+      properties:
+        repositoryId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        interval:
+          type: string
+        summary:
+          $ref: "#/components/schemas/DashboardSummary"
+        pullRequests:
+          $ref: "#/components/schemas/PullRequestMetrics"
+        reviews:
+          $ref: "#/components/schemas/ReviewMetrics"
+        deployments:
+          $ref: "#/components/schemas/DeploymentMetrics"
+        hotspots:
+          type: array
+          items:
+            $ref: "#/components/schemas/HotspotFile"
+
+    RepositoryMetricsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/RepositoryMetricsPayload"
 
     ReviewInsightRequest:
       type: object

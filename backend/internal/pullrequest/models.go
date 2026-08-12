@@ -1,0 +1,62 @@
+package pullrequest
+
+import "time"
+
+type Review struct {
+	ID                string     `json:"id"`
+	GithubReviewID    int64      `json:"githubReviewId"`
+	Reviewer          string     `json:"reviewer"`
+	State             string     `json:"state"`
+	ReviewRequestedAt *time.Time `json:"reviewRequestedAt,omitempty"`
+	FirstReviewAt     *time.Time `json:"firstReviewAt,omitempty"`
+	ReviewSubmittedAt *time.Time `json:"reviewSubmittedAt,omitempty"`
+}
+
+type FileChange struct {
+	ID          string `json:"id"`
+	FilePath    string `json:"filePath"`
+	Additions   int    `json:"additions"`
+	Deletions   int    `json:"deletions"`
+	CommitCount int    `json:"commitCount"`
+}
+
+type RepositoryRef struct {
+	ID       string `json:"id"`
+	FullName string `json:"fullName"`
+}
+
+type Response struct {
+	ID           string        `json:"id"`
+	Repository   RepositoryRef `json:"repository"`
+	GithubPRID   int64         `json:"githubPrId"`
+	Number       int           `json:"number"`
+	Title        string        `json:"title"`
+	Author       string        `json:"author"`
+	State        string        `json:"state"`
+	CreatedAt    time.Time     `json:"createdAt"`
+	MergedAt     *time.Time    `json:"mergedAt,omitempty"`
+	ClosedAt     *time.Time    `json:"closedAt,omitempty"`
+	Additions    int           `json:"additions"`
+	Deletions    int           `json:"deletions"`
+	FilesChanged int           `json:"filesChanged"`
+	IsDraft      bool          `json:"isDraft"`
+	Reviews      []Review      `json:"reviews"`
+	FileChanges  []FileChange  `json:"fileChanges"`
+}
+
+type ValidationIssue struct {
+	Field   string
+	Message string
+}
+
+type ValidationError struct {
+	Message string
+	Details []ValidationIssue
+}
+
+func (e *ValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}

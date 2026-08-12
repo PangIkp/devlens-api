@@ -239,6 +239,56 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 	return HotspotResult{Items: files[start:end], TotalItems: totalItems}, nil
 }
 
+func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string, params DeploymentQueryParams) (RepositoryMetrics, error) {
+	summary, err := s.GetDashboardSummary(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	pullRequests, err := s.GetPullRequestMetrics(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	reviews, err := s.GetReviewMetrics(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	deployments, err := s.GetDeploymentMetrics(ctx, repositoryID, params)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	hotspots, err := s.GetHotspots(ctx, repositoryID, HotspotQueryParams{
+		From:      params.From,
+		To:        params.To,
+		Page:      1,
+		PageSize:  10,
+		SortOrder: "desc",
+	})
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	interval := params.Interval
+	if strings.TrimSpace(interval) == "" {
+		interval = IntervalDay
+	}
+
+	return RepositoryMetrics{
+		RepositoryID: repositoryID,
+		From:         params.From.UTC().Format("2006-01-02"),
+		To:           params.To.UTC().Format("2006-01-02"),
+		Interval:     interval,
+		Summary:      summary,
+		PullRequests: pullRequests,
+		Reviews:      reviews,
+		Deployments:  deployments,
+		Hotspots:     hotspots.Items,
+	}, nil
+}
+
 func (s *Service) ensureReady() error {
 	if s.pg == nil {
 		return fmt.Errorf("metrics postgres dependency is not configured")

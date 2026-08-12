@@ -17,6 +17,7 @@ type MetricsService interface {
 	GetReviewMetrics(context.Context, string, metrics.QueryParams) (metrics.ReviewMetrics, error)
 	GetDeploymentMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.DeploymentMetrics, error)
 	GetHotspots(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error)
+	GetRepositoryMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error)
 }
 
 type MetricsHandler struct {
@@ -29,6 +30,7 @@ func NewMetricsHandler(service MetricsService) *MetricsHandler {
 
 func (h *MetricsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/repositories/{repositoryId}/dashboard/summary", h.getDashboardSummary)
+	r.Get("/repositories/{repositoryId}/metrics", h.getRepositoryMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
@@ -57,6 +59,29 @@ func (h *MetricsHandler) getPullRequestMetrics(w http.ResponseWriter, r *http.Re
 	}
 
 	response, err := h.service.GetPullRequestMetrics(r.Context(), repositoryID, params)
+	if err != nil {
+		writeMetricsError(w, r, err)
+		return
+	}
+
+	WriteData(w, http.StatusOK, response)
+}
+
+func (h *MetricsHandler) getRepositoryMetrics(w http.ResponseWriter, r *http.Request) {
+	repositoryID, params, ok := h.parseRepositoryMetricsQuery(w, r, true)
+	if !ok {
+		return
+	}
+
+	var environment *string
+	if value := strings.TrimSpace(r.URL.Query().Get("environment")); value != "" {
+		environment = &value
+	}
+
+	response, err := h.service.GetRepositoryMetrics(r.Context(), repositoryID, metrics.DeploymentQueryParams{
+		QueryParams: params,
+		Environment: environment,
+	})
 	if err != nil {
 		writeMetricsError(w, r, err)
 		return

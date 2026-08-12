@@ -83,6 +83,18 @@ type HotspotResult struct {
 	TotalItems int
 }
 
+type RepositoryMetrics struct {
+	RepositoryID string             `json:"repositoryId"`
+	From         string             `json:"from"`
+	To           string             `json:"to"`
+	Interval     string             `json:"interval"`
+	Summary      DashboardSummary   `json:"summary"`
+	PullRequests PullRequestMetrics `json:"pullRequests"`
+	Reviews      ReviewMetrics      `json:"reviews"`
+	Deployments  DeploymentMetrics  `json:"deployments"`
+	Hotspots     []HotspotFile      `json:"hotspots"`
+}
+
 type ValidationIssue struct {
 	Field   string
 	Message string

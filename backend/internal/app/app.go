@@ -23,8 +23,10 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
+	"github.com/PangIkp/devlens/backend/internal/pullrequest"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
+	"github.com/PangIkp/devlens/backend/internal/userprofile"
 )
 
 type App struct {
@@ -65,9 +67,15 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	organizationRepository := organization.NewRepository(postgresDB)
 	organizationService := organization.NewService(organizationRepository)
 	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
+	userRepository := userprofile.NewRepository(postgresDB)
+	userService := userprofile.NewService(userRepository)
+	meHandler := httpapi.NewMeHandler(userService)
 	organizationMemberRepository := organizationmember.NewRepository(postgresDB)
 	organizationMemberService := organizationmember.NewService(organizationMemberRepository)
 	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService)
+	pullRequestRepository := pullrequest.NewRepository(postgresDB)
+	pullRequestService := pullrequest.NewService(pullRequestRepository)
+	pullRequestHandler := httpapi.NewPullRequestHandler(pullRequestService)
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
@@ -124,9 +132,11 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
+		Me:                  meHandler,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,
 		GitHubConnections:   githubConnectionHandler,
+		PullRequests:        pullRequestHandler,
 		Repositories:        repositoryHandler,
 		Metrics:             metricsHandler,
 		Insights:            insightHandler,

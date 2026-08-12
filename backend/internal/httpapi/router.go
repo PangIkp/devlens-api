@@ -23,7 +23,9 @@ type Dependencies struct {
 	ClickHouse          ClickHouseHealthChecker
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
+	Me                  *MeHandler
 	GitHubConnections   *GitHubConnectionHandler
+	PullRequests        *PullRequestHandler
 	Repositories        *RepositoryHandler
 	Metrics             *MetricsHandler
 	Insights            *InsightHandler
@@ -55,6 +57,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
 		r.Get("/readiness", NewReadinessHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
+		if deps.Me != nil {
+			deps.Me.RegisterRoutes(r)
+		}
 		if deps.Organizations != nil {
 			deps.Organizations.RegisterRoutes(r)
 		}
@@ -66,6 +71,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.Repositories != nil {
 			deps.Repositories.RegisterRoutes(r)
+		}
+		if deps.PullRequests != nil {
+			deps.PullRequests.RegisterRoutes(r)
 		}
 		if deps.Metrics != nil {
 			deps.Metrics.RegisterRoutes(r)
