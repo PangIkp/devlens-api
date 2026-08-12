@@ -69,3 +69,7 @@ func (db *DB) Queries() *sqlcgen.Queries {
 func (db *DB) Begin(ctx context.Context) (pgx.Tx, error) {
 	return db.pool.Begin(ctx)
 }
+
+func (db *DB) Pool() *pgxpool.Pool {
+	return db.pool
+}

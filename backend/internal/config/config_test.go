@@ -13,6 +13,9 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("GITHUB_MAX_RETRIES", "4")
 	t.Setenv("GITHUB_INITIAL_BACKOFF", "250ms")
 	t.Setenv("GITHUB_MAX_BACKOFF", "3s")
+	t.Setenv("GITHUB_APP_ID", "12345")
+	t.Setenv("GITHUB_APP_INSTALL_URL", "https://github.com/apps/devlens/installations/new")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----")
 
 	cfg, err := Load()
 	if err != nil {
@@ -39,6 +42,15 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	}
 	if cfg.GitHub.MaxBackoff != 3*time.Second {
 		t.Fatalf("unexpected github max backoff %s", cfg.GitHub.MaxBackoff)
+	}
+	if cfg.GitHub.App.AppID != 12345 {
+		t.Fatalf("unexpected github app id %d", cfg.GitHub.App.AppID)
+	}
+	if cfg.GitHub.App.InstallURL != "https://github.com/apps/devlens/installations/new" {
+		t.Fatalf("unexpected github app install url %q", cfg.GitHub.App.InstallURL)
+	}
+	if cfg.GitHub.App.PrivateKey == "" {
+		t.Fatal("expected github app private key to be loaded")
 	}
 }
 

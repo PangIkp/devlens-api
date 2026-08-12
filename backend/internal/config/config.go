@@ -64,6 +64,13 @@ type GitHubConfig struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	App            GitHubAppConfig
+}
+
+type GitHubAppConfig struct {
+	AppID      int64
+	InstallURL string
+	PrivateKey string
 }
 
 type NATSConfig struct {
@@ -205,6 +212,11 @@ func Load() (Config, error) {
 			MaxRetries:     githubMaxRetries,
 			InitialBackoff: githubInitialBackoff,
 			MaxBackoff:     githubMaxBackoff,
+			App: GitHubAppConfig{
+				AppID:      getInt64Value("GITHUB_APP_ID"),
+				InstallURL: strings.TrimSpace(getEnv("GITHUB_APP_INSTALL_URL", "")),
+				PrivateKey: getEnv("GITHUB_APP_PRIVATE_KEY", ""),
+			},
 		},
 		NATS: NATSConfig{
 			URL: getEnv("NATS_URL", "nats://localhost:4222"),
@@ -260,6 +272,16 @@ func Load() (Config, error) {
 
 	if cfg.GitHub.InitialBackoff > cfg.GitHub.MaxBackoff {
 		return Config{}, fmt.Errorf("GITHUB_INITIAL_BACKOFF must be less than or equal to GITHUB_MAX_BACKOFF")
+	}
+
+	if cfg.GitHub.App.AppID < 0 {
+		return Config{}, fmt.Errorf("GITHUB_APP_ID must be greater than or equal to 0")
+	}
+
+	if cfg.GitHub.App.InstallURL != "" {
+		if _, err := url.ParseRequestURI(cfg.GitHub.App.InstallURL); err != nil {
+			return Config{}, fmt.Errorf("GITHUB_APP_INSTALL_URL must be a valid URL: %w", err)
+		}
 	}
 
 	if cfg.Sync.WorkerPollInterval <= 0 {
@@ -343,6 +365,20 @@ func getInt(key string, fallback int) (int, error) {
 	}
 
 	return value, nil
+}
+
+func getInt64Value(key string) int64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return -1
+	}
+
+	return value
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

@@ -23,6 +23,7 @@ type Dependencies struct {
 	ClickHouse          ClickHouseHealthChecker
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
+	GitHubConnections   *GitHubConnectionHandler
 	Repositories        *RepositoryHandler
 	Metrics             *MetricsHandler
 	SyncJobs            *SyncJobHandler
@@ -57,6 +58,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.OrganizationMembers != nil {
 			deps.OrganizationMembers.RegisterRoutes(r)
+		}
+		if deps.GitHubConnections != nil {
+			deps.GitHubConnections.RegisterRoutes(r)
 		}
 		if deps.Repositories != nil {
 			deps.Repositories.RegisterRoutes(r)
