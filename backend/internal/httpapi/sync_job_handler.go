@@ -14,6 +14,8 @@ type SyncJobService interface {
 	Create(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
 	GetByID(context.Context, string) (syncjob.SyncJobResponse, error)
 	ListByRepository(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
+	Retry(context.Context, string) (syncjob.SyncJobResponse, error)
+	Cancel(context.Context, string) (syncjob.SyncJobResponse, error)
 }
 
 type SyncJobHandler struct {
@@ -28,6 +30,8 @@ func (h *SyncJobHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/repositories/{repositoryId}/sync", h.create)
 	r.Get("/repositories/{repositoryId}/sync-jobs", h.list)
 	r.Get("/sync-jobs/{syncJobId}", h.get)
+	r.Post("/sync-jobs/{syncJobId}/retry", h.retry)
+	r.Post("/sync-jobs/{syncJobId}/cancel", h.cancel)
 }
 
 func (h *SyncJobHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +48,41 @@ func (h *SyncJobHandler) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 
 	item, svcErr := h.service.Create(r.Context(), repositoryID, req)
+	if svcErr != nil {
+		writeSyncJobError(w, r, svcErr)
+		return
+	}
+
+	WriteData(w, http.StatusAccepted, item)
+}
+
+func (h *SyncJobHandler) retry(w http.ResponseWriter, r *http.Request) {
+	syncJobID, err := validateUUIDPathParam("syncJobId", chi.URLParam(r, "syncJobId"))
+	if err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	item, svcErr := h.service.Retry(r.Context(), syncJobID)
+	if svcErr != nil {
+		writeSyncJobError(w, r, svcErr)
+		return
+	}
+
+	WriteData(w, http.StatusAccepted, item)
+}
+
+func (h *SyncJobHandler) cancel(w http.ResponseWriter, r *http.Request) {
+	syncJobID, err := validateUUIDPathParam("syncJobId", chi.URLParam(r, "syncJobId"))
+	if err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	item, svcErr := h.service.Cancel(r.Context(), syncJobID)
 	if svcErr != nil {
 		writeSyncJobError(w, r, svcErr)
 		return
@@ -112,6 +149,10 @@ func writeSyncJobError(w http.ResponseWriter, r *http.Request, err error) {
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Sync job not found"))
 	case errors.Is(err, syncjob.ErrSyncJobConflict):
 		WriteError(w, r, http.StatusConflict, NewConflictError("A sync job is already running for this repository"))
+	case errors.Is(err, syncjob.ErrSyncJobRetryState):
+		WriteError(w, r, http.StatusConflict, NewConflictError("Only failed sync jobs can be retried"))
+	case errors.Is(err, syncjob.ErrSyncJobCancelState):
+		WriteError(w, r, http.StatusConflict, NewConflictError("Only pending or running sync jobs can be canceled"))
 	default:
 		var validationErr *syncjob.ValidationError
 		if errors.As(err, &validationErr) {

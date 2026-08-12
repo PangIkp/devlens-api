@@ -2,7 +2,9 @@ package syncjob
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,8 @@ type store interface {
 	Create(context.Context, createParams) (SyncJobResponse, error)
 	GetByID(context.Context, string) (SyncJobResponse, error)
 	ListByRepository(context.Context, ListParams) (ListResult, error)
+	Retry(context.Context, string, time.Time) (SyncJobResponse, error)
+	Cancel(context.Context, string, time.Time) (SyncJobResponse, error)
 	GetRepositoryTarget(context.Context, string) (repositoryTarget, error)
 	MarkRunning(context.Context, string, int, time.Time) (SyncJobResponse, error)
 	UpdateProgress(context.Context, string, int, time.Time) (SyncJobResponse, error)
@@ -22,6 +26,8 @@ type store interface {
 	SyncRepositoryMetadata(context.Context, string, repositoryMetadata, time.Time) error
 	UpsertPullRequestBundle(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	Complete(context.Context, string, string, time.Time) (SyncJobResponse, error)
+	GetCheckpoint(context.Context, string, string, string) (*checkpointRecord, error)
+	UpsertCheckpoint(context.Context, string, string, string, string, *string, string, *time.Time) error
 }
 
 type Service struct {
@@ -30,6 +36,8 @@ type Service struct {
 	publisher    completionPublisher
 	now          func() time.Time
 }
+
+var errSyncCanceled = errors.New("sync job canceled")
 
 type SyncCompletedEvent struct {
 	RepositoryID string    `json:"repositoryId"`
@@ -60,6 +68,17 @@ func (s *Service) Create(ctx context.Context, repositoryID string, req CreateSyn
 		return SyncJobResponse{}, err
 	}
 
+	return s.createAndRun(ctx, repositoryID, options)
+}
+
+func (s *Service) Enqueue(ctx context.Context, repositoryID string, req CreateSyncRequest) (SyncJobResponse, error) {
+	options, err := validateCreateRequest(req)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	_ = options
+
 	if err := s.store.EnsureRepositoryExists(ctx, repositoryID); err != nil {
 		return SyncJobResponse{}, err
 	}
@@ -72,8 +91,35 @@ func (s *Service) Create(ctx context.Context, repositoryID string, req CreateSyn
 		return SyncJobResponse{}, ErrSyncJobConflict
 	}
 
-	job, err := s.store.Create(ctx, createParams{RepositoryID: repositoryID})
+	job, err := s.store.Create(ctx, createParams{RepositoryID: repositoryID, IdempotencyKey: stringPtr(req.IdempotencyKey)})
 	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if err := s.persistSyncOptions(ctx, job.ID, repositoryID, options); err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	return job, nil
+}
+
+func (s *Service) createAndRun(ctx context.Context, repositoryID string, options syncOptions) (SyncJobResponse, error) {
+	if err := s.store.EnsureRepositoryExists(ctx, repositoryID); err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	active, err := s.store.HasActiveJob(ctx, repositoryID)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if active {
+		return SyncJobResponse{}, ErrSyncJobConflict
+	}
+
+	job, err := s.store.Create(ctx, createParams{RepositoryID: repositoryID, IdempotencyKey: stringPtr(reqIdempotencyKey(options))})
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if err := s.persistSyncOptions(ctx, job.ID, repositoryID, options); err != nil {
 		return SyncJobResponse{}, err
 	}
 
@@ -88,7 +134,42 @@ func (s *Service) ProcessPending(ctx context.Context, id string) (SyncJobRespons
 	if job.Status != StatusPending {
 		return job, nil
 	}
-	return s.run(ctx, job, syncOptions{mode: ModeIncremental})
+	options, err := s.loadSyncOptions(ctx, job.ID)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	return s.run(ctx, job, options)
+}
+
+func (s *Service) Retry(ctx context.Context, id string) (SyncJobResponse, error) {
+	job, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if job.Status != StatusFailed {
+		return SyncJobResponse{}, ErrSyncJobRetryState
+	}
+
+	active, err := s.store.HasActiveJob(ctx, job.RepositoryID)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if active {
+		return SyncJobResponse{}, ErrSyncJobConflict
+	}
+
+	return s.store.Retry(ctx, id, s.now().UTC())
+}
+
+func (s *Service) Cancel(ctx context.Context, id string) (SyncJobResponse, error) {
+	job, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if job.Status != StatusPending && job.Status != StatusRunning {
+		return SyncJobResponse{}, ErrSyncJobCancelState
+	}
+	return s.store.Cancel(ctx, id, s.now().UTC())
 }
 
 func (s *Service) GetByID(ctx context.Context, id string) (SyncJobResponse, error) {
@@ -109,8 +190,9 @@ func (s *Service) ListByRepository(ctx context.Context, params ListParams) (List
 }
 
 type syncOptions struct {
-	mode string
-	from *time.Time
+	mode           string
+	from           *time.Time
+	idempotencyKey string
 }
 
 func validateCreateRequest(req CreateSyncRequest) (syncOptions, error) {
@@ -138,7 +220,7 @@ func validateCreateRequest(req CreateSyncRequest) (syncOptions, error) {
 		from = &utc
 	}
 
-	return syncOptions{mode: mode, from: from}, nil
+	return syncOptions{mode: mode, from: from, idempotencyKey: strings.TrimSpace(req.IdempotencyKey)}, nil
 }
 
 func validateListParams(params ListParams) error {
@@ -148,8 +230,9 @@ func validateListParams(params ListParams) error {
 		params.Status != StatusPending &&
 		params.Status != StatusRunning &&
 		params.Status != StatusCompleted &&
-		params.Status != StatusFailed {
-		issues = append(issues, ValidationIssue{Field: "status", Message: "must be one of pending, running, completed, failed"})
+		params.Status != StatusFailed &&
+		params.Status != StatusCanceled {
+		issues = append(issues, ValidationIssue{Field: "status", Message: "must be one of pending, running, completed, failed, canceled"})
 	}
 
 	if params.SortOrder != "" && params.SortOrder != "asc" && params.SortOrder != "desc" {
@@ -163,6 +246,10 @@ func validateListParams(params ListParams) error {
 }
 
 func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOptions) (SyncJobResponse, error) {
+	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		return s.canceledJobResult(ctx, job.ID, err)
+	}
+
 	startedAt := s.now().UTC()
 	job, err := s.store.MarkRunning(ctx, job.ID, 5, startedAt)
 	if err != nil {
@@ -181,6 +268,9 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 
 	cutoff := resolveSyncCutoff(target, options)
 
+	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		return s.canceledJobResult(ctx, job.ID, err)
+	}
 	repo, err := s.githubClient.GetRepository(ctx, owner, repoName)
 	if err != nil {
 		return s.failJob(ctx, job, fmt.Errorf("sync repository metadata: %w", err))
@@ -201,7 +291,10 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		return SyncJobResponse{}, err
 	}
 
-	pullRequests, err := s.syncPullRequests(ctx, job.RepositoryID, owner, repoName, cutoff)
+	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		return s.canceledJobResult(ctx, job.ID, err)
+	}
+	pullRequests, err := s.syncPullRequests(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff)
 	if err != nil {
 		return s.failJob(ctx, job, err)
 	}
@@ -215,7 +308,10 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		return SyncJobResponse{}, err
 	}
 
-	if _, err := s.syncCommits(ctx, owner, repoName, cutoff); err != nil {
+	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		return s.canceledJobResult(ctx, job.ID, err)
+	}
+	if _, err := s.syncCommits(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
 		return s.failJob(ctx, job, err)
 	}
 
@@ -243,11 +339,17 @@ func (s *Service) failJob(ctx context.Context, job SyncJobResponse, err error) (
 	return failedJob, nil
 }
 
-func (s *Service) syncPullRequests(ctx context.Context, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
+func (s *Service) syncPullRequests(ctx context.Context, jobID string, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
 	total := 0
-	page := 1
+	page, err := s.resumePage(ctx, jobID, "pull_requests", "page")
+	if err != nil {
+		return 0, err
+	}
 
 	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return 0, err
+		}
 		result, err := s.githubClient.ListPullRequests(ctx, owner, repoName, githubclient.ListOptions{
 			Page:    page,
 			PerPage: 100,
@@ -258,6 +360,9 @@ func (s *Service) syncPullRequests(ctx context.Context, repositoryID string, own
 		}
 
 		for _, pullRequest := range result.Items {
+			if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+				return 0, err
+			}
 			if !includePullRequest(pullRequest, cutoff) {
 				continue
 			}
@@ -267,7 +372,7 @@ func (s *Service) syncPullRequests(ctx context.Context, repositoryID string, own
 				return 0, fmt.Errorf("get pull request %d: %w", pullRequest.Number, err)
 			}
 
-			reviews, err := s.syncReviews(ctx, owner, repoName, pullRequest.Number, cutoff)
+			reviews, err := s.syncReviews(ctx, jobID, owner, repoName, pullRequest.Number, cutoff)
 			if err != nil {
 				return 0, err
 			}
@@ -280,17 +385,30 @@ func (s *Service) syncPullRequests(ctx context.Context, repositoryID string, own
 		}
 
 		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, repositoryID, "pull_requests", "page"); err != nil {
+				return 0, err
+			}
 			return total, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "pull_requests", "page", result.NextPage); err != nil {
+			return 0, err
 		}
 		page = result.NextPage
 	}
 }
 
-func (s *Service) syncReviews(ctx context.Context, owner string, repoName string, pullNumber int, cutoff *time.Time) ([]githubclient.Review, error) {
+func (s *Service) syncReviews(ctx context.Context, jobID string, owner string, repoName string, pullNumber int, cutoff *time.Time) ([]githubclient.Review, error) {
 	items := make([]githubclient.Review, 0)
-	page := 1
+	key := fmt.Sprintf("pull_%d", pullNumber)
+	page, err := s.resumePage(ctx, jobID, "reviews", key)
+	if err != nil {
+		return nil, err
+	}
 
 	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return nil, err
+		}
 		result, err := s.githubClient.ListReviews(ctx, owner, repoName, pullNumber, githubclient.ListOptions{
 			Page:    page,
 			PerPage: 100,
@@ -307,17 +425,29 @@ func (s *Service) syncReviews(ctx context.Context, owner string, repoName string
 		}
 
 		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, "", "reviews", key); err != nil {
+				return nil, err
+			}
 			return items, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, "", "reviews", key, result.NextPage); err != nil {
+			return nil, err
 		}
 		page = result.NextPage
 	}
 }
 
-func (s *Service) syncCommits(ctx context.Context, owner string, repoName string, cutoff *time.Time) (int, error) {
+func (s *Service) syncCommits(ctx context.Context, jobID string, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
 	total := 0
-	page := 1
+	page, err := s.resumePage(ctx, jobID, "commits", "page")
+	if err != nil {
+		return 0, err
+	}
 
 	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return 0, err
+		}
 		result, err := s.githubClient.ListCommits(ctx, owner, repoName, githubclient.ListOptions{
 			Page:    page,
 			PerPage: 100,
@@ -334,10 +464,111 @@ func (s *Service) syncCommits(ctx context.Context, owner string, repoName string
 		}
 
 		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, repositoryID, "commits", "page"); err != nil {
+				return 0, err
+			}
 			return total, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "commits", "page", result.NextPage); err != nil {
+			return 0, err
 		}
 		page = result.NextPage
 	}
+}
+
+func (s *Service) resumePage(ctx context.Context, jobID string, resourceType string, key string) (int, error) {
+	checkpoint, err := s.store.GetCheckpoint(ctx, jobID, resourceType, key)
+	if err != nil {
+		return 0, err
+	}
+	if checkpoint == nil || checkpoint.Value == nil || strings.TrimSpace(*checkpoint.Value) == "" {
+		return 1, nil
+	}
+
+	page, parseErr := strconv.Atoi(strings.TrimSpace(*checkpoint.Value))
+	if parseErr != nil || page < 1 {
+		return 1, nil
+	}
+	return page, nil
+}
+
+func (s *Service) storeProgressCheckpoint(ctx context.Context, jobID string, repositoryID string, resourceType string, key string, nextPage int) error {
+	value := strconv.Itoa(nextPage)
+	return s.store.UpsertCheckpoint(ctx, jobID, repositoryID, resourceType, key, &value, "running", timePtr(s.now().UTC()))
+}
+
+func (s *Service) completeCheckpoint(ctx context.Context, jobID string, repositoryID string, resourceType string, key string) error {
+	return s.store.UpsertCheckpoint(ctx, jobID, repositoryID, resourceType, key, nil, "completed", timePtr(s.now().UTC()))
+}
+
+func reqIdempotencyKey(options syncOptions) string {
+	return strings.TrimSpace(options.idempotencyKey)
+}
+
+func timePtr(value time.Time) *time.Time {
+	utc := value.UTC()
+	return &utc
+}
+
+func (s *Service) persistSyncOptions(ctx context.Context, jobID string, repositoryID string, options syncOptions) error {
+	mode := options.mode
+	if strings.TrimSpace(mode) == "" {
+		mode = ModeIncremental
+	}
+	if err := s.store.UpsertCheckpoint(ctx, jobID, repositoryID, "job", "mode", &mode, "pending", timePtr(s.now().UTC())); err != nil {
+		return err
+	}
+	if options.from != nil {
+		formatted := options.from.UTC().Format("2006-01-02")
+		if err := s.store.UpsertCheckpoint(ctx, jobID, repositoryID, "job", "from", &formatted, "pending", timePtr(s.now().UTC())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) loadSyncOptions(ctx context.Context, jobID string) (syncOptions, error) {
+	options := syncOptions{mode: ModeIncremental}
+
+	modeCheckpoint, err := s.store.GetCheckpoint(ctx, jobID, "job", "mode")
+	if err != nil {
+		return syncOptions{}, err
+	}
+	if modeCheckpoint != nil && modeCheckpoint.Value != nil && strings.TrimSpace(*modeCheckpoint.Value) != "" {
+		options.mode = strings.TrimSpace(*modeCheckpoint.Value)
+	}
+
+	fromCheckpoint, err := s.store.GetCheckpoint(ctx, jobID, "job", "from")
+	if err != nil {
+		return syncOptions{}, err
+	}
+	if fromCheckpoint != nil && fromCheckpoint.Value != nil && strings.TrimSpace(*fromCheckpoint.Value) != "" {
+		parsed, parseErr := time.Parse("2006-01-02", strings.TrimSpace(*fromCheckpoint.Value))
+		if parseErr == nil {
+			utc := parsed.UTC()
+			options.from = &utc
+		}
+	}
+
+	return options, nil
+}
+
+func (s *Service) ensureNotCanceled(ctx context.Context, jobID string) error {
+	job, err := s.store.GetByID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if job.Status == StatusCanceled {
+		return errSyncCanceled
+	}
+	return nil
+}
+
+func (s *Service) canceledJobResult(ctx context.Context, jobID string, err error) (SyncJobResponse, error) {
+	if errors.Is(err, errSyncCanceled) {
+		return s.store.GetByID(ctx, jobID)
+	}
+	return SyncJobResponse{}, err
 }
 
 func splitFullName(fullName string) (string, string, error) {

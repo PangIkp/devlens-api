@@ -7,14 +7,16 @@ const (
 	StatusRunning   = "running"
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
+	StatusCanceled  = "canceled"
 
 	ModeIncremental = "incremental"
 	ModeFull        = "full"
 )
 
 type CreateSyncRequest struct {
-	Mode string  `json:"mode"`
-	From *string `json:"from"`
+	Mode           string  `json:"mode"`
+	From           *string `json:"from"`
+	IdempotencyKey string  `json:"-"`
 }
 
 type ListParams struct {
@@ -44,8 +46,15 @@ type SyncJobResponse struct {
 }
 
 type createParams struct {
-	RepositoryID string
-	TriggeredBy  *string
+	RepositoryID   string
+	TriggeredBy    *string
+	IdempotencyKey *string
+}
+
+type checkpointRecord struct {
+	Value           *string
+	Status          string
+	LastProcessedAt *time.Time
 }
 
 type repositoryTarget struct {

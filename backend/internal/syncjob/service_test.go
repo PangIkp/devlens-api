@@ -15,6 +15,8 @@ type stubStore struct {
 	createFn                  func(context.Context, createParams) (SyncJobResponse, error)
 	getByIDFn                 func(context.Context, string) (SyncJobResponse, error)
 	listByRepositoryFn        func(context.Context, ListParams) (ListResult, error)
+	retryFn                   func(context.Context, string, time.Time) (SyncJobResponse, error)
+	cancelFn                  func(context.Context, string, time.Time) (SyncJobResponse, error)
 	getRepositoryTargetFn     func(context.Context, string) (repositoryTarget, error)
 	markRunningFn             func(context.Context, string, int, time.Time) (SyncJobResponse, error)
 	updateProgressFn          func(context.Context, string, int, time.Time) (SyncJobResponse, error)
@@ -22,54 +24,120 @@ type stubStore struct {
 	syncRepositoryMetadataFn  func(context.Context, string, repositoryMetadata, time.Time) error
 	upsertPullRequestBundleFn func(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	completeFn                func(context.Context, string, string, time.Time) (SyncJobResponse, error)
+	getCheckpointFn           func(context.Context, string, string, string) (*checkpointRecord, error)
+	upsertCheckpointFn        func(context.Context, string, string, string, string, *string, string, *time.Time) error
 }
 
 func (s stubStore) EnsureRepositoryExists(ctx context.Context, repositoryID string) error {
+	if s.ensureRepositoryExistsFn == nil {
+		return nil
+	}
 	return s.ensureRepositoryExistsFn(ctx, repositoryID)
 }
 
 func (s stubStore) HasActiveJob(ctx context.Context, repositoryID string) (bool, error) {
+	if s.hasActiveJobFn == nil {
+		return false, nil
+	}
 	return s.hasActiveJobFn(ctx, repositoryID)
 }
 
 func (s stubStore) Create(ctx context.Context, params createParams) (SyncJobResponse, error) {
+	if s.createFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.createFn(ctx, params)
 }
 
 func (s stubStore) GetByID(ctx context.Context, id string) (SyncJobResponse, error) {
+	if s.getByIDFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.getByIDFn(ctx, id)
 }
 
 func (s stubStore) ListByRepository(ctx context.Context, params ListParams) (ListResult, error) {
+	if s.listByRepositoryFn == nil {
+		return ListResult{}, nil
+	}
 	return s.listByRepositoryFn(ctx, params)
 }
 
+func (s stubStore) Retry(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	if s.retryFn == nil {
+		return SyncJobResponse{}, nil
+	}
+	return s.retryFn(ctx, id, at)
+}
+
+func (s stubStore) Cancel(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	if s.cancelFn == nil {
+		return SyncJobResponse{}, nil
+	}
+	return s.cancelFn(ctx, id, at)
+}
+
 func (s stubStore) GetRepositoryTarget(ctx context.Context, repositoryID string) (repositoryTarget, error) {
+	if s.getRepositoryTargetFn == nil {
+		return repositoryTarget{}, nil
+	}
 	return s.getRepositoryTargetFn(ctx, repositoryID)
 }
 
 func (s stubStore) MarkRunning(ctx context.Context, id string, progress int, at time.Time) (SyncJobResponse, error) {
+	if s.markRunningFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.markRunningFn(ctx, id, progress, at)
 }
 
 func (s stubStore) UpdateProgress(ctx context.Context, id string, progress int, at time.Time) (SyncJobResponse, error) {
+	if s.updateProgressFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.updateProgressFn(ctx, id, progress, at)
 }
 
 func (s stubStore) MarkFailed(ctx context.Context, id string, message string, at time.Time) (SyncJobResponse, error) {
+	if s.markFailedFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.markFailedFn(ctx, id, message, at)
 }
 
 func (s stubStore) SyncRepositoryMetadata(ctx context.Context, repositoryID string, metadata repositoryMetadata, at time.Time) error {
+	if s.syncRepositoryMetadataFn == nil {
+		return nil
+	}
 	return s.syncRepositoryMetadataFn(ctx, repositoryID, metadata, at)
 }
 
 func (s stubStore) UpsertPullRequestBundle(ctx context.Context, pullRequest pullRequestInput, reviews []pullRequestReviewInput) error {
+	if s.upsertPullRequestBundleFn == nil {
+		return nil
+	}
 	return s.upsertPullRequestBundleFn(ctx, pullRequest, reviews)
 }
 
 func (s stubStore) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
+	if s.completeFn == nil {
+		return SyncJobResponse{}, nil
+	}
 	return s.completeFn(ctx, id, repositoryID, at)
+}
+
+func (s stubStore) GetCheckpoint(ctx context.Context, jobID string, resourceType string, key string) (*checkpointRecord, error) {
+	if s.getCheckpointFn == nil {
+		return nil, nil
+	}
+	return s.getCheckpointFn(ctx, jobID, resourceType, key)
+}
+
+func (s stubStore) UpsertCheckpoint(ctx context.Context, jobID string, repositoryID string, resourceType string, key string, value *string, status string, lastProcessedAt *time.Time) error {
+	if s.upsertCheckpointFn == nil {
+		return nil
+	}
+	return s.upsertCheckpointFn(ctx, jobID, repositoryID, resourceType, key, value, status, lastProcessedAt)
 }
 
 type stubGitHubClient struct {
@@ -248,6 +316,85 @@ func TestServiceCreateConflictWhenActiveJobExists(t *testing.T) {
 	_, err := svc.Create(context.Background(), "repo-1", CreateSyncRequest{})
 	if !errors.Is(err, ErrSyncJobConflict) {
 		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
+func TestProcessPendingUsesStoredFullSyncOptions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+
+	svc := NewService(stubStore{
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusPending, CreatedAt: now}, nil
+		},
+		getCheckpointFn: func(_ context.Context, jobID string, resourceType string, key string) (*checkpointRecord, error) {
+			if jobID != "job-1" {
+				t.Fatalf("unexpected job id %q", jobID)
+			}
+			if resourceType == "job" && key == "mode" {
+				value := ModeFull
+				return &checkpointRecord{Value: &value, Status: "pending"}, nil
+			}
+			return nil, nil
+		},
+		markRunningFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+		},
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
+		updateProgressFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		completeFn: func(_ context.Context, id string, repositoryID string, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: repositoryID, Status: StatusCompleted, Progress: 100, CreatedAt: now}, nil
+		},
+	}, stubGitHubClient{
+		getRepositoryFn: func(context.Context, string, string) (githubclient.Repository, error) {
+			return githubclient.Repository{Name: "devlens-api", FullName: "devlens-labs/devlens-api", DefaultBranch: "main"}, nil
+		},
+		listPullsFn: func(_ context.Context, _ string, _ string, options githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error) {
+			if options.State != "all" {
+				t.Fatalf("expected full sync state=all, got %q", options.State)
+			}
+			return githubclient.Page[githubclient.PullRequest]{}, nil
+		},
+		getPullRequestFn: func(context.Context, string, string, int) (githubclient.PullRequest, error) {
+			return githubclient.PullRequest{}, nil
+		},
+		listReviewsFn: func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error) {
+			return githubclient.Page[githubclient.Review]{}, nil
+		},
+		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
+			return githubclient.Page[githubclient.Commit]{}, nil
+		},
+	})
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.ProcessPending(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("unexpected result %+v", result)
+	}
+}
+
+func TestRetryOnlyAllowsFailedJobs(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubStore{
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusCompleted, CreatedAt: time.Now().UTC()}, nil
+		},
+	}, stubGitHubClient{})
+
+	_, err := svc.Retry(context.Background(), "job-1")
+	if !errors.Is(err, ErrSyncJobRetryState) {
+		t.Fatalf("expected retry state error, got %v", err)
 	}
 }
 

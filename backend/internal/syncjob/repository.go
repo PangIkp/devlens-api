@@ -46,20 +46,65 @@ func (r *Repository) HasActiveJob(ctx context.Context, repositoryID string) (boo
 }
 
 func (r *Repository) Create(ctx context.Context, params createParams) (SyncJobResponse, error) {
-	row, err := r.queries.CreateSyncJob(ctx, sqlcgen.CreateSyncJobParams{
-		ID:           newUUID(),
-		RepositoryID: parseUUID(params.RepositoryID),
-		Status:       StatusPending,
-		Progress:     0,
-		TriggeredBy:  nullableUUID(params.TriggeredBy),
-		ErrorMessage: pgtype.Text{},
-		StartedAt:    pgtype.Timestamptz{},
-		FinishedAt:   pgtype.Timestamptz{},
-	})
-	if err != nil {
+	if params.IdempotencyKey != nil && strings.TrimSpace(*params.IdempotencyKey) != "" {
+		job, err := r.getByIdempotencyKey(ctx, strings.TrimSpace(*params.IdempotencyKey))
+		if err != nil {
+			return SyncJobResponse{}, err
+		}
+		if job != nil {
+			return *job, nil
+		}
+	}
+
+	row := r.db.Pool().QueryRow(ctx, `
+		INSERT INTO sync_jobs (
+			id, repository_id, job_type, status, progress, idempotency_key, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+		) VALUES (
+			$1, $2, 'repository_sync', $3, $4, $5, $6, $7, $8, $9, NOW(), NULL
+		)
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		newUUID(),
+		parseUUID(params.RepositoryID),
+		StatusPending,
+		0,
+		textPointerValue(params.IdempotencyKey),
+		nullableUUID(params.TriggeredBy),
+		pgtype.Text{},
+		pgtype.Timestamptz{},
+		pgtype.Timestamptz{},
+	)
+
+	var created sqlcgen.CreateSyncJobRow
+	if err := row.Scan(
+		&created.ID,
+		&created.RepositoryID,
+		&created.Status,
+		&created.Progress,
+		&created.TriggeredBy,
+		&created.ErrorMessage,
+		&created.StartedAt,
+		&created.FinishedAt,
+		&created.CreatedAt,
+		&created.UpdatedAt,
+	); err != nil {
+		if params.IdempotencyKey != nil && strings.TrimSpace(*params.IdempotencyKey) != "" {
+			job, lookupErr := r.getByIdempotencyKey(ctx, strings.TrimSpace(*params.IdempotencyKey))
+			if lookupErr == nil && job != nil {
+				return *job, nil
+			}
+		}
 		return SyncJobResponse{}, fmt.Errorf("create sync job: %w", err)
 	}
-	return syncJobResponseFromCreateRow(row), nil
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'syncing',
+		    sync_error_message = NULL,
+		    initial_sync_completed_at = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(params.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository syncing: %w", err)
+	}
+	return syncJobResponseFromCreateRow(created), nil
 }
 
 func (r *Repository) GetByID(ctx context.Context, id string) (SyncJobResponse, error) {
@@ -117,6 +162,101 @@ func (r *Repository) ListByRepository(ctx context.Context, params ListParams) (L
 	return result, nil
 }
 
+func (r *Repository) Retry(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	row, err := r.db.Pool().Query(ctx, `
+		UPDATE sync_jobs
+		SET status = 'pending',
+		    progress = 0,
+		    error_message = NULL,
+		    started_at = NULL,
+		    finished_at = NULL,
+		    updated_at = $2
+		WHERE id = $1
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		parseUUID(id),
+		toNullableTimestamp(&at),
+	)
+	if err != nil {
+		return SyncJobResponse{}, fmt.Errorf("retry sync job: %w", err)
+	}
+	defer row.Close()
+
+	if !row.Next() {
+		return SyncJobResponse{}, ErrSyncJobNotFound
+	}
+
+	var job SyncJobResponse
+	var jobID, repositoryID, triggeredBy pgtype.UUID
+	var errorMessage pgtype.Text
+	var startedAt, finishedAt, createdAt, updatedAt pgtype.Timestamptz
+	var status string
+	var progress int32
+	if err := row.Scan(&jobID, &repositoryID, &status, &progress, &triggeredBy, &errorMessage, &startedAt, &finishedAt, &createdAt, &updatedAt); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("scan retried sync job: %w", err)
+	}
+	job = buildSyncJobResponse(jobID, repositoryID, status, progress, triggeredBy, errorMessage, startedAt, finishedAt, createdAt, updatedAt)
+
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'syncing',
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository syncing after retry: %w", err)
+	}
+
+	return job, nil
+}
+
+func (r *Repository) Cancel(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	job, err := r.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	row := r.db.Pool().QueryRow(ctx, `
+		UPDATE sync_jobs
+		SET status = 'canceled',
+		    error_message = NULL,
+		    finished_at = $2,
+		    updated_at = $2
+		WHERE id = $1
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		parseUUID(id),
+		toNullableTimestamp(&at),
+	)
+
+	var canceled sqlcgen.GetSyncJobByIDRow
+	if err := row.Scan(
+		&canceled.ID,
+		&canceled.RepositoryID,
+		&canceled.Status,
+		&canceled.Progress,
+		&canceled.TriggeredBy,
+		&canceled.ErrorMessage,
+		&canceled.StartedAt,
+		&canceled.FinishedAt,
+		&canceled.CreatedAt,
+		&canceled.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SyncJobResponse{}, ErrSyncJobNotFound
+		}
+		return SyncJobResponse{}, fmt.Errorf("cancel sync job: %w", err)
+	}
+
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'selected',
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository canceled sync state: %w", err)
+	}
+
+	return syncJobResponseFromGetRow(canceled), nil
+}
+
 func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID string) (repositoryTarget, error) {
 	row, err := r.queries.GetSyncJobRepositoryTarget(ctx, parseUUID(repositoryID))
 	if err != nil {
@@ -158,6 +298,11 @@ func (r *Repository) UpdateProgress(ctx context.Context, id string, progress int
 }
 
 func (r *Repository) MarkFailed(ctx context.Context, id string, message string, at time.Time) (SyncJobResponse, error) {
+	job, err := r.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
 	row, err := r.queries.UpdateSyncJobFailed(ctx, sqlcgen.UpdateSyncJobFailedParams{
 		ID:           parseUUID(id),
 		ErrorMessage: pgtype.Text{String: message, Valid: true},
@@ -165,6 +310,14 @@ func (r *Repository) MarkFailed(ctx context.Context, id string, message string, 
 	})
 	if err != nil {
 		return SyncJobResponse{}, fmt.Errorf("mark sync job failed: %w", err)
+	}
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'sync_failed',
+		    sync_error_message = $2,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID), message); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository sync failed: %w", err)
 	}
 	return syncJobResponseFromFailedRow(row), nil
 }
@@ -249,6 +402,18 @@ func (r *Repository) Complete(ctx context.Context, id string, repositoryID strin
 	}); err != nil {
 		return SyncJobResponse{}, fmt.Errorf("update repository last synced at: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'synced',
+		    initial_sync_completed_at = $2,
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`,
+		parseUUID(repositoryID),
+		toNullableTimestamp(&at),
+	); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("update repository initial sync state: %w", err)
+	}
 
 	row, err := queries.UpdateSyncJobCompleted(ctx, sqlcgen.UpdateSyncJobCompletedParams{
 		ID:         parseUUID(id),
@@ -263,6 +428,91 @@ func (r *Repository) Complete(ctx context.Context, id string, repositoryID strin
 	}
 
 	return syncJobResponseFromCompletedRow(row), nil
+}
+
+func (r *Repository) GetCheckpoint(ctx context.Context, jobID string, resourceType string, key string) (*checkpointRecord, error) {
+	row := r.db.Pool().QueryRow(ctx, `
+		SELECT checkpoint_value, status, last_processed_at
+		FROM sync_checkpoints
+		WHERE sync_job_id = $1 AND resource_type = $2 AND checkpoint_key = $3`,
+		parseUUID(jobID),
+		resourceType,
+		key,
+	)
+
+	var value pgtype.Text
+	var status string
+	var lastProcessedAt pgtype.Timestamptz
+	if err := row.Scan(&value, &status, &lastProcessedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sync checkpoint: %w", err)
+	}
+
+	return &checkpointRecord{
+		Value:           optionalTextPtr(value),
+		Status:          status,
+		LastProcessedAt: optionalTimeValue(lastProcessedAt),
+	}, nil
+}
+
+func (r *Repository) UpsertCheckpoint(ctx context.Context, jobID string, repositoryID string, resourceType string, key string, value *string, status string, lastProcessedAt *time.Time) error {
+	if strings.TrimSpace(repositoryID) == "" {
+		job, err := r.GetByID(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		repositoryID = job.RepositoryID
+	}
+
+	_, err := r.db.Pool().Exec(ctx, `
+		INSERT INTO sync_checkpoints (
+			id, sync_job_id, repository_id, resource_type, checkpoint_key, checkpoint_value, status, last_processed_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+		)
+		ON CONFLICT (sync_job_id, resource_type, checkpoint_key) DO UPDATE SET
+			checkpoint_value = EXCLUDED.checkpoint_value,
+			status = EXCLUDED.status,
+			last_processed_at = EXCLUDED.last_processed_at,
+			updated_at = NOW()`,
+		newUUID(),
+		parseUUID(jobID),
+		parseUUID(repositoryID),
+		resourceType,
+		key,
+		textPointerValue(value),
+		status,
+		toNullableTimestamp(lastProcessedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert sync checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) getByIdempotencyKey(ctx context.Context, key string) (*SyncJobResponse, error) {
+	row := r.db.Pool().QueryRow(ctx, `
+		SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+		FROM sync_jobs
+		WHERE idempotency_key = $1
+		LIMIT 1`, key)
+
+	var jobID, repositoryID, triggeredBy pgtype.UUID
+	var errorMessage pgtype.Text
+	var startedAt, finishedAt, createdAt, updatedAt pgtype.Timestamptz
+	var status string
+	var progress int32
+	if err := row.Scan(&jobID, &repositoryID, &status, &progress, &triggeredBy, &errorMessage, &startedAt, &finishedAt, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sync job by idempotency key: %w", err)
+	}
+
+	job := buildSyncJobResponse(jobID, repositoryID, status, progress, triggeredBy, errorMessage, startedAt, finishedAt, createdAt, updatedAt)
+	return &job, nil
 }
 
 func buildSyncJobResponse(
