@@ -103,6 +103,12 @@
 - [ ] รองรับ Installation Callback
 - [ ] บันทึก Installation ID
 - [ ] ดึงรายการ Repository ที่อนุญาต
+- [ ] สร้าง `GET /organizations/{organizationId}/github/connection`
+- [ ] สร้าง `POST /organizations/{organizationId}/github/installations/start`
+- [ ] สร้าง `GET /organizations/{organizationId}/github/installations/callback`
+- [ ] สร้าง `GET /organizations/{organizationId}/github/repositories`
+- [ ] สร้าง `POST /organizations/{organizationId}/github/repositories/select`
+- [ ] นิยาม frontend state `not_connected`, `installation_required`, `connected`, `syncing`, `sync_failed`
 
 ### Permission ขั้นต้น
 
@@ -139,7 +145,7 @@
 
 ### Sync Flow
 
-- [ ] สร้าง Sync Job เมื่อเชื่อมต่อ Repository
+- [ ] สร้าง Sync Job เมื่อผู้ใช้เลือกเชื่อมต่อ Repository
 - [ ] ดึง Repository Metadata
 - [ ] ดึง Pull Request
 - [ ] ดึง Pull Request Review
@@ -153,6 +159,7 @@
 - [ ] Resume จาก Checkpoint
 - [ ] ยกเลิก Sync ได้
 - [ ] Retry Sync ได้
+- [ ] คืนสถานะ initial sync ให้ frontend อ่านได้จาก connection/repository state
 
 ### Queue Subjects
 

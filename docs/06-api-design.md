@@ -175,6 +175,8 @@ Core
 
 -   Organizations
 -   Repositories
+-   GitHub Connections
+-   GitHub Accessible Repositories
 
 Operations
 
@@ -196,6 +198,10 @@ Analytics
 ตัวอย่าง Resource
 
     GET    /organizations
+    GET    /organizations/{organizationId}/github/connection
+    POST   /organizations/{organizationId}/github/installations/start
+    GET    /organizations/{organizationId}/github/repositories
+    POST   /organizations/{organizationId}/github/repositories/select
     GET    /repositories
     POST   /repositories/{repositoryId}/sync
     GET    /repositories/{repositoryId}/sync-jobs
@@ -207,6 +213,32 @@ Analytics
     GET    /repositories/{repositoryId}/metrics/hotspots
 
 รายละเอียด Endpoint ทั้งหมดอยู่ใน Swagger / OpenAPI
+
+------------------------------------------------------------------------
+
+# GitHub App Connection Contract
+
+สำหรับ private repository และการใช้งานระยะยาว Backend ควรใช้ GitHub App เป็นหลัก
+
+-   Frontend ต้องไม่ถือ GitHub token โดยตรง
+-   Frontend เรียก Backend เพื่อเริ่ม installation flow และอ่านสถานะการเชื่อมต่อ
+-   Backend เป็นผู้แลก installation token และเรียก GitHub API
+
+State ที่ Frontend ควรใช้จาก Backend
+
+-   `not_connected`
+-   `installation_required`
+-   `connected`
+-   `syncing`
+-   `sync_failed`
+
+Contract ขั้นต่ำที่ควรมี
+
+-   endpoint อ่าน connection status ต่อ organization
+-   endpoint เริ่ม install/connect flow
+-   endpoint อ่านรายการ accessible repositories
+-   endpoint ยืนยัน repository ที่จะเชื่อม
+-   endpoint อ่านสถานะ initial sync
 
 ------------------------------------------------------------------------
 

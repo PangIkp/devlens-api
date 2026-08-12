@@ -44,12 +44,41 @@ Table github_installations {
   id uuid [pk]
   organization_id uuid [ref: > organizations.id]
   installation_id bigint [unique]
+  account_login varchar
+  account_type varchar
+  target_type varchar
+  status varchar
+  permissions_json json
+  installed_by_github_user_id bigint
+  suspended_at timestamp
   installed_at timestamp
+  updated_at timestamp
+}
+
+Table github_installation_repositories {
+  id uuid [pk]
+  github_installation_id uuid [ref: > github_installations.id]
+  github_repository_id bigint [not null]
+  full_name varchar [not null]
+  private boolean [not null]
+  default_branch varchar
+  installation_status varchar [not null]
+  selection_status varchar [not null]
+  permissions_json json
+  last_synced_at timestamp
+  sync_error_message text
+  created_at timestamp
+  updated_at timestamp
+
+  indexes {
+    (github_installation_id, github_repository_id) [unique]
+  }
 }
 
 Table repositories {
   id uuid [pk]
   organization_id uuid [ref: > organizations.id, not null]
+  github_installation_repository_id uuid [ref: > github_installation_repositories.id]
   github_id bigint [unique, not null]
   name varchar [not null]
   full_name varchar [unique, not null]

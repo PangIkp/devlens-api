@@ -20,6 +20,7 @@ servers:
 tags:
   - name: Health
   - name: Organizations
+  - name: GitHub Connections
   - name: Repositories
   - name: Sync Jobs
   - name: GitHub Webhooks
@@ -296,6 +297,144 @@ paths:
           $ref: "#/components/responses/NotFound"
         "400":
           $ref: "#/components/responses/ValidationError"
+
+  /organizations/{organizationId}/github/connection:
+    get:
+      tags:
+        - GitHub Connections
+      summary: Get GitHub connection status for an organization
+      operationId: getGitHubConnection
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: GitHub connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubConnectionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /organizations/{organizationId}/github/installations/start:
+    post:
+      tags:
+        - GitHub Connections
+      summary: Start GitHub App installation flow for an organization
+      operationId: startGitHubInstallation
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartGitHubInstallationRequest"
+      responses:
+        "200":
+          description: Installation flow started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartGitHubInstallationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /organizations/{organizationId}/github/installations/callback:
+    get:
+      tags:
+        - GitHub Connections
+      summary: Complete GitHub App installation callback
+      operationId: completeGitHubInstallation
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - name: installation_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: setup_action
+          in: query
+          required: false
+          schema:
+            type: string
+            example: install
+      responses:
+        "200":
+          description: Installation callback handled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubConnectionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /organizations/{organizationId}/github/repositories:
+    get:
+      tags:
+        - GitHub Connections
+      summary: List repositories accessible from the GitHub App installation
+      operationId: listAccessibleGitHubRepositories
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Accessible repository list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubAccessibleRepositoryListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /organizations/{organizationId}/github/repositories/select:
+    post:
+      tags:
+        - GitHub Connections
+      summary: Select accessible GitHub repositories to connect and sync
+      operationId: selectAccessibleGitHubRepositories
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelectGitHubRepositoriesRequest"
+      responses:
+        "202":
+          description: Repository selection accepted and initial sync scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubRepositorySelectionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /repositories/{repositoryId}:
     get:
@@ -1030,6 +1169,210 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    GitHubConnection:
+      type: object
+      required:
+        - organizationId
+        - state
+        - provider
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          example: github
+        state:
+          type: string
+          enum:
+            - not_connected
+            - installation_required
+            - connected
+            - syncing
+            - sync_failed
+        installationId:
+          type: integer
+          format: int64
+          nullable: true
+        accountLogin:
+          type: string
+          nullable: true
+        accountType:
+          type: string
+          enum:
+            - User
+            - Organization
+          nullable: true
+        targetType:
+          type: string
+          enum:
+            - account
+            - organization
+            - selected_repositories
+          nullable: true
+        reconnectRequired:
+          type: boolean
+        lastSyncedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSyncError:
+          type: string
+          nullable: true
+        connectedRepositories:
+          type: integer
+          example: 3
+
+    GitHubConnectionResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/GitHubConnection"
+
+    StartGitHubInstallationRequest:
+      type: object
+      properties:
+        redirectUrl:
+          type: string
+          format: uri
+          nullable: true
+
+    StartGitHubInstallation:
+      type: object
+      required:
+        - installUrl
+        - state
+      properties:
+        installUrl:
+          type: string
+          format: uri
+        state:
+          type: string
+          description: Opaque backend-generated state for installation flow correlation
+
+    StartGitHubInstallationResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/StartGitHubInstallation"
+
+    GitHubAccessibleRepository:
+      type: object
+      required:
+        - githubRepositoryId
+        - fullName
+        - private
+        - installationStatus
+        - selectionStatus
+      properties:
+        githubRepositoryId:
+          type: integer
+          format: int64
+        fullName:
+          type: string
+          example: devlens-labs/devlens-api
+        name:
+          type: string
+          example: devlens-api
+        ownerLogin:
+          type: string
+          example: devlens-labs
+        private:
+          type: boolean
+        defaultBranch:
+          type: string
+          nullable: true
+        installationStatus:
+          type: string
+          enum:
+            - accessible
+            - permission_missing
+            - installation_required
+            - suspended
+        selectionStatus:
+          type: string
+          enum:
+            - not_selected
+            - selected
+            - syncing
+            - sync_failed
+            - synced
+        linkedRepositoryId:
+          type: string
+          format: uuid
+          nullable: true
+        lastSyncError:
+          type: string
+          nullable: true
+
+    GitHubAccessibleRepositoryListResponse:
+      type: object
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubAccessibleRepository"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    SelectGitHubRepositoriesRequest:
+      type: object
+      required:
+        - repositoryIds
+      properties:
+        repositoryIds:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            format: int64
+        autoSync:
+          type: boolean
+          default: true
+
+    GitHubRepositorySelection:
+      type: object
+      required:
+        - state
+        - selectedRepositoryIds
+      properties:
+        state:
+          type: string
+          enum:
+            - connected
+            - syncing
+            - sync_failed
+        selectedRepositoryIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+        createdRepositoryIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        syncJobIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    GitHubRepositorySelectionResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/GitHubRepositorySelection"
 
     CreateRepositoryRequest:
       type: object

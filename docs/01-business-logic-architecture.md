@@ -37,10 +37,20 @@ Engineering Intelligence Platform คือระบบวิเคราะห�
 
 1. ผู้ใช้เข้าสู่ระบบ
 2. ผู้ใช้ติดตั้ง GitHub App
-3. ผู้ใช้เลือก Repository ที่อนุญาตให้ระบบอ่าน
-4. ระบบบันทึก GitHub Installation ID
-5. ระบบเริ่ม Initial Sync
-6. หลังจากนั้น GitHub ส่ง Webhook เมื่อข้อมูลเปลี่ยน
+3. Frontend เรียก Backend เพื่ออ่านสถานะการเชื่อมต่อของ Organization
+4. หากยังไม่เชื่อมต่อ ระบบคืนสถานะ `not_connected` หรือ `installation_required`
+5. ผู้ใช้เลือก Repository ที่อนุญาตให้ระบบอ่าน
+6. ระบบบันทึก GitHub Installation ID และ Repository Access State
+7. ระบบเริ่ม Initial Sync หลังผู้ใช้ยืนยัน Repository ที่ต้องการเชื่อม
+8. หลังจากนั้น GitHub ส่ง Webhook เมื่อข้อมูลเปลี่ยน
+
+Frontend ต้องสามารถแสดง state ต่อไปนี้ได้จากข้อมูลที่ Backend ส่งกลับ
+
+- `not_connected`
+- `installation_required`
+- `connected`
+- `syncing`
+- `sync_failed`
 
 ### 3.2 Initial Sync
 
@@ -146,6 +156,8 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 
 - GitHub Connection
 - Repository Selection
+- Installation Status
+- Accessible Repositories
 - Sync Status
 - Metric Configuration
 - Data Retention
@@ -182,12 +194,17 @@ flowchart LR
 
 - แสดง Dashboard และกราฟ
 - จัดการ Filter และ Date Range
+- เรียก Backend เพื่อเริ่ม GitHub App installation flow
+- แสดงสถานะการเชื่อมต่อ GitHub และรายการ Repository ที่เชื่อมได้
+- ให้ผู้ใช้เลือก Repository ที่ต้องการเชื่อมและเริ่ม Initial Sync
 - แสดง Sync Status และ Error
 - ไม่เรียก GitHub API โดยตรง
 
 ### Go API
 
 - Authentication และ Authorization
+- จัดการ GitHub App install start, callback, และ connection state
+- ออก installation-scoped repository access data ให้ Frontend
 - จัดการ Organization และ Repository
 - อ่านข้อมูลจาก PostgreSQL และ ClickHouse
 - ส่งข้อมูล Dashboard ให้ Frontend
@@ -207,6 +224,7 @@ flowchart LR
 - User
 - Organization
 - GitHub Installation
+- GitHub Accessible Repository State
 - Repository Configuration
 - Sync State
 - Permission
@@ -252,12 +270,13 @@ MVP ควรทำให้ครบ Flow ต่อไปนี้ก่อน
 
 1. Login
 2. เชื่อมต่อ GitHub App
-3. เลือก Repository
-4. Initial Sync Pull Request และ Review
-5. รับ Webhook
-6. คำนวณ PR Cycle Time และ Review Wait Time
-7. แสดง Dashboard
-8. แสดง Repository Detail
+3. อ่าน Connection Status และ Accessible Repositories จาก Backend
+4. เลือก Repository
+5. Initial Sync Pull Request และ Review
+6. รับ Webhook
+7. คำนวณ PR Cycle Time และ Review Wait Time
+8. แสดง Dashboard
+9. แสดง Repository Detail
 9. แสดง Pull Request Detail
 10. แสดง Sync Status และ Error
 

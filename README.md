@@ -33,6 +33,7 @@ This repository currently contains the initial backend foundation in [`backend`]
 - transactional webhook delivery persistence and sync job enqueue
 - ClickHouse-backed daily metrics storage for dashboard queries
 - NATS JetStream trigger for repository metric recalculation after sync completion
+- planned GitHub App connection contract for frontend-driven installation, repository access, and initial sync state
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -104,6 +105,29 @@ Behavior notes:
 - `deployments` and `file_changes` raw schema exist in PostgreSQL for analytics completeness, but ingestion for those sources is intentionally deferred
 - hotspot ranking reads raw `file_changes` from ClickHouse
 - deployment filtering by `environment` reads raw deployment analytics data from ClickHouse when available
+- current sync still uses a server-side `GITHUB_TOKEN`; GitHub App installation flow is planned but not implemented yet
+
+## Planned GitHub App Connection Contract
+
+The next backend milestone will move GitHub connectivity from a static server token to a GitHub App installation flow. The frontend should treat this as the long-term integration path for both public and private repositories.
+
+Planned frontend-visible states:
+
+- `not_connected`
+- `installation_required`
+- `connected`
+- `syncing`
+- `sync_failed`
+
+Planned backend responsibilities:
+
+- provide installation start and callback endpoints for GitHub App setup
+- expose connection status per organization so the frontend can decide whether to show connect, install, repo selection, or sync UI
+- list repositories accessible to the installation without exposing GitHub tokens to the frontend
+- persist installation and repository access metadata in PostgreSQL
+- trigger initial sync after the user selects repositories to connect
+
+Planned endpoints are documented in [`docs/openapi.yaml`](./docs/openapi.yaml) and described as upcoming contract work, not current production behavior.
 
 Example requests:
 
