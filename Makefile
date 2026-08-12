@@ -29,7 +29,8 @@ compose-config:
 	docker compose config
 
 run:
-	cd backend && go run ./cmd/api
+	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
+	cd backend && $(GO_TOOL_ENV) go run ./cmd/api
 
 migrate-up:
 	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"

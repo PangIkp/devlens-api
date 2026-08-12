@@ -37,6 +37,10 @@ func NewHealthHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealt
 	return HealthHandler{postgres: postgres, clickhouse: clickhouse}
 }
 
+func NewReadinessHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker) HealthHandler {
+	return HealthHandler{postgres: postgres, clickhouse: clickhouse}
+}
+
 func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := HealthResponse{
 		Status:    "ok",
@@ -59,6 +63,7 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.checkClickHouse(r.Context()); err != nil {
+		statusCode = http.StatusServiceUnavailable
 		response.Status = "degraded"
 		response.Dependencies.ClickHouse = ClickHouseDependencyStatus{
 			Status:  "unavailable",

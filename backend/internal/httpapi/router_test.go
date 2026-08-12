@@ -104,8 +104,8 @@ func TestHealthHandlerDegradedClickHouse(t *testing.T) {
 
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
 	}
 
 	var body HealthResponse
@@ -119,6 +119,58 @@ func TestHealthHandlerDegradedClickHouse(t *testing.T) {
 
 	if body.Dependencies.ClickHouse.Status != "unavailable" {
 		t.Fatalf("expected unavailable clickhouse status, got %q", body.Dependencies.ClickHouse.Status)
+	}
+}
+
+func TestReadinessHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "ok" {
+		t.Fatalf("expected status ok, got %q", body.Status)
+	}
+}
+
+func TestReadinessHandlerUnavailableClickHouse(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{err: errors.New("clickhouse unavailable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "degraded" {
+		t.Fatalf("expected degraded status, got %q", body.Status)
 	}
 }
 
