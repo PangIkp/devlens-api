@@ -11,7 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-var ErrPullRequestNotFound = errors.New("pull request not found")
+var (
+	ErrPullRequestNotFound = errors.New("pull request not found")
+	ErrRepositoryNotFound  = errors.New("repository not found")
+)
 
 type Repository struct {
 	db *postgres.DB
@@ -19,6 +22,98 @@ type Repository struct {
 
 func NewRepository(db *postgres.DB) *Repository {
 	return &Repository{db: db}
+}
+
+func (r *Repository) EnsureRepositoryExists(ctx context.Context, repositoryID string) error {
+	var exists bool
+	err := r.db.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repositories WHERE id = $1)`, parseUUID(repositoryID)).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check repository exists: %w", err)
+	}
+	if !exists {
+		return ErrRepositoryNotFound
+	}
+	return nil
+}
+
+func (r *Repository) List(ctx context.Context, params ListParams) (ListResult, error) {
+	query := `
+SELECT pr.id::text,
+       pr.repository_id::text,
+       repo.full_name,
+       pr.github_pr_id,
+       pr.number,
+       pr.title,
+       pr.author,
+       pr.state,
+       pr.created_at,
+       pr.merged_at,
+       pr.closed_at,
+       pr.additions,
+       pr.deletions,
+       pr.files_changed,
+       pr.is_draft
+FROM pull_requests pr
+INNER JOIN repositories repo ON repo.id = pr.repository_id
+WHERE pr.repository_id = $1
+  AND ($2 = '' OR pr.state = $2)
+  AND ($3 = '' OR pr.title ILIKE '%' || $3 || '%' OR pr.author ILIKE '%' || $3 || '%')
+ORDER BY
+  CASE WHEN $4 = 'number' AND $5 = 'asc' THEN pr.number END ASC,
+  CASE WHEN $4 = 'number' AND $5 = 'desc' THEN pr.number END DESC,
+  CASE WHEN $4 = 'createdAt' AND $5 = 'asc' THEN pr.created_at END ASC,
+  CASE WHEN $4 = 'createdAt' AND $5 = 'desc' THEN pr.created_at END DESC,
+  pr.created_at DESC
+LIMIT $6 OFFSET $7`
+
+	rows, err := r.db.Pool().Query(ctx, query, parseUUID(params.RepositoryID), params.Status, params.Search, params.SortBy, params.SortOrder, params.PageSize, (params.Page-1)*params.PageSize)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("list pull requests: %w", err)
+	}
+	defer rows.Close()
+
+	result := ListResult{Items: make([]ListItem, 0)}
+	for rows.Next() {
+		var item ListItem
+		var mergedAt, closedAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&item.ID,
+			&item.Repository.ID,
+			&item.Repository.FullName,
+			&item.GithubPRID,
+			&item.Number,
+			&item.Title,
+			&item.Author,
+			&item.State,
+			&item.CreatedAt,
+			&mergedAt,
+			&closedAt,
+			&item.Additions,
+			&item.Deletions,
+			&item.FilesChanged,
+			&item.IsDraft,
+		); err != nil {
+			return ListResult{}, fmt.Errorf("scan pull request list item: %w", err)
+		}
+		item.CreatedAt = item.CreatedAt.UTC()
+		item.MergedAt = optionalTime(mergedAt)
+		item.ClosedAt = optionalTime(closedAt)
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ListResult{}, err
+	}
+
+	countQuery := `
+SELECT COUNT(*)
+FROM pull_requests
+WHERE repository_id = $1
+  AND ($2 = '' OR state = $2)
+  AND ($3 = '' OR title ILIKE '%' || $3 || '%' OR author ILIKE '%' || $3 || '%')`
+	if err := r.db.Pool().QueryRow(ctx, countQuery, parseUUID(params.RepositoryID), params.Status, params.Search).Scan(&result.TotalItems); err != nil {
+		return ListResult{}, fmt.Errorf("count pull requests: %w", err)
+	}
+	return result, nil
 }
 
 func (r *Repository) GetByID(ctx context.Context, id string) (Response, error) {

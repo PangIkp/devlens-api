@@ -528,6 +528,32 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /pull-requests:
+    get:
+      tags:
+        - Pull Requests
+      summary: List pull requests for a repository
+      operationId: listPullRequests
+      parameters:
+        - $ref: "#/components/parameters/RepositoryIdQuery"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/PullRequestStatus"
+        - $ref: "#/components/parameters/PullRequestSortBy"
+        - $ref: "#/components/parameters/SortOrder"
+      responses:
+        "200":
+          description: Pull request list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequestListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "400":
           $ref: "#/components/responses/ValidationError"
     patch:
@@ -814,6 +840,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DashboardSummaryResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/dashboard/pr-cycle-time:
+    get:
+      tags:
+        - Dashboard
+      summary: Get dashboard PR cycle time metrics
+      operationId: getDashboardPullRequestCycleTime
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Pull request cycle time metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PullRequestMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/dashboard/review-wait-time:
+    get:
+      tags:
+        - Dashboard
+      summary: Get dashboard review wait time metrics
+      operationId: getDashboardReviewWaitTime
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Review wait time metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewMetricsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /repositories/{repositoryId}/dashboard/review-queue:
+    get:
+      tags:
+        - Dashboard
+      summary: Get dashboard review queue
+      operationId: getDashboardReviewQueue
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Review queue items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewQueueResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1159,6 +1267,25 @@ components:
       schema:
         type: string
         format: uuid
+
+    PullRequestStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+          - open
+          - closed
+          - merged
+
+    PullRequestSortBy:
+      name: sortBy
+      in: query
+      schema:
+        type: string
+        enum:
+          - createdAt
+          - number
 
     InsightKey:
       name: insightKey
@@ -2026,6 +2153,71 @@ components:
         data:
           $ref: "#/components/schemas/PullRequestDetail"
 
+    PullRequestListItem:
+      type: object
+      required:
+        - id
+        - repository
+        - githubPrId
+        - number
+        - title
+        - author
+        - state
+        - createdAt
+        - additions
+        - deletions
+        - filesChanged
+        - isDraft
+      properties:
+        id:
+          type: string
+          format: uuid
+        repository:
+          $ref: "#/components/schemas/PullRequestRepositoryRef"
+        githubPrId:
+          type: integer
+          format: int64
+        number:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+        state:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        mergedAt:
+          type: string
+          format: date-time
+          nullable: true
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        filesChanged:
+          type: integer
+        isDraft:
+          type: boolean
+
+    PullRequestListResponse:
+      type: object
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestListItem"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
     CreateSyncRequest:
       type: object
       properties:
@@ -2394,6 +2586,44 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/RepositoryMetricsPayload"
+
+    ReviewQueueItem:
+      type: object
+      required:
+        - pullRequestId
+        - number
+        - title
+        - author
+        - waitingMinutes
+      properties:
+        pullRequestId:
+          type: string
+          format: uuid
+        number:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+        reviewRequestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        waitingMinutes:
+          type: number
+
+    ReviewQueueResponse:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewQueueItem"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
 
     ReviewInsightRequest:
       type: object

@@ -18,6 +18,7 @@ type MetricsService interface {
 	GetDeploymentMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.DeploymentMetrics, error)
 	GetHotspots(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error)
 	GetRepositoryMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error)
+	GetReviewQueue(context.Context, string, metrics.HotspotQueryParams) (metrics.ReviewQueueResult, error)
 }
 
 type MetricsHandler struct {
@@ -30,11 +31,54 @@ func NewMetricsHandler(service MetricsService) *MetricsHandler {
 
 func (h *MetricsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/repositories/{repositoryId}/dashboard/summary", h.getDashboardSummary)
+	r.Get("/repositories/{repositoryId}/dashboard/pr-cycle-time", h.getPullRequestMetrics)
+	r.Get("/repositories/{repositoryId}/dashboard/review-wait-time", h.getReviewMetrics)
+	r.Get("/repositories/{repositoryId}/dashboard/review-queue", h.getReviewQueue)
 	r.Get("/repositories/{repositoryId}/metrics", h.getRepositoryMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
 	r.Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
+}
+
+func (h *MetricsHandler) getReviewQueue(w http.ResponseWriter, r *http.Request) {
+	repositoryID, err := validateUUIDPathParam("repositoryId", chi.URLParam(r, "repositoryId"))
+	if err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	bounds, queryErr := parseDateRangeQuery(r)
+	if queryErr != nil {
+		WriteError(w, r, http.StatusBadRequest, DecodeError(queryErr))
+		return
+	}
+
+	page, pageErr := ParsePagination(r)
+	if pageErr != nil {
+		WriteError(w, r, http.StatusBadRequest, DecodeError(pageErr))
+		return
+	}
+
+	result, svcErr := h.service.GetReviewQueue(r.Context(), repositoryID, metrics.HotspotQueryParams{
+		From:      bounds.From,
+		To:        bounds.To,
+		Page:      page.Page,
+		PageSize:  page.PageSize,
+		SortOrder: "asc",
+	})
+	if svcErr != nil {
+		writeMetricsError(w, r, svcErr)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		Data []metrics.ReviewQueueItem `json:"data"`
+		Meta PaginationMeta            `json:"meta"`
+	}{
+		Data: result.Items,
+		Meta: NewPaginationMeta(page.Page, page.PageSize, result.TotalItems),
+	})
 }
 
 func (h *MetricsHandler) getDashboardSummary(w http.ResponseWriter, r *http.Request) {

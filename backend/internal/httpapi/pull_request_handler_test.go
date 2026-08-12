@@ -12,7 +12,12 @@ import (
 )
 
 type stubPullRequestService struct {
-	getFn func(context.Context, string) (pullrequest.Response, error)
+	listFn func(context.Context, pullrequest.ListParams) (pullrequest.ListResult, error)
+	getFn  func(context.Context, string) (pullrequest.Response, error)
+}
+
+func (s stubPullRequestService) List(ctx context.Context, params pullrequest.ListParams) (pullrequest.ListResult, error) {
+	return s.listFn(ctx, params)
 }
 
 func (s stubPullRequestService) GetByID(ctx context.Context, id string) (pullrequest.Response, error) {
@@ -53,5 +58,32 @@ func TestPullRequestHandlerGet(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestPullRequestHandlerList(t *testing.T) {
+	t.Parallel()
+
+	handler := NewPullRequestHandler(stubPullRequestService{
+		listFn: func(_ context.Context, params pullrequest.ListParams) (pullrequest.ListResult, error) {
+			if params.RepositoryID != "bd546e60-e65d-b1fd-3713-6f56aa60f149" {
+				t.Fatalf("unexpected repository id %s", params.RepositoryID)
+			}
+			return pullrequest.ListResult{Items: []pullrequest.ListItem{}, TotalItems: 0}, nil
+		},
+		getFn: func(context.Context, string) (pullrequest.Response, error) {
+			return pullrequest.Response{}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/pull-requests?repositoryId=bd546e60-e65d-b1fd-3713-6f56aa60f149&page=1&pageSize=10", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

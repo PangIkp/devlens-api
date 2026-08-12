@@ -14,6 +14,7 @@ import (
 type stubMetricsService struct {
 	getHotspotsFn          func(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error)
 	getRepositoryMetricsFn func(context.Context, string, metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error)
+	getReviewQueueFn       func(context.Context, string, metrics.HotspotQueryParams) (metrics.ReviewQueueResult, error)
 }
 
 func (s stubMetricsService) GetDashboardSummary(context.Context, string, metrics.QueryParams) (metrics.DashboardSummary, error) {
@@ -38,6 +39,10 @@ func (s stubMetricsService) GetHotspots(ctx context.Context, repositoryID string
 
 func (s stubMetricsService) GetRepositoryMetrics(ctx context.Context, repositoryID string, params metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error) {
 	return s.getRepositoryMetricsFn(ctx, repositoryID, params)
+}
+
+func (s stubMetricsService) GetReviewQueue(ctx context.Context, repositoryID string, params metrics.HotspotQueryParams) (metrics.ReviewQueueResult, error) {
+	return s.getReviewQueueFn(ctx, repositoryID, params)
 }
 
 func TestMetricsHandlerHotspotsUsesMetaField(t *testing.T) {
@@ -129,6 +134,39 @@ func TestMetricsHandlerRepositoryMetrics(t *testing.T) {
 	handler.RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics?from=2026-07-01&to=2026-07-07&interval=day", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMetricsHandlerReviewQueueUsesMetaField(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMetricsHandler(stubMetricsService{
+		getHotspotsFn: func(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error) {
+			return metrics.HotspotResult{}, nil
+		},
+		getRepositoryMetricsFn: func(context.Context, string, metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error) {
+			return metrics.RepositoryMetrics{}, nil
+		},
+		getReviewQueueFn: func(_ context.Context, repositoryID string, params metrics.HotspotQueryParams) (metrics.ReviewQueueResult, error) {
+			if repositoryID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected repository id %s", repositoryID)
+			}
+			return metrics.ReviewQueueResult{
+				Items:      []metrics.ReviewQueueItem{{PullRequestID: "pr-1", Number: 12, Title: "Queue", Author: "itsara"}},
+				TotalItems: 1,
+			}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/dashboard/review-queue?from=2026-07-01&to=2026-07-07&page=1&pageSize=10", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

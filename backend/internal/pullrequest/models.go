@@ -25,6 +25,38 @@ type RepositoryRef struct {
 	FullName string `json:"fullName"`
 }
 
+type ListItem struct {
+	ID           string        `json:"id"`
+	Repository   RepositoryRef `json:"repository"`
+	GithubPRID   int64         `json:"githubPrId"`
+	Number       int           `json:"number"`
+	Title        string        `json:"title"`
+	Author       string        `json:"author"`
+	State        string        `json:"state"`
+	CreatedAt    time.Time     `json:"createdAt"`
+	MergedAt     *time.Time    `json:"mergedAt,omitempty"`
+	ClosedAt     *time.Time    `json:"closedAt,omitempty"`
+	Additions    int           `json:"additions"`
+	Deletions    int           `json:"deletions"`
+	FilesChanged int           `json:"filesChanged"`
+	IsDraft      bool          `json:"isDraft"`
+}
+
+type ListParams struct {
+	RepositoryID string
+	Page         int
+	PageSize     int
+	Status       string
+	Search       string
+	SortBy       string
+	SortOrder    string
+}
+
+type ListResult struct {
+	Items      []ListItem
+	TotalItems int
+}
+
 type Response struct {
 	ID           string        `json:"id"`
 	Repository   RepositoryRef `json:"repository"`

@@ -289,6 +289,92 @@ func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string,
 	}, nil
 }
 
+func (s *Service) GetReviewQueue(ctx context.Context, repositoryID string, params HotspotQueryParams) (ReviewQueueResult, error) {
+	if s.pg == nil {
+		return ReviewQueueResult{}, fmt.Errorf("metrics postgres dependency is not configured")
+	}
+	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
+		return ReviewQueueResult{}, err
+	}
+	if params.Page < 1 || params.PageSize < 1 {
+		return ReviewQueueResult{}, &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "page", Message: "must be greater than or equal to 1"}},
+		}
+	}
+
+	toExclusive := params.To.UTC().Add(24 * time.Hour)
+	query := `
+WITH review_queue AS (
+    SELECT pr.id::text AS pull_request_id,
+           pr.number,
+           pr.title,
+           pr.author,
+           MIN(prr.review_requested_at) AS review_requested_at
+    FROM pull_requests pr
+    LEFT JOIN pull_request_reviews prr ON prr.pull_request_id = pr.id
+    WHERE pr.repository_id = $1
+      AND pr.state = 'open'
+      AND pr.created_at >= $2
+      AND pr.created_at < $3
+      AND pr.is_draft = FALSE
+    GROUP BY pr.id, pr.number, pr.title, pr.author
+)
+SELECT pull_request_id,
+       number,
+       title,
+       author,
+       review_requested_at,
+       CASE
+           WHEN review_requested_at IS NULL THEN EXTRACT(EPOCH FROM (NOW() - $2)) / 60.0
+           ELSE EXTRACT(EPOCH FROM (NOW() - review_requested_at)) / 60.0
+       END AS waiting_minutes
+FROM review_queue
+ORDER BY review_requested_at ASC NULLS FIRST, number ASC
+LIMIT $4 OFFSET $5`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), params.From.UTC(), toExclusive, params.PageSize, (params.Page-1)*params.PageSize)
+	if err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("list review queue: %w", err)
+	}
+	defer rows.Close()
+
+	result := ReviewQueueResult{Items: make([]ReviewQueueItem, 0)}
+	for rows.Next() {
+		var item ReviewQueueItem
+		var requestedAt pgtype.Timestamptz
+		if err := rows.Scan(&item.PullRequestID, &item.Number, &item.Title, &item.Author, &requestedAt, &item.WaitingMinutes); err != nil {
+			return ReviewQueueResult{}, fmt.Errorf("scan review queue item: %w", err)
+		}
+		item.ReviewRequestedAt = optionalMetricTime(requestedAt)
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("iterate review queue: %w", err)
+	}
+
+	countQuery := `
+SELECT COUNT(*)
+FROM pull_requests
+WHERE repository_id = $1
+  AND state = 'open'
+  AND created_at >= $2
+  AND created_at < $3
+  AND is_draft = FALSE`
+	if err := s.pg.Pool().QueryRow(ctx, countQuery, parseUUID(repositoryID), params.From.UTC(), toExclusive).Scan(&result.TotalItems); err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("count review queue: %w", err)
+	}
+	return result, nil
+}
+
+func optionalMetricTime(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	utc := value.Time.UTC()
+	return &utc
+}
+
 func (s *Service) ensureReady() error {
 	if s.pg == nil {
 		return fmt.Errorf("metrics postgres dependency is not configured")

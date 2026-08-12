@@ -95,6 +95,20 @@ type RepositoryMetrics struct {
 	Hotspots     []HotspotFile      `json:"hotspots"`
 }
 
+type ReviewQueueItem struct {
+	PullRequestID     string     `json:"pullRequestId"`
+	Number            int        `json:"number"`
+	Title             string     `json:"title"`
+	Author            string     `json:"author"`
+	ReviewRequestedAt *time.Time `json:"reviewRequestedAt,omitempty"`
+	WaitingMinutes    float64    `json:"waitingMinutes"`
+}
+
+type ReviewQueueResult struct {
+	Items      []ReviewQueueItem
+	TotalItems int
+}
+
 type ValidationIssue struct {
 	Field   string
 	Message string
