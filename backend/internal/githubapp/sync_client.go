@@ -69,6 +69,38 @@ func (c *SyncClient) ListCommits(ctx context.Context, owner, repo string, option
 	return client.ListCommits(ctx, owner, repo, options)
 }
 
+func (c *SyncClient) ListPullRequestFiles(ctx context.Context, owner, repo string, pullNumber int, options githubclient.ListOptions) (githubclient.Page[githubclient.PullRequestFile], error) {
+	client, err := c.clientForRepository(ctx, owner, repo)
+	if err != nil {
+		return githubclient.Page[githubclient.PullRequestFile]{}, err
+	}
+	return client.ListPullRequestFiles(ctx, owner, repo, pullNumber, options)
+}
+
+func (c *SyncClient) ListWorkflowRuns(ctx context.Context, owner, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.WorkflowRun], error) {
+	client, err := c.clientForRepository(ctx, owner, repo)
+	if err != nil {
+		return githubclient.Page[githubclient.WorkflowRun]{}, err
+	}
+	return client.ListWorkflowRuns(ctx, owner, repo, options)
+}
+
+func (c *SyncClient) ListDeployments(ctx context.Context, owner, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.Deployment], error) {
+	client, err := c.clientForRepository(ctx, owner, repo)
+	if err != nil {
+		return githubclient.Page[githubclient.Deployment]{}, err
+	}
+	return client.ListDeployments(ctx, owner, repo, options)
+}
+
+func (c *SyncClient) ListDeploymentStatuses(ctx context.Context, owner, repo string, deploymentID int64, options githubclient.ListOptions) (githubclient.Page[githubclient.DeploymentStatus], error) {
+	client, err := c.clientForRepository(ctx, owner, repo)
+	if err != nil {
+		return githubclient.Page[githubclient.DeploymentStatus]{}, err
+	}
+	return client.ListDeploymentStatuses(ctx, owner, repo, deploymentID, options)
+}
+
 func (c *SyncClient) clientForRepository(ctx context.Context, owner, repo string) (githubclient.Client, error) {
 	fullName := strings.TrimSpace(owner) + "/" + strings.TrimSpace(repo)
 	if c.app != nil && c.app.Enabled() && c.lookup != nil {

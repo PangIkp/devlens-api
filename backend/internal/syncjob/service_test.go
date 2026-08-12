@@ -23,6 +23,9 @@ type stubStore struct {
 	markFailedFn              func(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	syncRepositoryMetadataFn  func(context.Context, string, repositoryMetadata, time.Time) error
 	upsertPullRequestBundleFn func(context.Context, pullRequestInput, []pullRequestReviewInput) error
+	replacePullRequestFilesFn func(context.Context, string, int64, []fileChangeInput) error
+	upsertWorkflowRunFn       func(context.Context, string, workflowRunInput) error
+	upsertDeploymentFn        func(context.Context, string, deploymentInput) error
 	completeFn                func(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	getCheckpointFn           func(context.Context, string, string, string) (*checkpointRecord, error)
 	upsertCheckpointFn        func(context.Context, string, string, string, string, *string, string, *time.Time) error
@@ -119,6 +122,27 @@ func (s stubStore) UpsertPullRequestBundle(ctx context.Context, pullRequest pull
 	return s.upsertPullRequestBundleFn(ctx, pullRequest, reviews)
 }
 
+func (s stubStore) ReplacePullRequestFiles(ctx context.Context, repositoryID string, githubPRID int64, files []fileChangeInput) error {
+	if s.replacePullRequestFilesFn == nil {
+		return nil
+	}
+	return s.replacePullRequestFilesFn(ctx, repositoryID, githubPRID, files)
+}
+
+func (s stubStore) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {
+	if s.upsertWorkflowRunFn == nil {
+		return nil
+	}
+	return s.upsertWorkflowRunFn(ctx, repositoryID, run)
+}
+
+func (s stubStore) UpsertDeployment(ctx context.Context, repositoryID string, deployment deploymentInput) error {
+	if s.upsertDeploymentFn == nil {
+		return nil
+	}
+	return s.upsertDeploymentFn(ctx, repositoryID, deployment)
+}
+
 func (s stubStore) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
 	if s.completeFn == nil {
 		return SyncJobResponse{}, nil
@@ -146,6 +170,10 @@ type stubGitHubClient struct {
 	listPullsFn      func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error)
 	listReviewsFn    func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error)
 	listCommitsFn    func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error)
+	listFilesFn      func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequestFile], error)
+	listWorkflowFn   func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.WorkflowRun], error)
+	listDeployFn     func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Deployment], error)
+	listDepStatusFn  func(context.Context, string, string, int64, githubclient.ListOptions) (githubclient.Page[githubclient.DeploymentStatus], error)
 }
 
 func (s stubGitHubClient) GetRepository(ctx context.Context, owner string, repo string) (githubclient.Repository, error) {
@@ -166,6 +194,34 @@ func (s stubGitHubClient) ListReviews(ctx context.Context, owner string, repo st
 
 func (s stubGitHubClient) ListCommits(ctx context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 	return s.listCommitsFn(ctx, owner, repo, options)
+}
+
+func (s stubGitHubClient) ListPullRequestFiles(ctx context.Context, owner string, repo string, pullNumber int, options githubclient.ListOptions) (githubclient.Page[githubclient.PullRequestFile], error) {
+	if s.listFilesFn == nil {
+		return githubclient.Page[githubclient.PullRequestFile]{}, nil
+	}
+	return s.listFilesFn(ctx, owner, repo, pullNumber, options)
+}
+
+func (s stubGitHubClient) ListWorkflowRuns(ctx context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.WorkflowRun], error) {
+	if s.listWorkflowFn == nil {
+		return githubclient.Page[githubclient.WorkflowRun]{}, nil
+	}
+	return s.listWorkflowFn(ctx, owner, repo, options)
+}
+
+func (s stubGitHubClient) ListDeployments(ctx context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.Deployment], error) {
+	if s.listDeployFn == nil {
+		return githubclient.Page[githubclient.Deployment]{}, nil
+	}
+	return s.listDeployFn(ctx, owner, repo, options)
+}
+
+func (s stubGitHubClient) ListDeploymentStatuses(ctx context.Context, owner string, repo string, deploymentID int64, options githubclient.ListOptions) (githubclient.Page[githubclient.DeploymentStatus], error) {
+	if s.listDepStatusFn == nil {
+		return githubclient.Page[githubclient.DeploymentStatus]{}, nil
+	}
+	return s.listDepStatusFn(ctx, owner, repo, deploymentID, options)
 }
 
 func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {

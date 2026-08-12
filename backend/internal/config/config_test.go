@@ -16,6 +16,7 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("GITHUB_APP_ID", "12345")
 	t.Setenv("GITHUB_APP_INSTALL_URL", "https://github.com/apps/devlens/installations/new")
 	t.Setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----")
+	t.Setenv("WEBHOOK_RETRY_INTERVAL", "15s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -52,11 +53,23 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	if cfg.GitHub.App.PrivateKey == "" {
 		t.Fatal("expected github app private key to be loaded")
 	}
+	if cfg.Sync.WebhookRetryInterval != 15*time.Second {
+		t.Fatalf("unexpected webhook retry interval %s", cfg.Sync.WebhookRetryInterval)
+	}
 }
 
 func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
 	t.Setenv("GITHUB_INITIAL_BACKOFF", "5s")
 	t.Setenv("GITHUB_MAX_BACKOFF", "1s")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsInvalidWebhookRetryInterval(t *testing.T) {
+	t.Setenv("WEBHOOK_RETRY_INTERVAL", "0s")
 
 	_, err := Load()
 	if err == nil {

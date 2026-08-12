@@ -27,6 +27,10 @@ type Client interface {
 	ListPullRequests(context.Context, string, string, ListOptions) (Page[PullRequest], error)
 	ListReviews(context.Context, string, string, int, ListOptions) (Page[Review], error)
 	ListCommits(context.Context, string, string, ListOptions) (Page[Commit], error)
+	ListPullRequestFiles(context.Context, string, string, int, ListOptions) (Page[PullRequestFile], error)
+	ListWorkflowRuns(context.Context, string, string, ListOptions) (Page[WorkflowRun], error)
+	ListDeployments(context.Context, string, string, ListOptions) (Page[Deployment], error)
+	ListDeploymentStatuses(context.Context, string, string, int64, ListOptions) (Page[DeploymentStatus], error)
 }
 
 type TokenProvider interface {
@@ -159,6 +163,46 @@ func (c *HTTPClient) ListCommits(ctx context.Context, owner, repo string, option
 		return Page[Commit]{}, err
 	}
 	return Page[Commit]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListPullRequestFiles(ctx context.Context, owner, repo string, pullNumber int, options ListOptions) (Page[PullRequestFile], error) {
+	query := options.queryValues()
+	var items []PullRequestFile
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/files", owner, repo, pullNumber), query, &items)
+	if err != nil {
+		return Page[PullRequestFile]{}, err
+	}
+	return Page[PullRequestFile]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListWorkflowRuns(ctx context.Context, owner, repo string, options ListOptions) (Page[WorkflowRun], error) {
+	query := options.queryValues()
+	var payload WorkflowRunList
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, repo), query, &payload)
+	if err != nil {
+		return Page[WorkflowRun]{}, err
+	}
+	return Page[WorkflowRun]{Items: payload.WorkflowRuns, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListDeployments(ctx context.Context, owner, repo string, options ListOptions) (Page[Deployment], error) {
+	query := options.queryValues()
+	var items []Deployment
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/deployments", owner, repo), query, &items)
+	if err != nil {
+		return Page[Deployment]{}, err
+	}
+	return Page[Deployment]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListDeploymentStatuses(ctx context.Context, owner, repo string, deploymentID int64, options ListOptions) (Page[DeploymentStatus], error) {
+	query := options.queryValues()
+	var items []DeploymentStatus
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/deployments/%d/statuses", owner, repo, deploymentID), query, &items)
+	if err != nil {
+		return Page[DeploymentStatus]{}, err
+	}
+	return Page[DeploymentStatus]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
 }
 
 type responseMeta struct {

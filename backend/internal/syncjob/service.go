@@ -25,6 +25,9 @@ type store interface {
 	MarkFailed(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	SyncRepositoryMetadata(context.Context, string, repositoryMetadata, time.Time) error
 	UpsertPullRequestBundle(context.Context, pullRequestInput, []pullRequestReviewInput) error
+	ReplacePullRequestFiles(context.Context, string, int64, []fileChangeInput) error
+	UpsertWorkflowRun(context.Context, string, workflowRunInput) error
+	UpsertDeployment(context.Context, string, deploymentInput) error
 	Complete(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	GetCheckpoint(context.Context, string, string, string) (*checkpointRecord, error)
 	UpsertCheckpoint(context.Context, string, string, string, string, *string, string, *time.Time) error
@@ -315,6 +318,24 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		return s.failJob(ctx, job, err)
 	}
 
+	job, err = s.store.UpdateProgress(ctx, job.ID, 85, s.now().UTC())
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	if _, err := s.syncWorkflowRuns(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
+		return s.failJob(ctx, job, err)
+	}
+
+	job, err = s.store.UpdateProgress(ctx, job.ID, 92, s.now().UTC())
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	if _, err := s.syncDeployments(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
+		return s.failJob(ctx, job, err)
+	}
+
 	completedAt := s.now().UTC()
 	if s.publisher != nil {
 		if err := s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
@@ -380,6 +401,13 @@ func (s *Service) syncPullRequests(ctx context.Context, jobID string, repository
 			if err := s.store.UpsertPullRequestBundle(ctx, buildPullRequestInput(detail, pullRequest, repositoryID), buildReviewInputs(reviews)); err != nil {
 				return 0, fmt.Errorf("persist pull request %d: %w", pullRequest.Number, err)
 			}
+			files, err := s.syncPullRequestFiles(ctx, jobID, owner, repoName, pullRequest.Number)
+			if err != nil {
+				return 0, err
+			}
+			if err := s.store.ReplacePullRequestFiles(ctx, repositoryID, fallbackInt64(detail.ID, pullRequest.ID), buildFileChangeInputs(files)); err != nil {
+				return 0, fmt.Errorf("persist pull request files %d: %w", pullRequest.Number, err)
+			}
 
 			total++
 		}
@@ -392,6 +420,41 @@ func (s *Service) syncPullRequests(ctx context.Context, jobID string, repository
 		}
 		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "pull_requests", "page", result.NextPage); err != nil {
 			return 0, err
+		}
+		page = result.NextPage
+	}
+}
+
+func (s *Service) syncPullRequestFiles(ctx context.Context, jobID string, owner string, repoName string, pullNumber int) ([]githubclient.PullRequestFile, error) {
+	items := make([]githubclient.PullRequestFile, 0)
+	key := fmt.Sprintf("pull_%d", pullNumber)
+	page, err := s.resumePage(ctx, jobID, "changed_files", key)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return nil, err
+		}
+		result, err := s.githubClient.ListPullRequestFiles(ctx, owner, repoName, pullNumber, githubclient.ListOptions{
+			Page:    page,
+			PerPage: 100,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list pull request files for pull request %d: %w", pullNumber, err)
+		}
+
+		items = append(items, result.Items...)
+
+		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, "", "changed_files", key); err != nil {
+				return nil, err
+			}
+			return items, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, "", "changed_files", key, result.NextPage); err != nil {
+			return nil, err
 		}
 		page = result.NextPage
 	}
@@ -470,6 +533,101 @@ func (s *Service) syncCommits(ctx context.Context, jobID string, repositoryID st
 			return total, nil
 		}
 		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "commits", "page", result.NextPage); err != nil {
+			return 0, err
+		}
+		page = result.NextPage
+	}
+}
+
+func (s *Service) syncWorkflowRuns(ctx context.Context, jobID string, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
+	total := 0
+	page, err := s.resumePage(ctx, jobID, "workflows", "page")
+	if err != nil {
+		return 0, err
+	}
+
+	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return 0, err
+		}
+		result, err := s.githubClient.ListWorkflowRuns(ctx, owner, repoName, githubclient.ListOptions{
+			Page:    page,
+			PerPage: 100,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("list workflow runs: %w", err)
+		}
+
+		for _, run := range result.Items {
+			if !includeWorkflowRun(run, cutoff) {
+				continue
+			}
+			if err := s.store.UpsertWorkflowRun(ctx, repositoryID, buildWorkflowRunInput(run)); err != nil {
+				return 0, fmt.Errorf("persist workflow run %d: %w", run.ID, err)
+			}
+			total++
+		}
+
+		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, repositoryID, "workflows", "page"); err != nil {
+				return 0, err
+			}
+			return total, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "workflows", "page", result.NextPage); err != nil {
+			return 0, err
+		}
+		page = result.NextPage
+	}
+}
+
+func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {
+	total := 0
+	page, err := s.resumePage(ctx, jobID, "deployments", "page")
+	if err != nil {
+		return 0, err
+	}
+
+	for {
+		if err := s.ensureNotCanceled(ctx, jobID); err != nil {
+			return 0, err
+		}
+		result, err := s.githubClient.ListDeployments(ctx, owner, repoName, githubclient.ListOptions{
+			Page:    page,
+			PerPage: 100,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("list deployments: %w", err)
+		}
+
+		for _, deployment := range result.Items {
+			if !includeDeployment(deployment, cutoff) {
+				continue
+			}
+			statuses, err := s.githubClient.ListDeploymentStatuses(ctx, owner, repoName, deployment.ID, githubclient.ListOptions{
+				Page:    1,
+				PerPage: 100,
+			})
+			if err != nil {
+				return 0, fmt.Errorf("list deployment statuses for deployment %d: %w", deployment.ID, err)
+			}
+			latestStatus := latestDeploymentStatus(statuses.Items)
+			if latestStatus == nil {
+				continue
+			}
+			if err := s.store.UpsertDeployment(ctx, repositoryID, buildDeploymentInput(deployment, *latestStatus)); err != nil {
+				return 0, fmt.Errorf("persist deployment %d: %w", deployment.ID, err)
+			}
+			total++
+		}
+
+		if result.NextPage == 0 {
+			if err := s.completeCheckpoint(ctx, jobID, repositoryID, "deployments", "page"); err != nil {
+				return 0, err
+			}
+			return total, nil
+		}
+		if err := s.storeProgressCheckpoint(ctx, jobID, repositoryID, "deployments", "page", result.NextPage); err != nil {
 			return 0, err
 		}
 		page = result.NextPage
@@ -610,6 +768,28 @@ func includeCommit(item githubclient.Commit, cutoff *time.Time) bool {
 	return !item.Commit.Author.Date.Before(*cutoff)
 }
 
+func includeWorkflowRun(item githubclient.WorkflowRun, cutoff *time.Time) bool {
+	if cutoff == nil {
+		return true
+	}
+	timestamp := item.UpdatedAt
+	if timestamp.IsZero() {
+		timestamp = item.CreatedAt
+	}
+	return !timestamp.Before(*cutoff)
+}
+
+func includeDeployment(item githubclient.Deployment, cutoff *time.Time) bool {
+	if cutoff == nil {
+		return true
+	}
+	timestamp := item.UpdatedAt
+	if timestamp.IsZero() {
+		timestamp = item.CreatedAt
+	}
+	return !timestamp.Before(*cutoff)
+}
+
 func stringPtr(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -692,6 +872,81 @@ func buildReviewInputs(reviews []githubclient.Review) []pullRequestReviewInput {
 		})
 	}
 	return items
+}
+
+func buildFileChangeInputs(files []githubclient.PullRequestFile) []fileChangeInput {
+	if len(files) == 0 {
+		return nil
+	}
+	items := make([]fileChangeInput, 0, len(files))
+	for _, file := range files {
+		items = append(items, fileChangeInput{
+			FilePath:    file.Filename,
+			Additions:   file.Additions,
+			Deletions:   file.Deletions,
+			CommitCount: 1,
+		})
+	}
+	return items
+}
+
+func buildWorkflowRunInput(run githubclient.WorkflowRun) workflowRunInput {
+	return workflowRunInput{
+		GitHubWorkflowRunID: run.ID,
+		WorkflowName:        run.Name,
+		Status:              run.Status,
+		Conclusion:          run.Conclusion,
+		StartedAt:           normalizeTime(run.RunStartedAt),
+		CompletedAt:         workflowCompletedAt(run),
+	}
+}
+
+func buildDeploymentInput(deployment githubclient.Deployment, status githubclient.DeploymentStatus) deploymentInput {
+	deployedAt := status.UpdatedAt
+	if deployedAt.IsZero() {
+		deployedAt = status.CreatedAt
+	}
+	if deployedAt.IsZero() {
+		deployedAt = deployment.UpdatedAt
+	}
+	if deployedAt.IsZero() {
+		deployedAt = deployment.CreatedAt
+	}
+	return deploymentInput{
+		GitHubDeploymentID: deployment.ID,
+		Environment:        deployment.Environment,
+		Status:             status.State,
+		DeployedAt:         deployedAt.UTC(),
+	}
+}
+
+func workflowCompletedAt(run githubclient.WorkflowRun) *time.Time {
+	if run.Conclusion == "" {
+		return nil
+	}
+	if run.UpdatedAt.IsZero() {
+		return nil
+	}
+	value := run.UpdatedAt.UTC()
+	return &value
+}
+
+func latestDeploymentStatus(items []githubclient.DeploymentStatus) *githubclient.DeploymentStatus {
+	var latest *githubclient.DeploymentStatus
+	for i := range items {
+		candidate := items[i]
+		if latest == nil || deploymentStatusTime(candidate).After(deploymentStatusTime(*latest)) {
+			latest = &candidate
+		}
+	}
+	return latest
+}
+
+func deploymentStatusTime(item githubclient.DeploymentStatus) time.Time {
+	if !item.UpdatedAt.IsZero() {
+		return item.UpdatedAt.UTC()
+	}
+	return item.CreatedAt.UTC()
 }
 
 func earliestSubmittedAt(reviews []githubclient.Review) *time.Time {

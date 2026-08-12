@@ -388,6 +388,99 @@ func (r *Repository) UpsertPullRequestBundle(ctx context.Context, pullRequest pu
 	return nil
 }
 
+func (r *Repository) ReplacePullRequestFiles(ctx context.Context, repositoryID string, githubPRID int64, files []fileChangeInput) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin file changes transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var pullRequestID pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM pull_requests WHERE repository_id = $1 AND github_pr_id = $2`, parseUUID(repositoryID), githubPRID).Scan(&pullRequestID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("find pull request for file changes: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM file_changes WHERE pull_request_id = $1`, pullRequestID); err != nil {
+		return fmt.Errorf("clear file changes: %w", err)
+	}
+
+	for _, file := range files {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO file_changes (id, pull_request_id, file_path, additions, deletions, commit_count)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			newUUID(),
+			pullRequestID,
+			file.FilePath,
+			file.Additions,
+			file.Deletions,
+			file.CommitCount,
+		); err != nil {
+			return fmt.Errorf("insert file change %q: %w", file.FilePath, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit file changes transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {
+	_, err := r.db.Pool().Exec(ctx, `
+		INSERT INTO workflow_events (
+			id, repository_id, github_workflow_run_id, workflow_name, status, conclusion, started_at, completed_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+		)
+		ON CONFLICT (github_workflow_run_id) DO UPDATE SET
+			workflow_name = EXCLUDED.workflow_name,
+			status = EXCLUDED.status,
+			conclusion = EXCLUDED.conclusion,
+			started_at = EXCLUDED.started_at,
+			completed_at = EXCLUDED.completed_at,
+			updated_at = NOW()`,
+		newUUID(),
+		parseUUID(repositoryID),
+		run.GitHubWorkflowRunID,
+		run.WorkflowName,
+		run.Status,
+		nullableString(run.Conclusion),
+		toNullableTimestamp(run.StartedAt),
+		toNullableTimestamp(run.CompletedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert workflow run: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) UpsertDeployment(ctx context.Context, repositoryID string, deployment deploymentInput) error {
+	_, err := r.db.Pool().Exec(ctx, `
+		INSERT INTO deployments (
+			id, repository_id, github_deployment_id, environment, status, deployed_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6
+		)
+		ON CONFLICT (github_deployment_id) DO UPDATE SET
+			environment = EXCLUDED.environment,
+			status = EXCLUDED.status,
+			deployed_at = EXCLUDED.deployed_at`,
+		newUUID(),
+		parseUUID(repositoryID),
+		deployment.GitHubDeploymentID,
+		deployment.Environment,
+		deployment.Status,
+		toNullableTimestamp(&deployment.DeployedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert deployment: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -593,6 +686,13 @@ func textPointerValue(value *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *value, Valid: true}
+}
+
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
 }
 
 func optionalTextPtr(value pgtype.Text) *string {

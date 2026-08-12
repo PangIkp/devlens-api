@@ -78,7 +78,8 @@ type NATSConfig struct {
 }
 
 type SyncConfig struct {
-	WorkerPollInterval time.Duration
+	WorkerPollInterval   time.Duration
+	WebhookRetryInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -166,6 +167,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	webhookRetryInterval, err := getDuration("WEBHOOK_RETRY_INTERVAL", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -222,7 +227,8 @@ func Load() (Config, error) {
 			URL: getEnv("NATS_URL", "nats://localhost:4222"),
 		},
 		Sync: SyncConfig{
-			WorkerPollInterval: syncWorkerPollInterval,
+			WorkerPollInterval:   syncWorkerPollInterval,
+			WebhookRetryInterval: webhookRetryInterval,
 		},
 	}
 
@@ -286,6 +292,10 @@ func Load() (Config, error) {
 
 	if cfg.Sync.WorkerPollInterval <= 0 {
 		return Config{}, fmt.Errorf("SYNC_WORKER_POLL_INTERVAL must be greater than 0")
+	}
+
+	if cfg.Sync.WebhookRetryInterval <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_INTERVAL must be greater than 0")
 	}
 
 	if cfg.ClickHouse.Timeout <= 0 {

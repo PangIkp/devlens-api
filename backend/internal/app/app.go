@@ -33,6 +33,7 @@ type App struct {
 	postgres        *postgres.DB
 	clickhouse      *clickhouse.DB
 	worker          *syncjob.Worker
+	webhookWorker   *githubwebhook.Worker
 	metricsBus      *metricsbus.Client
 	metricsConsumer *metricsbus.Consumer
 }
@@ -97,6 +98,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
+	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval)
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer
@@ -142,6 +144,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		postgres:        postgresDB,
 		clickhouse:      clickhouseDB,
 		worker:          syncWorker,
+		webhookWorker:   webhookWorker,
 		metricsBus:      metricsBusClient,
 		metricsConsumer: metricsConsumer,
 	}, nil
@@ -165,6 +168,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.worker != nil {
 		go a.worker.Run(ctx)
+	}
+	if a.webhookWorker != nil {
+		go a.webhookWorker.Run(ctx)
 	}
 	if a.metricsConsumer != nil {
 		go func() {

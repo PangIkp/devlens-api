@@ -660,6 +660,30 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /github/webhook-deliveries/{deliveryId}/retry:
+    post:
+      tags:
+        - GitHub Webhooks
+      summary: Retry a failed GitHub webhook delivery
+      operationId: retryGitHubWebhookDelivery
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Webhook delivery retried
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubWebhookResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /repositories/{repositoryId}/dashboard/summary:
     get:
       tags:
@@ -1580,6 +1604,7 @@ components:
         - eventType
         - duplicate
         - enqueued
+        - processingStatus
         - receivedAt
       properties:
         deliveryId:
@@ -1590,6 +1615,14 @@ components:
           type: boolean
         enqueued:
           type: boolean
+        processingStatus:
+          type: string
+          enum:
+            - received
+            - enqueued
+            - processed
+            - ignored
+            - failed
         syncJobId:
           type: string
           format: uuid

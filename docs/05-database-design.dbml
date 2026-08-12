@@ -359,6 +359,8 @@ Table webhook_deliveries {
   action varchar
 
   processing_status varchar [not null]
+  retry_count int [not null, default: 0]
+  next_retry_at timestamp
   payload json
   payload_retention_until timestamp
 

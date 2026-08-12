@@ -14,6 +14,10 @@ import (
 type store interface {
 	FindRepositoryByGithubID(context.Context, int64) (*repositoryMatch, error)
 	EnqueueWebhookSync(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error)
+	MarkDeliveryStatus(context.Context, string, string, *string, *time.Time) error
+	GetStoredDelivery(context.Context, string) (*StoredDelivery, error)
+	ScheduleRetry(context.Context, string, string, int, time.Time, time.Time) error
+	ListRetryableDeliveryIDs(context.Context, int, time.Time) ([]string, error)
 }
 
 type installationEventHandler interface {
@@ -71,21 +75,83 @@ func (s *Service) Handle(ctx context.Context, req HandleRequest) (HandleResult, 
 		return HandleResult{}, err
 	}
 
-	if !result.duplicate && isInstallationEvent(req.EventType) && installationID != nil && s.installations != nil {
-		if err := s.installations.HandleInstallationEvent(ctx, req.EventType, *installationID, payload.Action); err != nil {
+	if !result.duplicate {
+		if err := s.processPersistedDelivery(ctx, req.DeliveryID, req.EventType, payload.Action, installationID); err != nil {
+			_ = s.scheduleRetryFailure(ctx, req.DeliveryID, 0, err)
 			return HandleResult{}, err
 		}
 	}
 
 	return HandleResult{
-		DeliveryID: result.deliveryID,
-		EventType:  req.EventType,
-		Duplicate:  result.duplicate,
-		Enqueued:   enqueueJob && !result.duplicate,
-		SyncJobID:  result.syncJobID,
-		ReceivedAt: result.receivedAt,
-		Action:     action,
+		DeliveryID:       result.deliveryID,
+		EventType:        req.EventType,
+		Duplicate:        result.duplicate,
+		Enqueued:         enqueueJob && !result.duplicate,
+		ProcessingStatus: result.processingStatus,
+		SyncJobID:        result.syncJobID,
+		ReceivedAt:       result.receivedAt,
+		Action:           action,
 	}, nil
+}
+
+func (s *Service) Retry(ctx context.Context, deliveryID string) (HandleResult, error) {
+	stored, err := s.store.GetStoredDelivery(ctx, strings.TrimSpace(deliveryID))
+	if err != nil {
+		return HandleResult{}, err
+	}
+	if stored == nil {
+		return HandleResult{}, ErrDeliveryNotFound
+	}
+	if stored.ProcessingStatus != "failed" {
+		return HandleResult{}, ErrRetryNotAllowed
+	}
+
+	if err := s.processPersistedDelivery(ctx, stored.DeliveryID, stored.EventType, valueOrEmpty(stored.Action), stored.InstallationID); err != nil {
+		_ = s.scheduleRetryFailure(ctx, stored.DeliveryID, stored.RetryCount, err)
+		return HandleResult{}, err
+	}
+
+	processedAt := s.now().UTC()
+	if err := s.store.MarkDeliveryStatus(ctx, stored.DeliveryID, deriveProcessedStatus(stored.EventType, stored.SyncJobID != nil), nil, &processedAt); err != nil {
+		return HandleResult{}, err
+	}
+
+	return HandleResult{
+		DeliveryID:       stored.DeliveryID,
+		EventType:        stored.EventType,
+		Duplicate:        false,
+		Enqueued:         stored.SyncJobID != nil,
+		ProcessingStatus: deriveProcessedStatus(stored.EventType, stored.SyncJobID != nil),
+		SyncJobID:        stored.SyncJobID,
+		ReceivedAt:       stored.ReceivedAt,
+		Action:           stored.Action,
+	}, nil
+}
+
+func (s *Service) RetryFailedPending(ctx context.Context, limit int) error {
+	ids, err := s.store.ListRetryableDeliveryIDs(ctx, limit, s.now().UTC())
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		_, _ = s.Retry(ctx, id)
+	}
+	return nil
+}
+
+func (s *Service) processPersistedDelivery(ctx context.Context, deliveryID string, eventType string, action string, installationID *int64) error {
+	if isInstallationEvent(eventType) && installationID != nil && s.installations != nil {
+		if err := s.installations.HandleInstallationEvent(ctx, eventType, *installationID, action); err != nil {
+			return err
+		}
+		processedAt := s.now().UTC()
+		return s.store.MarkDeliveryStatus(ctx, deliveryID, "processed", nil, &processedAt)
+	}
+	if !isSupportedEvent(eventType) {
+		processedAt := s.now().UTC()
+		return s.store.MarkDeliveryStatus(ctx, deliveryID, "ignored", nil, &processedAt)
+	}
+	return nil
 }
 
 func parsePayload(body []byte) (payloadEnvelope, error) {
@@ -120,7 +186,7 @@ func verifySignature(secret string, body []byte, signature string) error {
 
 func isSupportedEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "pull_request", "pull_request_review", "push":
+	case "pull_request", "pull_request_review", "push", "workflow_run", "deployment", "deployment_status":
 		return true
 	default:
 		return false
@@ -150,4 +216,44 @@ func optionalInt64(value int64) *int64 {
 	}
 	copy := value
 	return &copy
+}
+
+func deriveProcessedStatus(eventType string, enqueued bool) string {
+	if enqueued && isSupportedEvent(eventType) {
+		return "enqueued"
+	}
+	if isInstallationEvent(eventType) {
+		return "processed"
+	}
+	return "ignored"
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func (s *Service) scheduleRetryFailure(ctx context.Context, deliveryID string, retryCount int, err error) error {
+	failedAt := s.now().UTC()
+	nextRetryAt := failedAt.Add(retryDelayForAttempt(retryCount + 1))
+	return s.store.ScheduleRetry(ctx, deliveryID, err.Error(), retryCount+1, failedAt, nextRetryAt)
+}
+
+func retryDelayForAttempt(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := 30 * time.Second
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= 15*time.Minute {
+			return 15 * time.Minute
+		}
+	}
+	if delay > 15*time.Minute {
+		return 15 * time.Minute
+	}
+	return delay
 }

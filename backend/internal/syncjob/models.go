@@ -71,6 +71,29 @@ type repositoryMetadata struct {
 	ArchivedAt    *time.Time
 }
 
+type fileChangeInput struct {
+	FilePath    string
+	Additions   int
+	Deletions   int
+	CommitCount int
+}
+
+type workflowRunInput struct {
+	GitHubWorkflowRunID int64
+	WorkflowName        string
+	Status              string
+	Conclusion          string
+	StartedAt           *time.Time
+	CompletedAt         *time.Time
+}
+
+type deploymentInput struct {
+	GitHubDeploymentID int64
+	Environment        string
+	Status             string
+	DeployedAt         time.Time
+}
+
 type pullRequestInput struct {
 	RepositoryID string
 	GitHubPRID   int64
