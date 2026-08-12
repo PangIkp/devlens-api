@@ -29,6 +29,7 @@ tags:
   - name: Review Metrics
   - name: Deployment Metrics
   - name: Hotspots
+  - name: Insights
 
 security:
   - bearerAuth: []
@@ -890,6 +891,149 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
+  /organizations/{organizationId}/insights:
+    get:
+      tags:
+        - Insights
+      summary: List generated insights for an organization
+      operationId: listInsights
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/RepositoryIdQuery"
+        - $ref: "#/components/parameters/InsightType"
+        - $ref: "#/components/parameters/InsightStatus"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Insight list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /insights:
+    get:
+      tags:
+        - Insights
+      summary: List generated insights across a selected organization
+      operationId: listInsightsAlias
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/RepositoryIdQuery"
+        - $ref: "#/components/parameters/InsightType"
+        - $ref: "#/components/parameters/InsightStatus"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Insight list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /organizations/{organizationId}/insights/{insightKey}/review:
+    post:
+      tags:
+        - Insights
+      summary: Mark an insight as reviewed
+      operationId: reviewInsight
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/InsightKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewInsightRequest"
+      responses:
+        "200":
+          description: Insight status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /organizations/{organizationId}/insights/{insightKey}/dismiss:
+    post:
+      tags:
+        - Insights
+      summary: Dismiss an insight
+      operationId: dismissInsight
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/InsightKey"
+      responses:
+        "200":
+          description: Insight status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /organizations/{organizationId}/insights/{insightKey}/reopen:
+    post:
+      tags:
+        - Insights
+      summary: Reopen an insight
+      operationId: reopenInsight
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/InsightKey"
+      responses:
+        "200":
+          description: Insight status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -906,6 +1050,14 @@ components:
         type: string
         format: uuid
 
+    OrganizationIdQuery:
+      name: organizationId
+      in: query
+      required: true
+      schema:
+        type: string
+        format: uuid
+
     RepositoryId:
       name: repositoryId
       in: path
@@ -913,6 +1065,43 @@ components:
       schema:
         type: string
         format: uuid
+
+    RepositoryIdQuery:
+      name: repositoryId
+      in: query
+      schema:
+        type: string
+        format: uuid
+
+    InsightKey:
+      name: insightKey
+      in: path
+      required: true
+      schema:
+        type: string
+
+    InsightType:
+      name: type
+      in: query
+      schema:
+        type: string
+        enum:
+          - bottleneck_detection
+          - large_pr_detection
+          - slow_review_detection
+          - hotspot_detection
+          - deployment_failure_trend
+          - review_concentration
+
+    InsightStatus:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum:
+          - open
+          - reviewed
+          - dismissed
 
     MemberId:
       name: memberId
@@ -1904,6 +2093,145 @@ components:
             $ref: "#/components/schemas/HotspotFile"
         meta:
           $ref: "#/components/schemas/PaginationMeta"
+
+    ReviewInsightRequest:
+      type: object
+      properties:
+        reviewedBy:
+          type: string
+          format: uuid
+
+    Insight:
+      type: object
+      required:
+        - insightKey
+        - insightType
+        - status
+        - severity
+        - title
+        - summary
+        - organizationId
+        - detectedAt
+      properties:
+        insightKey:
+          type: string
+        insightType:
+          type: string
+          enum:
+            - bottleneck_detection
+            - large_pr_detection
+            - slow_review_detection
+            - hotspot_detection
+            - deployment_failure_trend
+            - review_concentration
+        status:
+          type: string
+          enum:
+            - open
+            - reviewed
+            - dismissed
+        severity:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+            - critical
+        title:
+          type: string
+        summary:
+          type: string
+        organizationId:
+          type: string
+          format: uuid
+        repositoryId:
+          type: string
+          format: uuid
+          nullable: true
+        repositoryName:
+          type: string
+          nullable: true
+        detectedAt:
+          type: string
+          format: date-time
+        evidence:
+          type: object
+          additionalProperties: true
+        reviewedBy:
+          type: string
+          format: uuid
+          nullable: true
+        reviewedAt:
+          type: string
+          format: date-time
+          nullable: true
+        dismissedAt:
+          type: string
+          format: date-time
+          nullable: true
+        reopenedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    InsightListResponse:
+      type: object
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Insight"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    InsightStatusPayload:
+      type: object
+      required:
+        - insightKey
+        - insightType
+        - status
+        - updatedAt
+      properties:
+        insightKey:
+          type: string
+        insightType:
+          type: string
+        status:
+          type: string
+          enum:
+            - open
+            - reviewed
+            - dismissed
+        reviewedBy:
+          type: string
+          format: uuid
+          nullable: true
+        reviewedAt:
+          type: string
+          format: date-time
+          nullable: true
+        dismissedAt:
+          type: string
+          format: date-time
+          nullable: true
+        reopenedAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+
+    InsightStatusResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/InsightStatusPayload"
 
     ErrorDetail:
       type: object

@@ -17,6 +17,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/githubconnection"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
+	"github.com/PangIkp/devlens/backend/internal/insights"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/metricsbus"
 	"github.com/PangIkp/devlens/backend/internal/organization"
@@ -72,6 +73,9 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
 	metricsService := metrics.NewService(postgresDB, clickhouseDB)
 	metricsHandler := httpapi.NewMetricsHandler(metricsService)
+	insightRepository := insights.NewRepository(postgresDB)
+	insightService := insights.NewService(insightRepository)
+	insightHandler := httpapi.NewInsightHandler(insightService)
 	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
 		UserAgent:      cfg.GitHub.UserAgent,
@@ -125,6 +129,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		GitHubConnections:   githubConnectionHandler,
 		Repositories:        repositoryHandler,
 		Metrics:             metricsHandler,
+		Insights:            insightHandler,
 		SyncJobs:            syncJobHandler,
 		GitHubWebhook:       webhookHandler,
 	})
