@@ -104,6 +104,16 @@ BACKUP_FILE=/absolute/path/to/backup.dump make verify-postgres-restore
 
 - rollback, backup configuration, and restore verification are documented in [`docs/07-operations-runbook.md`](./docs/07-operations-runbook.md)
 
+11. Observability stack:
+
+```sh
+docker compose up -d prometheus grafana
+```
+
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
+- default Grafana credentials come from `.env` via `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`
+
 ## Organization API
 
 Current `Organization` shape:
