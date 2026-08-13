@@ -81,6 +81,13 @@ func NewConflictError(message string) Error {
 	}
 }
 
+func NewConflictErrorWithCode(code string, message string) Error {
+	return Error{
+		Code:    strings.TrimSpace(code),
+		Message: message,
+	}
+}
+
 func NewInternalError() Error {
 	return Error{
 		Code:    ErrorCodeInternal,

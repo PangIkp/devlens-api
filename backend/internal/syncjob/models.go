@@ -58,9 +58,12 @@ type checkpointRecord struct {
 }
 
 type repositoryTarget struct {
-	ID           string
-	FullName     string
-	LastSyncedAt *time.Time
+	ID                           string
+	FullName                     string
+	LastSyncedAt                 *time.Time
+	GitHubInstallationRepository *string
+	InstallationID               *int64
+	InstallationStatus           *string
 }
 
 type repositoryMetadata struct {

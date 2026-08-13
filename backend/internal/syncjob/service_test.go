@@ -33,6 +33,19 @@ type stubStore struct {
 	upsertCheckpointFn        func(context.Context, string, string, string, string, *string, string, *time.Time) error
 }
 
+func connectedRepositoryTarget(repositoryID string, fullName string) repositoryTarget {
+	linkID := "gir-1"
+	installationID := int64(42)
+	status := "connected"
+	return repositoryTarget{
+		ID:                           repositoryID,
+		FullName:                     fullName,
+		GitHubInstallationRepository: &linkID,
+		InstallationID:               &installationID,
+		InstallationStatus:           &status,
+	}
+}
+
 func (s stubStore) EnsureRepositoryExists(ctx context.Context, repositoryID string) error {
 	if s.ensureRepositoryExistsFn == nil {
 		return nil
@@ -91,7 +104,7 @@ func (s stubStore) Cancel(ctx context.Context, id string, at time.Time) (SyncJob
 
 func (s stubStore) GetRepositoryTarget(ctx context.Context, repositoryID string) (repositoryTarget, error) {
 	if s.getRepositoryTargetFn == nil {
-		return repositoryTarget{}, nil
+		return connectedRepositoryTarget(repositoryID, "pangikp/devlens-api"), nil
 	}
 	return s.getRepositoryTargetFn(ctx, repositoryID)
 }
@@ -313,7 +326,7 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 		},
 		listByRepositoryFn: func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		markRunningFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
 			if progress != 5 {
@@ -422,11 +435,13 @@ func TestServiceCreateConflictWhenActiveJobExists(t *testing.T) {
 			t.Fatal("create should not be called")
 			return SyncJobResponse{}, nil
 		},
-		getByIDFn:             func(context.Context, string) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
-		listByRepositoryFn:    func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
-		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) { return repositoryTarget{}, nil },
-		markRunningFn:         func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
-		updateProgressFn:      func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		getByIDFn:          func(context.Context, string) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		listByRepositoryFn: func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
+		},
+		markRunningFn:    func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		updateProgressFn: func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
 		markFailedFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
@@ -440,6 +455,80 @@ func TestServiceCreateConflictWhenActiveJobExists(t *testing.T) {
 	_, err := svc.Create(context.Background(), "repo-1", CreateSyncRequest{})
 	if !errors.Is(err, ErrSyncJobConflict) {
 		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
+func TestEnqueueRejectsRepositoryWithoutInstallationSelection(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubStore{
+		ensureRepositoryExistsFn: func(context.Context, string) error { return nil },
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return repositoryTarget{
+				ID:       "repo-1",
+				FullName: "devlens-labs/devlens-api",
+			}, nil
+		},
+		hasActiveJobFn: func(context.Context, string) (bool, error) {
+			t.Fatal("active job check should not run when repository is not eligible")
+			return false, nil
+		},
+		createFn: func(context.Context, createParams) (SyncJobResponse, error) {
+			t.Fatal("create should not run when repository is not eligible")
+			return SyncJobResponse{}, nil
+		},
+	}, stubGitHubClient{}, nil)
+
+	_, err := svc.Enqueue(context.Background(), "repo-1", CreateSyncRequest{})
+	if !errors.Is(err, ErrRepositoryNotSelected) {
+		t.Fatalf("expected ErrRepositoryNotSelected, got %v", err)
+	}
+}
+
+func TestProcessPendingFailsRepositoryWithoutConnectedInstallation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	failedMessage := ""
+
+	svc := NewService(stubStore{
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusPending, CreatedAt: now}, nil
+		},
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			linkID := "gir-1"
+			status := "installation_required"
+			return repositoryTarget{
+				ID:                           "repo-1",
+				FullName:                     "devlens-labs/devlens-api",
+				GitHubInstallationRepository: &linkID,
+				InstallationStatus:           &status,
+			}, nil
+		},
+		markRunningFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		markFailedFn: func(_ context.Context, id string, message string, _ time.Time) (SyncJobResponse, error) {
+			failedMessage = message
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusFailed, Progress: 5, CreatedAt: now}, nil
+		},
+	}, stubGitHubClient{
+		getRepositoryFn: func(context.Context, string, string) (githubclient.Repository, error) {
+			t.Fatal("github client should not be called when installation is not connected")
+			return githubclient.Repository{}, nil
+		},
+	}, nil)
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.ProcessPending(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("expected failed job result, got error %v", err)
+	}
+	if result.Status != StatusFailed {
+		t.Fatalf("expected failed result, got %+v", result)
+	}
+	if failedMessage != ErrRepositoryNotConnected.Error() {
+		t.Fatalf("expected failure message %q, got %q", ErrRepositoryNotConnected.Error(), failedMessage)
 	}
 }
 
@@ -466,7 +555,7 @@ func TestProcessPendingUsesStoredFullSyncOptions(t *testing.T) {
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
@@ -549,7 +638,7 @@ func TestProcessPendingResumesPullRequestCheckpointPage(t *testing.T) {
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
@@ -629,7 +718,7 @@ func TestServiceCreateMarksFailedWhenGitHubErrors(t *testing.T) {
 		},
 		listByRepositoryFn: func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		markRunningFn: func(context.Context, string, int, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusRunning, CreatedAt: now}, nil
@@ -687,9 +776,11 @@ func TestServiceListValidation(t *testing.T) {
 			t.Fatal("list should not be called")
 			return ListResult{}, nil
 		},
-		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) { return repositoryTarget{}, nil },
-		markRunningFn:         func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
-		updateProgressFn:      func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
+		},
+		markRunningFn:    func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		updateProgressFn: func(context.Context, string, int, time.Time) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
 		markFailedFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
@@ -725,7 +816,7 @@ func TestServiceThrottlesWhenGitHubRateLimitIsLow(t *testing.T) {
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },

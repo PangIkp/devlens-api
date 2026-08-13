@@ -28,6 +28,11 @@ type SyncJobHandler struct {
 	audit      AuditLogger
 }
 
+const (
+	errorCodeGitHubInstallationRequired   = "GITHUB_INSTALLATION_REQUIRED"
+	errorCodeRepositoryOnboardingRequired = "REPOSITORY_ONBOARDING_REQUIRED"
+)
+
 func NewSyncJobHandler(service SyncJobService, deps ...any) *SyncJobHandler {
 	authz, auditLogger := resolveHandlerDeps(deps)
 	return &SyncJobHandler{service: service, authorizer: authz, audit: auditLogger}
@@ -198,6 +203,10 @@ func writeSyncJobError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, syncjob.ErrRepositoryNotFound):
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Repository not found"))
+	case errors.Is(err, syncjob.ErrRepositoryNotConnected):
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubInstallationRequired, "GitHub installation must be connected before syncing this repository"))
+	case errors.Is(err, syncjob.ErrRepositoryNotSelected):
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeRepositoryOnboardingRequired, "Repository must be selected from the GitHub installation before syncing"))
 	case errors.Is(err, syncjob.ErrSyncJobNotFound):
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Sync job not found"))
 	case errors.Is(err, syncjob.ErrSyncJobConflict):

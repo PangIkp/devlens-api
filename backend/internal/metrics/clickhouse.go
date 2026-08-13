@@ -398,7 +398,7 @@ func (s *Service) listMetricsDaily(ctx context.Context, repositoryID string, bou
 SELECT
   metric_version,
   repository_id,
-  toString(metric_date) AS metric_date,
+  metric_date,
   pr_cycle_time_minutes,
   review_wait_minutes,
   average_review_minutes,
@@ -408,14 +408,14 @@ SELECT
   deployment_frequency,
   change_failure_rate,
   review_coverage,
-  pr_count,
-  merged_pr_count,
-  reviewed_pr_count,
-  review_wait_sample_count,
-  review_time_sample_count,
-  successful_deployment_count,
-  failed_deployment_count,
-  toString(calculated_at) AS calculated_at
+  toInt32(pr_count) AS pr_count,
+  toInt32(merged_pr_count) AS merged_pr_count,
+  toInt32(reviewed_pr_count) AS reviewed_pr_count,
+  toInt32(review_wait_sample_count) AS review_wait_sample_count,
+  toInt32(review_time_sample_count) AS review_time_sample_count,
+  toInt32(successful_deployment_count) AS successful_deployment_count,
+  toInt32(failed_deployment_count) AS failed_deployment_count,
+  calculated_at
 FROM metrics_daily
 FINAL
 WHERE repository_id = '%s'
@@ -438,8 +438,8 @@ SELECT
   repository_id,
   environment,
   status,
-  toString(deployed_at) AS deployed_at,
-  toString(synced_at) AS synced_at
+  deployed_at,
+  synced_at
 FROM deployments
 FINAL
 WHERE repository_id = '%s'

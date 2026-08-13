@@ -13,6 +13,29 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+func newStubSyncJobService() stubSyncJobService {
+	return stubSyncJobService{
+		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		enqueueFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		listFn: func(context.Context, syncjob.ListParams) (syncjob.ListResult, error) {
+			return syncjob.ListResult{}, nil
+		},
+		retryFn: func(context.Context, string) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		cancelFn: func(context.Context, string) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+	}
+}
+
 type stubSyncJobService struct {
 	createFn  func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
 	enqueueFn func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
@@ -256,5 +279,65 @@ func TestCancelSyncJobHandlerSuccess(t *testing.T) {
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+}
+
+func TestCreateSyncJobHandlerRejectsRepositoryWithoutOnboarding(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	service := newStubSyncJobService()
+	service.enqueueFn = func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+		return syncjob.SyncJobResponse{}, syncjob.ErrRepositoryNotSelected
+	}
+	NewSyncJobHandler(service).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/sync", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error.Code != errorCodeRepositoryOnboardingRequired {
+		t.Fatalf("expected code %q, got %q", errorCodeRepositoryOnboardingRequired, body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "Repository must be selected") {
+		t.Fatalf("unexpected body %+v", body)
+	}
+}
+
+func TestCreateSyncJobHandlerRejectsRepositoryWithoutConnectedInstallation(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	service := newStubSyncJobService()
+	service.enqueueFn = func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+		return syncjob.SyncJobResponse{}, syncjob.ErrRepositoryNotConnected
+	}
+	NewSyncJobHandler(service).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/sync", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error.Code != errorCodeGitHubInstallationRequired {
+		t.Fatalf("expected code %q, got %q", errorCodeGitHubInstallationRequired, body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "GitHub installation must be connected") {
+		t.Fatalf("unexpected body %+v", body)
 	}
 }

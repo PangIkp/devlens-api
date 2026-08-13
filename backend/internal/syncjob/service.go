@@ -128,6 +128,13 @@ func (s *Service) Enqueue(ctx context.Context, repositoryID string, req CreateSy
 	if err := s.store.EnsureRepositoryExists(ctx, repositoryID); err != nil {
 		return SyncJobResponse{}, err
 	}
+	target, err := s.store.GetRepositoryTarget(ctx, repositoryID)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+	if err := validateRepositoryTarget(target); err != nil {
+		return SyncJobResponse{}, err
+	}
 
 	active, err := s.store.HasActiveJob(ctx, repositoryID)
 	if err != nil {
@@ -284,6 +291,9 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	if err != nil {
 		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
+	if err := validateRepositoryTarget(target); err != nil {
+		return s.failJob(ctx, job, options.mode, runStarted, err)
+	}
 
 	owner, repoName, err := splitFullName(target.FullName)
 	if err != nil {
@@ -388,6 +398,26 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		s.recordSyncDuration(options.mode, "completed", time.Since(runStarted))
 	}
 	return completedJob, err
+}
+
+func validateRepositoryTarget(target repositoryTarget) error {
+	if target.GitHubInstallationRepository == nil || strings.TrimSpace(*target.GitHubInstallationRepository) == "" {
+		return ErrRepositoryNotSelected
+	}
+	if target.InstallationID == nil || *target.InstallationID < 1 {
+		return ErrRepositoryNotConnected
+	}
+	if target.InstallationStatus == nil {
+		return ErrRepositoryNotConnected
+	}
+	switch strings.TrimSpace(*target.InstallationStatus) {
+	case "connected":
+		return nil
+	case "installation_required":
+		return ErrRepositoryNotConnected
+	default:
+		return ErrRepositoryNotConnected
+	}
 }
 
 func (s *Service) failJob(ctx context.Context, job SyncJobResponse, mode string, runStarted time.Time, err error) (SyncJobResponse, error) {

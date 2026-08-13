@@ -43,7 +43,7 @@ func TestWorkerProcessesPendingJobsImmediatelyAndOnInterval(t *testing.T) {
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: time.Now().UTC()}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
@@ -134,7 +134,7 @@ func TestWorkerHonorsBatchSizeAndConcurrency(t *testing.T) {
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusCompleted, Progress: progress, CreatedAt: time.Now().UTC()}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
@@ -233,7 +233,7 @@ func TestWorkerHandlesLargePendingBatchWithinConfiguredConcurrency(t *testing.T)
 			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: time.Now().UTC()}, nil
 		},
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
-			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+			return connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api"), nil
 		},
 		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
 		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },

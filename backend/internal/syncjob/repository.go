@@ -268,9 +268,12 @@ func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID strin
 	}
 
 	return repositoryTarget{
-		ID:           row.ID.String(),
-		FullName:     row.FullName,
-		LastSyncedAt: optionalTimeValue(row.LastSyncedAt),
+		ID:                           row.ID.String(),
+		FullName:                     row.FullName,
+		LastSyncedAt:                 optionalTimeValue(row.LastSyncedAt),
+		GitHubInstallationRepository: optionalUUIDText(row.GithubInstallationRepositoryID),
+		InstallationID:               optionalInt64Value(row.InstallationID),
+		InstallationStatus:           optionalTextValue(row.InstallationStatus),
 	}, nil
 }
 
@@ -753,6 +756,30 @@ func parseUUID(value string) pgtype.UUID {
 	var id pgtype.UUID
 	_ = id.Scan(value)
 	return id
+}
+
+func optionalUUIDText(value pgtype.UUID) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String()
+	return &result
+}
+
+func optionalTextValue(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String
+	return &result
+}
+
+func optionalInt64Value(value pgtype.Int8) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
 }
 
 func nullableUUID(value *string) pgtype.UUID {
