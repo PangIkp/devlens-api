@@ -42,15 +42,19 @@ type Dependencies struct {
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router := chi.NewRouter()
 	rateLimiter := middleware.NewRateLimiter(deps.RateLimitRequests, deps.RateLimitWindow)
+	httpMetrics := middleware.NewHTTPMetrics()
 
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.TraceID())
 	router.Use(middleware.NoStore())
 	router.Use(middleware.CORS(deps.AllowedOrigins))
 	router.Use(middleware.RateLimit(rateLimiter))
+	router.Use(httpMetrics.Middleware())
 	router.Use(middleware.Recoverer(logger))
 	router.Use(middleware.RequestLogger(logger))
 	router.Use(middleware.OptionalAuth(deps.Authenticator))
+
+	router.Get("/metrics", httpMetrics.Handler().ServeHTTP)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, http.StatusNotFound, Error{

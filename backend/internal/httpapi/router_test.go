@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,6 +337,33 @@ func TestRouterSetsNoStoreCacheHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Expires"); got != "0" {
 		t.Fatalf("unexpected expires %q", got)
+	}
+}
+
+func TestMetricsEndpointIncludesRecordedRequest(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	healthRec := httptest.NewRecorder()
+	router.ServeHTTP(healthRec, healthReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; version=0.0.4" {
+		t.Fatalf("unexpected metrics content type %q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `devlens_http_requests_total{method="GET",path="/api/v1/health",status="200"} 1`) {
+		t.Fatalf("unexpected metrics body %q", body)
 	}
 }
 
