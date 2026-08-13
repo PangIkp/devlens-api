@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/insights"
@@ -260,23 +261,52 @@ func (c *Consumer) recordLag() {
 }
 
 func (c *Client) ensureStream() error {
-	_, err := c.js.StreamInfo(streamName)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, nats.ErrStreamNotFound) {
+	info, err := c.js.StreamInfo(streamName)
+	if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
 		return fmt.Errorf("inspect insight stream: %w", err)
 	}
-	_, err = c.js.AddStream(&nats.StreamConfig{
+
+	desired := &nats.StreamConfig{
 		Name:      streamName,
 		Subjects:  []string{workSubject, dlqSubject},
 		Retention: nats.LimitsPolicy,
 		Storage:   nats.FileStorage,
-	})
-	if err != nil {
-		return fmt.Errorf("create insight stream: %w", err)
 	}
+
+	if errors.Is(err, nats.ErrStreamNotFound) {
+		if _, err := c.js.AddStream(desired); err != nil {
+			return fmt.Errorf("create insight stream: %w", err)
+		}
+		return nil
+	}
+
+	if insightStreamMatches(info.Config, *desired) {
+		return nil
+	}
+
+	updated := info.Config
+	updated.Subjects = append([]string(nil), desired.Subjects...)
+	updated.Retention = desired.Retention
+	updated.Storage = desired.Storage
+
+	if _, err := c.js.UpdateStream(&updated); err != nil {
+		return fmt.Errorf("update insight stream: %w", err)
+	}
+
 	return nil
+}
+
+func insightStreamMatches(current nats.StreamConfig, desired nats.StreamConfig) bool {
+	return current.Name == desired.Name &&
+		current.Retention == desired.Retention &&
+		current.Storage == desired.Storage &&
+		slices.Equal(sortedSubjects(current.Subjects), sortedSubjects(desired.Subjects))
+}
+
+func sortedSubjects(subjects []string) []string {
+	items := append([]string(nil), subjects...)
+	slices.Sort(items)
+	return items
 }
 
 func shouldDeadLetter(msg *nats.Msg) bool {

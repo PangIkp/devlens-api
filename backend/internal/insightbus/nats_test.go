@@ -72,3 +72,45 @@ func TestConsumerRefreshesRepositoryFromEvent(t *testing.T) {
 		t.Fatalf("expected to %s, got %s", to, generator.to)
 	}
 }
+
+func TestInsightStreamMatchesIgnoresSubjectOrder(t *testing.T) {
+	t.Parallel()
+
+	current := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{dlqSubject, workSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+	desired := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{workSubject, dlqSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+
+	if !insightStreamMatches(current, desired) {
+		t.Fatal("expected stream configs with reordered subjects to match")
+	}
+}
+
+func TestInsightStreamMatchesDetectsSubjectDrift(t *testing.T) {
+	t.Parallel()
+
+	current := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{workSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+	desired := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{workSubject, dlqSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+
+	if insightStreamMatches(current, desired) {
+		t.Fatal("expected stream configs with missing subjects not to match")
+	}
+}

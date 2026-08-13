@@ -6,6 +6,7 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
+	"github.com/nats-io/nats.go"
 )
 
 func TestCalculationRequestForEventUsesEventRange(t *testing.T) {
@@ -49,5 +50,47 @@ func TestCalculationRequestForEventFallsBackToFullHistory(t *testing.T) {
 	}
 	if !req.To.Equal(occurredAt) {
 		t.Fatalf("expected to %s, got %s", occurredAt, req.To)
+	}
+}
+
+func TestMetricsStreamMatchesIgnoresSubjectOrder(t *testing.T) {
+	t.Parallel()
+
+	current := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{dlqSubject, eventSubject, workSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+	desired := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{eventSubject, workSubject, dlqSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+
+	if !metricsStreamMatches(current, desired) {
+		t.Fatal("expected stream configs with reordered subjects to match")
+	}
+}
+
+func TestMetricsStreamMatchesDetectsSubjectDrift(t *testing.T) {
+	t.Parallel()
+
+	current := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{eventSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+	desired := nats.StreamConfig{
+		Name:      streamName,
+		Subjects:  []string{eventSubject, workSubject, dlqSubject},
+		Retention: nats.LimitsPolicy,
+		Storage:   nats.FileStorage,
+	}
+
+	if metricsStreamMatches(current, desired) {
+		t.Fatal("expected stream configs with missing subjects not to match")
 	}
 }

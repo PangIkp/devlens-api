@@ -41,7 +41,7 @@ func EnsureSchema(ctx context.Context, db *DB, cfg ...config.DataLifecycleConfig
 }
 
 func schemaStatements(policy RetentionPolicy) []string {
-	rawTTL := fmt.Sprintf("TTL synced_at + INTERVAL %d DAY DELETE", policy.RawDays)
+	rawTTL := fmt.Sprintf("TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE", policy.RawDays)
 	aggregateTTL := fmt.Sprintf("TTL toDateTime(metric_date) + INTERVAL %d DAY DELETE", policy.AggregateDays)
 
 	return []string{
@@ -154,12 +154,12 @@ func schemaStatements(policy RetentionPolicy) []string {
 	ORDER BY (repository_id, metric_date)
 	%s`, aggregateTTL),
 		`ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS metric_version UInt32 DEFAULT 1`,
-		fmt.Sprintf(`ALTER TABLE pull_requests MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
-		fmt.Sprintf(`ALTER TABLE pull_request_reviews MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
-		fmt.Sprintf(`ALTER TABLE deployments MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
-		fmt.Sprintf(`ALTER TABLE commit_events MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
-		fmt.Sprintf(`ALTER TABLE workflow_events MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
-		fmt.Sprintf(`ALTER TABLE file_changes MODIFY TTL synced_at + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE pull_requests MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE pull_request_reviews MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE deployments MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE commit_events MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE workflow_events MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
+		fmt.Sprintf(`ALTER TABLE file_changes MODIFY TTL toDateTime(synced_at) + INTERVAL %d DAY DELETE`, policy.RawDays),
 		fmt.Sprintf(`ALTER TABLE metrics_daily MODIFY TTL toDateTime(metric_date) + INTERVAL %d DAY DELETE`, policy.AggregateDays),
 	}
 }
