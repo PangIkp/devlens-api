@@ -189,7 +189,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	webhookRepository := githubwebhook.NewRepository(postgresDB, cfg.DataLifecycle.WebhookPayloadRetentionDays)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService, appMetrics)
 	webhookService.ConfigureRetryProcessing(cfg.Sync.WebhookRetryConcurrency, cfg.Sync.WebhookRetryTimeout)
-	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)
+	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, authorizationService, auditService)
 	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, cfg.Sync.WebhookRetryBatchSize, appMetrics)
 
 	var metricsBusClient *metricsbus.Client
