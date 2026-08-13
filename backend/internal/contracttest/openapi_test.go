@@ -47,6 +47,7 @@ func TestOpenAPIDocumentsOperationalBehavior(t *testing.T) {
 		"TraceID:",
 		"Responses include `X-Trace-Id` for request tracing.",
 		"The API may return `429 Too Many Requests` when server-side rate limits are exceeded.",
+		"Dynamic API responses include `Cache-Control: no-store`.",
 	}
 
 	for _, entry := range expectedEntries {

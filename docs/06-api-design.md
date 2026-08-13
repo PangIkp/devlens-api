@@ -53,6 +53,7 @@ If any conflict exists, **openapi.yaml wins**.
 - Idempotent operations where applicable
 - Responses include `X-Trace-Id` for request tracing
 - APIs may return `429 Too Many Requests` when rate limits are exceeded
+- Dynamic API responses include `Cache-Control: no-store`
 
 ---
 

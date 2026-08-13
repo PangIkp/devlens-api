@@ -9,6 +9,7 @@ info:
     Runtime behavior:
     - Responses include `X-Trace-Id` for request tracing.
     - The API may return `429 Too Many Requests` when server-side rate limits are exceeded.
+    - Dynamic API responses include `Cache-Control: no-store`.
 
     Related documents:
     - 01-business-logic-architecture.md
