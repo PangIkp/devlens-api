@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -677,6 +679,102 @@ func TestRetryFailedPendingContinuesAfterSingleDeliveryFailure(t *testing.T) {
 	}
 	if processed[len(processed)-1] != "delivery-ok:processed" {
 		t.Fatalf("expected second delivery to complete processing, got %#v", processed)
+	}
+}
+
+func TestHandleProcessesWebhookBurstConcurrently(t *testing.T) {
+	t.Parallel()
+
+	const deliveries = 40
+
+	var enqueued int32
+	var projected int32
+	var maxActive int32
+	var active int32
+
+	service := NewService(stubStore{
+		findRepositoryByGithubIDFn: func(_ context.Context, githubID int64) (*repositoryMatch, error) {
+			if githubID != 42 {
+				t.Fatalf("unexpected github id %d", githubID)
+			}
+			return &repositoryMatch{ID: "repo-1"}, nil
+		},
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+			if repositoryID == nil || *repositoryID != "repo-1" {
+				t.Fatalf("unexpected repository id %v", repositoryID)
+			}
+			if installationID != nil {
+				t.Fatalf("did not expect installation id %v", installationID)
+			}
+			if eventType != "pull_request" || action == nil || *action != "opened" || !enqueueJob {
+				t.Fatalf("unexpected enqueue args for %s", deliveryID)
+			}
+			atomic.AddInt32(&enqueued, 1)
+			return enqueueResult{
+				deliveryID:       deliveryID,
+				syncJobID:        stringPtr("job-" + deliveryID),
+				receivedAt:       time.Now().UTC(),
+				processingStatus: "enqueued",
+			}, nil
+		},
+		projectRepositoryEventFn: func(_ context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+			current := atomic.AddInt32(&active, 1)
+			for {
+				seen := atomic.LoadInt32(&maxActive)
+				if current <= seen || atomic.CompareAndSwapInt32(&maxActive, seen, current) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			atomic.AddInt32(&active, -1)
+
+			if repositoryID != "repo-1" || eventType != "pull_request" {
+				t.Fatalf("unexpected projection args")
+			}
+			if payload.PullRequest.ID == 0 || payload.PullRequest.Number == 0 {
+				t.Fatalf("expected pull request payload to be parsed: %+v", payload.PullRequest)
+			}
+			atomic.AddInt32(&projected, 1)
+			return nil
+		},
+	}, "top-secret", nil, nil)
+
+	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"},"pull_request":{"id":1001,"number":12,"title":"Add metrics","state":"open","draft":false,"created_at":"2026-07-27T11:59:00Z","updated_at":"2026-07-27T12:00:00Z","user":{"login":"pangikp"}}}`)
+	signature := sign("top-secret", body)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, deliveries)
+	for i := 0; i < deliveries; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, err := service.Handle(context.Background(), HandleRequest{
+				DeliveryID: fmt.Sprintf("delivery-burst-%d", idx),
+				EventType:  "pull_request",
+				Signature:  signature,
+				Body:       body,
+			})
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("unexpected burst handling error: %v", err)
+		}
+	}
+	if got := atomic.LoadInt32(&enqueued); got != deliveries {
+		t.Fatalf("expected %d enqueued deliveries, got %d", deliveries, got)
+	}
+	if got := atomic.LoadInt32(&projected); got != deliveries {
+		t.Fatalf("expected %d projected deliveries, got %d", deliveries, got)
+	}
+	if atomic.LoadInt32(&maxActive) < 2 {
+		t.Fatalf("expected concurrent webhook projection, got max active %d", maxActive)
 	}
 }
 

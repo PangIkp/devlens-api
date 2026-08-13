@@ -261,6 +261,53 @@ func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
 	}
 }
 
+func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testing.T) {
+	t.Parallel()
+
+	organizationID := "org-1"
+	var gotStatus string
+	var gotDisconnectedAt *time.Time
+	var clearedRepositoryCount int
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn: func(context.Context, int64) (*string, error) {
+			return &organizationID, nil
+		},
+		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			return nil, nil
+		},
+		updateLifeFn: func(_ context.Context, _ int64, status string, _ *time.Time, disconnectedAt *time.Time) error {
+			gotStatus = status
+			gotDisconnectedAt = disconnectedAt
+			return nil
+		},
+		replaceFn: func(_ context.Context, _ string, items []accessibleRepositoryRecord) error {
+			clearedRepositoryCount = len(items)
+			return nil
+		},
+		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
+			return ListAccessibleRepositoriesResult{}, nil
+		},
+		getReposFn: func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error) { return nil, nil },
+		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
+	}, nil, nil)
+
+	if err := service.HandleInstallationEvent(context.Background(), "installation", 42, "deleted"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if gotStatus != StateInstallationRequired {
+		t.Fatalf("expected lifecycle status %q, got %q", StateInstallationRequired, gotStatus)
+	}
+	if gotDisconnectedAt == nil {
+		t.Fatal("expected disconnected_at to be set")
+	}
+	if clearedRepositoryCount != 0 {
+		t.Fatalf("expected repositories to be cleared, got %d items", clearedRepositoryCount)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

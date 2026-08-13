@@ -2,47 +2,99 @@
 
 DevLens is an Engineering Intelligence Platform for collecting GitHub workflow data and turning it into engineering metrics and insights.
 
-This repository currently contains the initial backend foundation in [`backend`](./backend) plus local development infrastructure for PostgreSQL, ClickHouse, and NATS JetStream.
+This repository contains the DevLens backend in [`backend`](./backend) plus local development infrastructure for PostgreSQL, ClickHouse, and NATS JetStream.
 
-## Current Scope
+## Implemented API Surface
 
-- Go API bootstrap
-- `/api/v1/health`
-- `POST /api/v1/organizations`
-- `GET /api/v1/organizations`
-- `GET /api/v1/organizations/{organizationId}`
-- `GET /api/v1/organizations/{organizationId}/members`
-- `POST /api/v1/organizations/{organizationId}/members`
-- `PATCH /api/v1/organizations/{organizationId}/members/{memberId}`
-- `DELETE /api/v1/organizations/{organizationId}/members/{memberId}`
-- `POST /api/v1/organizations/{organizationId}/repositories`
-- `GET /api/v1/organizations/{organizationId}/repositories`
-- `GET /api/v1/repositories/{repositoryId}`
-- `PATCH /api/v1/repositories/{repositoryId}`
-- `GET /api/v1/repositories/{repositoryId}/dashboard/summary`
-- `GET /api/v1/repositories/{repositoryId}/metrics/pull-requests`
-- `GET /api/v1/repositories/{repositoryId}/metrics/reviews`
-- `GET /api/v1/repositories/{repositoryId}/metrics/deployments`
-- `GET /api/v1/repositories/{repositoryId}/metrics/hotspots`
-- `POST /api/v1/repositories/{repositoryId}/sync`
-- `GET /api/v1/repositories/{repositoryId}/sync-jobs`
-- `GET /api/v1/sync-jobs/{syncJobId}`
-- `POST /api/v1/github/webhook`
-- GitHub REST client foundation for repository, pull request, review, and commit ingestion
-- PostgreSQL persistence for `pull_requests` and `pull_request_reviews`
-- transactional webhook delivery persistence and sync job enqueue
-- ClickHouse-backed daily metrics storage for dashboard queries
-- NATS JetStream trigger for repository metric recalculation after sync completion
-- GitHub App connection flow for installation start, callback, repository discovery, and selection
-- bearer-token session auth with login, refresh, logout, and `/api/v1/me`
-- organization and repository authorization enforcement
-- audit logging, trace IDs, rate limiting, and no-store cache headers
-- PostgreSQL pool initialization with `pgxpool`
-- SQL migrations and `sqlc` foundation
-- environment-based configuration
-- structured logging with `log/slog`
-- chi router and core middleware
-- Docker Compose for local dependencies
+- Auth:
+  - `POST /api/v1/auth/login`
+  - `POST /api/v1/auth/refresh`
+  - `POST /api/v1/auth/logout`
+  - `GET /api/v1/me`
+- Health:
+  - `GET /api/v1/health`
+  - `GET /api/v1/readiness`
+- Organizations and members:
+  - `POST /api/v1/organizations`
+  - `GET /api/v1/organizations`
+  - `GET /api/v1/organizations/{organizationId}`
+  - `PATCH /api/v1/organizations/{organizationId}`
+  - `DELETE /api/v1/organizations/{organizationId}`
+  - `GET /api/v1/organizations/{organizationId}/members`
+  - `POST /api/v1/organizations/{organizationId}/members`
+  - `PATCH /api/v1/organizations/{organizationId}/members/{memberId}`
+  - `DELETE /api/v1/organizations/{organizationId}/members/{memberId}`
+- GitHub App connection:
+  - `GET /api/v1/organizations/{organizationId}/github/connection`
+  - `POST /api/v1/organizations/{organizationId}/github/installations/start`
+  - `GET /api/v1/organizations/{organizationId}/github/installations/callback`
+  - `GET /api/v1/organizations/{organizationId}/github/repositories`
+  - `POST /api/v1/organizations/{organizationId}/github/repositories/select`
+- Repositories and pull requests:
+  - `POST /api/v1/organizations/{organizationId}/repositories`
+  - `GET /api/v1/organizations/{organizationId}/repositories`
+  - `GET /api/v1/repositories/{repositoryId}`
+  - `PATCH /api/v1/repositories/{repositoryId}`
+  - `GET /api/v1/pull-requests`
+  - `GET /api/v1/pull-requests/{pullRequestId}`
+- Sync jobs:
+  - `POST /api/v1/repositories/{repositoryId}/sync`
+  - `GET /api/v1/repositories/{repositoryId}/sync-jobs`
+  - `GET /api/v1/sync-jobs/{syncJobId}`
+  - `POST /api/v1/sync-jobs/{syncJobId}/retry`
+  - `POST /api/v1/sync-jobs/{syncJobId}/cancel`
+- Webhooks:
+  - `POST /api/v1/github/webhook`
+  - `POST /api/v1/webhooks/github`
+  - `POST /api/v1/github/webhook-deliveries/{deliveryId}/retry`
+- Metrics and dashboard:
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/summary`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/pr-cycle-time`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/review-wait-time`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/review-queue`
+  - `GET /api/v1/repositories/{repositoryId}/metrics`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/pull-requests`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/reviews`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/deployments`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/hotspots`
+- Insights:
+  - `GET /api/v1/organizations/{organizationId}/insights`
+  - `GET /api/v1/insights`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/review`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/dismiss`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/reopen`
+
+## Contract Notes
+
+- `docs/openapi.yaml` is the source of truth for public API contract.
+- Canonical repository collection path is organization-scoped: `GET /api/v1/organizations/{organizationId}/repositories`.
+- Canonical sync-job collection path is repository-scoped: `GET /api/v1/repositories/{repositoryId}/sync-jobs`.
+- Top-level `GET /api/v1/insights` is supported as a query-scoped alias and requires `organizationId` in the query string.
+- Top-level `GET /api/v1/repositories` and `GET /api/v1/sync-jobs` are not implemented in the current contract.
+- Webhook ingestion supports both `POST /api/v1/github/webhook` and `POST /api/v1/webhooks/github`.
+- Selected read endpoints support `ETag` and `If-None-Match`:
+  - `GET /api/v1/me`
+  - `GET /api/v1/organizations/{organizationId}/github/connection`
+  - `GET /api/v1/organizations/{organizationId}/github/repositories`
+
+## Data Readiness
+
+- Production-like now:
+  - auth/session APIs
+  - organization/member/repository CRUD
+  - GitHub App connection flow
+  - sync job APIs
+  - webhook delivery ingestion and retry
+- Backed by synced analytics data and may legitimately return empty arrays or zeroed aggregates when a repository has not been synced yet or the selected date range has no data:
+  - dashboard summary
+  - pull request metrics
+  - review metrics
+  - repository metrics
+  - review queue
+  - insights
+- Require richer raw ingestion before results become useful:
+  - deployment metrics depend on workflow/deployment data
+  - hotspots depend on file change data
 
 ## Quick Start
 
@@ -137,12 +189,12 @@ Behavior notes:
 - organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
 - repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
 - repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
-- manual sync persists pull requests and pull request reviews into PostgreSQL
+- manual sync persists repository metadata, pull requests, reviews, commits, workflow runs, deployments, and file changes
 - incremental sync currently uses `repositories.last_synced_at` as the cutoff
 - `last_synced_at` is a coarse repository-level checkpoint and may need to evolve into finer-grained sync checkpoints in a future phase
 - webhook handling validates `X-Hub-Signature-256`, stores `github_delivery_id`, and enqueues sync jobs asynchronously
 - metrics are calculated from PostgreSQL raw data and stored in ClickHouse `metrics_daily`
-- `deployments` and `file_changes` raw schema exist in PostgreSQL for analytics completeness, but ingestion for those sources is intentionally deferred
+- deployment, workflow, commit, and file-change raw analytics are synced into ClickHouse for dashboard, hotspot, and insight calculations
 - hotspot ranking reads raw `file_changes` from ClickHouse
 - deployment filtering by `environment` reads raw deployment analytics data from ClickHouse when available
 - GitHub sync can resolve installation access through the backend GitHub App flow without exposing installation tokens to the frontend

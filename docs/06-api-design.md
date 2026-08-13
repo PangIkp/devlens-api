@@ -167,6 +167,29 @@ GET    /repositories/{repositoryId}/metrics/hotspots
 
 Refer to `openapi.yaml` for the authoritative list.
 
+Current contract clarifications:
+
+- repository collections are organization-scoped in the public contract:
+
+```text
+GET /organizations/{organizationId}/repositories
+```
+
+- sync job collections are repository-scoped in the public contract:
+
+```text
+GET /repositories/{repositoryId}/sync-jobs
+```
+
+- `GET /insights` is a supported alias for organization insight listing, but it requires `organizationId` in the query string
+- top-level `GET /repositories` and `GET /sync-jobs` are not part of the current contract
+- webhook ingestion exposes both:
+
+```text
+POST /github/webhook
+POST /webhooks/github
+```
+
 ---
 
 # Error Model
@@ -214,6 +237,13 @@ Metrics endpoints return calculated data.
 They must not trigger GitHub synchronization during the request.
 
 If data is unavailable, return the contract defined in `openapi.yaml` instead of calculating live.
+
+Current readiness expectations:
+
+- auth, organization/member/repository CRUD, GitHub App connection, sync jobs, and webhook delivery flows are usable as primary backend APIs
+- dashboard, metrics, and insights endpoints depend on completed sync plus available analytics data for the selected date range
+- empty arrays or zero-value aggregates are valid when a repository is newly connected or the selected range has no matching data
+- hotspot and deployment-oriented endpoints become meaningful only after file change, workflow, and deployment ingestion has populated analytics storage
 
 ---
 
