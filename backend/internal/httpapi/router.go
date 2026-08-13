@@ -45,6 +45,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.TraceID())
+	router.Use(middleware.NoStore())
 	router.Use(middleware.CORS(deps.AllowedOrigins))
 	router.Use(middleware.RateLimit(rateLimiter))
 	router.Use(middleware.Recoverer(logger))

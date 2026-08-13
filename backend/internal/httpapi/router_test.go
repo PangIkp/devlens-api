@@ -317,6 +317,28 @@ func TestRouterSetsTraceIDHeader(t *testing.T) {
 	}
 }
 
+func TestRouterSetsNoStoreCacheHeaders(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected cache control %q", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("unexpected pragma %q", got)
+	}
+	if got := rec.Header().Get("Expires"); got != "0" {
+		t.Fatalf("unexpected expires %q", got)
+	}
+}
+
 func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	t.Parallel()
 
