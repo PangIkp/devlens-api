@@ -9,7 +9,7 @@ POSTGRES_DSN ?= postgres://devlens:devlens@localhost:5432/devlens?sslmode=disabl
 ENV_FILE := $(PWD)/.env
 LOAD_ENV = if [ -f "$(ENV_FILE)" ]; then set -a; source "$(ENV_FILE)"; set +a; fi;
 
-.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook
+.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook backup-postgres restore-postgres
 
 fmt:
 	$(GO_RUN) gofmt -w .
@@ -49,3 +49,10 @@ load-dashboard:
 load-webhook:
 	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
 	@$(LOAD_ENV) cd backend && $(GO_TOOL_ENV) go run ./cmd/loadtest -scenario webhook -requests "$${LOADTEST_REQUESTS:-100}" -concurrency "$${LOADTEST_CONCURRENCY:-10}" -webhook-event "$${LOADTEST_WEBHOOK_EVENT:-pull_request}" -webhook-body "$${LOADTEST_WEBHOOK_BODY:-{\"action\":\"opened\",\"repository\":{\"id\":42,\"full_name\":\"pangikp/devlens-api\"}}}"
+
+backup-postgres:
+	@bash "$(PWD)/scripts/backup-postgres.sh" "$${BACKUP_FILE:-}"
+
+restore-postgres:
+	@if [ -z "$${BACKUP_FILE:-}" ]; then echo "BACKUP_FILE is required"; exit 2; fi
+	@bash "$(PWD)/scripts/restore-postgres.sh" "$${BACKUP_FILE}"

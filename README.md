@@ -87,6 +87,13 @@ LOADTEST_REPOSITORY_ID=<repository-uuid> make load-dashboard
 GITHUB_WEBHOOK_SECRET=<your-webhook-secret> make load-webhook
 ```
 
+8. Backup and restore PostgreSQL:
+
+```sh
+make backup-postgres
+BACKUP_FILE=/absolute/path/to/backup.dump make restore-postgres
+```
+
 ## Organization API
 
 Current `Organization` shape:
