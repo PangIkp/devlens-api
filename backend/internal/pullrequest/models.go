@@ -20,6 +20,19 @@ type FileChange struct {
 	CommitCount int    `json:"commitCount"`
 }
 
+type TimelineEvent struct {
+	Type       string    `json:"type"`
+	Label      string    `json:"label"`
+	Actor      *string   `json:"actor,omitempty"`
+	State      *string   `json:"state,omitempty"`
+	OccurredAt time.Time `json:"occurredAt"`
+}
+
+type RiskIndicator struct {
+	Level   string   `json:"level"`
+	Reasons []string `json:"reasons"`
+}
+
 type RepositoryRef struct {
 	ID       string `json:"id"`
 	FullName string `json:"fullName"`
@@ -58,22 +71,24 @@ type ListResult struct {
 }
 
 type Response struct {
-	ID           string        `json:"id"`
-	Repository   RepositoryRef `json:"repository"`
-	GithubPRID   int64         `json:"githubPrId"`
-	Number       int           `json:"number"`
-	Title        string        `json:"title"`
-	Author       string        `json:"author"`
-	State        string        `json:"state"`
-	CreatedAt    time.Time     `json:"createdAt"`
-	MergedAt     *time.Time    `json:"mergedAt,omitempty"`
-	ClosedAt     *time.Time    `json:"closedAt,omitempty"`
-	Additions    int           `json:"additions"`
-	Deletions    int           `json:"deletions"`
-	FilesChanged int           `json:"filesChanged"`
-	IsDraft      bool          `json:"isDraft"`
-	Reviews      []Review      `json:"reviews"`
-	FileChanges  []FileChange  `json:"fileChanges"`
+	ID            string          `json:"id"`
+	Repository    RepositoryRef   `json:"repository"`
+	GithubPRID    int64           `json:"githubPrId"`
+	Number        int             `json:"number"`
+	Title         string          `json:"title"`
+	Author        string          `json:"author"`
+	State         string          `json:"state"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	MergedAt      *time.Time      `json:"mergedAt,omitempty"`
+	ClosedAt      *time.Time      `json:"closedAt,omitempty"`
+	Additions     int             `json:"additions"`
+	Deletions     int             `json:"deletions"`
+	FilesChanged  int             `json:"filesChanged"`
+	IsDraft       bool            `json:"isDraft"`
+	Reviews       []Review        `json:"reviews"`
+	FileChanges   []FileChange    `json:"fileChanges"`
+	Timeline      []TimelineEvent `json:"timeline"`
+	RiskIndicator RiskIndicator   `json:"riskIndicator"`
 }
 
 type ValidationIssue struct {

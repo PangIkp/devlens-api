@@ -353,6 +353,63 @@ func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string,
 	}, nil
 }
 
+func (s *Service) GetWorkloadDistribution(ctx context.Context, repositoryID string, params QueryParams) (WorkloadDistribution, error) {
+	if s.pg == nil {
+		return WorkloadDistribution{}, fmt.Errorf("metrics postgres dependency is not configured")
+	}
+
+	bounds, err := normalizeBounds(params.From, params.To)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	contributors, err := s.listContributorDistribution(ctx, repositoryID, bounds)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	reviewers, err := s.listReviewerDistribution(ctx, repositoryID, bounds)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	totalPullRequests := 0
+	topContributorShare := 0.0
+	for _, item := range contributors {
+		totalPullRequests += item.PullRequestCount
+		if item.Share > topContributorShare {
+			topContributorShare = item.Share
+		}
+	}
+
+	totalReviews := 0
+	topReviewerShare := 0.0
+	for _, item := range reviewers {
+		totalReviews += item.ReviewCount
+		if item.Share > topReviewerShare {
+			topReviewerShare = item.Share
+		}
+	}
+
+	return WorkloadDistribution{
+		Summary: WorkloadDistributionSummary{
+			RepositoryID:        repositoryID,
+			From:                bounds.From.Format("2006-01-02"),
+			To:                  bounds.ToInclusive.Format("2006-01-02"),
+			TotalPullRequests:   totalPullRequests,
+			TotalReviews:        totalReviews,
+			TopContributorShare: topContributorShare,
+			TopReviewerShare:    topReviewerShare,
+		},
+		Contributors: contributors,
+		Reviewers:    reviewers,
+	}, nil
+}
+
 func normalizeCalculationRequest(req CalculationRequest) CalculationRequest {
 	if req.MetricVersion < 1 {
 		req.MetricVersion = CurrentMetricVersion
@@ -444,6 +501,133 @@ func optionalMetricTime(value pgtype.Timestamptz) *time.Time {
 	}
 	utc := value.Time.UTC()
 	return &utc
+}
+
+func (s *Service) listContributorDistribution(ctx context.Context, repositoryID string, bounds dateBounds) ([]ContributorDistributionItem, error) {
+	toExclusive := bounds.ToInclusive.Add(24 * time.Hour)
+	query := `
+SELECT pr.author,
+       COUNT(*)::bigint AS pull_request_count
+FROM pull_requests pr
+WHERE pr.repository_id = $1
+  AND pr.created_at >= $2
+  AND pr.created_at < $3
+  AND pr.is_draft = FALSE
+  AND pr.author IS NOT NULL
+  AND btrim(pr.author) <> ''
+  AND lower(btrim(pr.author)) NOT LIKE '%[bot]'
+  AND lower(btrim(pr.author)) NOT LIKE 'dependabot%'
+  AND lower(btrim(pr.author)) NOT LIKE '%-bot'
+  AND lower(btrim(pr.author)) <> 'github-actions'
+  AND lower(btrim(pr.author)) <> 'web-flow'
+GROUP BY pr.author
+ORDER BY pull_request_count DESC, pr.author ASC`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), bounds.From.UTC(), toExclusive)
+	if err != nil {
+		return nil, fmt.Errorf("list contributor distribution: %w", err)
+	}
+	defer rows.Close()
+
+	type rawItem struct {
+		author string
+		count  int
+	}
+	raw := make([]rawItem, 0)
+	total := 0
+	for rows.Next() {
+		var item rawItem
+		var count int64
+		if err := rows.Scan(&item.author, &count); err != nil {
+			return nil, fmt.Errorf("scan contributor distribution: %w", err)
+		}
+		item.count = int(count)
+		total += item.count
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate contributor distribution: %w", err)
+	}
+
+	items := make([]ContributorDistributionItem, 0, len(raw))
+	for _, item := range raw {
+		share := 0.0
+		if total > 0 {
+			share = float64(item.count) / float64(total)
+		}
+		items = append(items, ContributorDistributionItem{
+			Author:           item.author,
+			PullRequestCount: item.count,
+			Share:            share,
+		})
+	}
+	return items, nil
+}
+
+func (s *Service) listReviewerDistribution(ctx context.Context, repositoryID string, bounds dateBounds) ([]ReviewerDistributionItem, error) {
+	toExclusive := bounds.ToInclusive.Add(24 * time.Hour)
+	query := `
+SELECT prr.reviewer,
+       COUNT(*)::bigint AS review_count,
+       COUNT(DISTINCT prr.pull_request_id)::bigint AS reviewed_pull_request_count
+FROM pull_request_reviews prr
+INNER JOIN pull_requests pr ON pr.id = prr.pull_request_id
+WHERE pr.repository_id = $1
+  AND pr.created_at >= $2
+  AND pr.created_at < $3
+  AND pr.is_draft = FALSE
+  AND prr.reviewer IS NOT NULL
+  AND btrim(prr.reviewer) <> ''
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%[bot]'
+  AND lower(btrim(prr.reviewer)) NOT LIKE 'dependabot%'
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%-bot'
+  AND lower(btrim(prr.reviewer)) <> 'github-actions'
+  AND lower(btrim(prr.reviewer)) <> 'web-flow'
+GROUP BY prr.reviewer
+ORDER BY review_count DESC, prr.reviewer ASC`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), bounds.From.UTC(), toExclusive)
+	if err != nil {
+		return nil, fmt.Errorf("list reviewer distribution: %w", err)
+	}
+	defer rows.Close()
+
+	type rawItem struct {
+		reviewer                 string
+		reviewCount              int
+		reviewedPullRequestCount int
+	}
+	raw := make([]rawItem, 0)
+	total := 0
+	for rows.Next() {
+		var item rawItem
+		var reviewCount, reviewedPullRequestCount int64
+		if err := rows.Scan(&item.reviewer, &reviewCount, &reviewedPullRequestCount); err != nil {
+			return nil, fmt.Errorf("scan reviewer distribution: %w", err)
+		}
+		item.reviewCount = int(reviewCount)
+		item.reviewedPullRequestCount = int(reviewedPullRequestCount)
+		total += item.reviewCount
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reviewer distribution: %w", err)
+	}
+
+	items := make([]ReviewerDistributionItem, 0, len(raw))
+	for _, item := range raw {
+		share := 0.0
+		if total > 0 {
+			share = float64(item.reviewCount) / float64(total)
+		}
+		items = append(items, ReviewerDistributionItem{
+			Reviewer:                 item.reviewer,
+			ReviewCount:              item.reviewCount,
+			ReviewedPullRequestCount: item.reviewedPullRequestCount,
+			Share:                    share,
+		})
+	}
+	return items, nil
 }
 
 func (s *Service) ensureReady() error {

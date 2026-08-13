@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -176,6 +177,8 @@ WHERE pr.id = $1`
 	}
 	response.Reviews = reviews
 	response.FileChanges = changes
+	response.Timeline = buildTimeline(response.Author, response.CreatedAt, response.MergedAt, response.ClosedAt, reviews)
+	response.RiskIndicator = buildRiskIndicator(response, reviews, changes)
 	return response, nil
 }
 
@@ -243,4 +246,138 @@ func optionalTime(value pgtype.Timestamptz) *time.Time {
 	}
 	t := value.Time.UTC()
 	return &t
+}
+
+func buildTimeline(author string, createdAt time.Time, mergedAt, closedAt *time.Time, reviews []Review) []TimelineEvent {
+	events := make([]TimelineEvent, 0, 2+len(reviews)*3)
+	authorCopy := author
+	events = append(events, TimelineEvent{
+		Type:       "created",
+		Label:      "Pull request created",
+		Actor:      &authorCopy,
+		OccurredAt: createdAt.UTC(),
+	})
+
+	for _, review := range reviews {
+		reviewer := review.Reviewer
+		if review.ReviewRequestedAt != nil {
+			events = append(events, TimelineEvent{
+				Type:       "review_requested",
+				Label:      "Review requested",
+				Actor:      &reviewer,
+				OccurredAt: review.ReviewRequestedAt.UTC(),
+			})
+		}
+		if review.FirstReviewAt != nil {
+			events = append(events, TimelineEvent{
+				Type:       "review_started",
+				Label:      "Review started",
+				Actor:      &reviewer,
+				OccurredAt: review.FirstReviewAt.UTC(),
+			})
+		}
+		if review.ReviewSubmittedAt != nil {
+			state := review.State
+			events = append(events, TimelineEvent{
+				Type:       "review_submitted",
+				Label:      "Review submitted",
+				Actor:      &reviewer,
+				State:      &state,
+				OccurredAt: review.ReviewSubmittedAt.UTC(),
+			})
+		}
+	}
+
+	if mergedAt != nil {
+		events = append(events, TimelineEvent{
+			Type:       "merged",
+			Label:      "Pull request merged",
+			OccurredAt: mergedAt.UTC(),
+		})
+	} else if closedAt != nil {
+		events = append(events, TimelineEvent{
+			Type:       "closed",
+			Label:      "Pull request closed",
+			OccurredAt: closedAt.UTC(),
+		})
+	}
+
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].OccurredAt.Equal(events[j].OccurredAt) {
+			return timelinePriority(events[i].Type) < timelinePriority(events[j].Type)
+		}
+		return events[i].OccurredAt.Before(events[j].OccurredAt)
+	})
+
+	return events
+}
+
+func timelinePriority(eventType string) int {
+	switch eventType {
+	case "created":
+		return 0
+	case "review_requested":
+		return 1
+	case "review_started":
+		return 2
+	case "review_submitted":
+		return 3
+	case "merged":
+		return 4
+	case "closed":
+		return 5
+	default:
+		return 100
+	}
+}
+
+func buildRiskIndicator(pr Response, reviews []Review, changes []FileChange) RiskIndicator {
+	reasons := make([]string, 0, 4)
+	levelScore := 0
+
+	totalChangedLines := pr.Additions + pr.Deletions
+	if totalChangedLines >= 1000 {
+		levelScore += 2
+		reasons = append(reasons, "very_large_change")
+	} else if totalChangedLines >= 400 {
+		levelScore++
+		reasons = append(reasons, "large_change")
+	}
+
+	if pr.FilesChanged >= 25 {
+		levelScore += 2
+		reasons = append(reasons, "many_files_changed")
+	} else if pr.FilesChanged >= 10 {
+		levelScore++
+		reasons = append(reasons, "moderate_file_spread")
+	}
+
+	if len(reviews) == 0 && !pr.IsDraft {
+		levelScore += 2
+		reasons = append(reasons, "no_reviews_recorded")
+	}
+
+	maxFileCommitCount := 0
+	for _, change := range changes {
+		if change.CommitCount > maxFileCommitCount {
+			maxFileCommitCount = change.CommitCount
+		}
+	}
+	if maxFileCommitCount >= 10 {
+		levelScore++
+		reasons = append(reasons, "high_file_rework")
+	}
+
+	level := "low"
+	switch {
+	case levelScore >= 4:
+		level = "high"
+	case levelScore >= 2:
+		level = "medium"
+	}
+
+	return RiskIndicator{
+		Level:   level,
+		Reasons: reasons,
+	}
 }

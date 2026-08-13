@@ -45,6 +45,13 @@ func TestPullRequestHandlerGet(t *testing.T) {
 				CreatedAt:   time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 				Reviews:     []pullrequest.Review{},
 				FileChanges: []pullrequest.FileChange{},
+				Timeline: []pullrequest.TimelineEvent{
+					{Type: "created", Label: "Pull request created", OccurredAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+				},
+				RiskIndicator: pullrequest.RiskIndicator{
+					Level:   "low",
+					Reasons: []string{},
+				},
 			}, nil
 		},
 	})

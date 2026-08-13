@@ -18,6 +18,7 @@ type MetricsService interface {
 	GetPullRequestMetrics(context.Context, string, metrics.QueryParams) (metrics.PullRequestMetrics, error)
 	GetReviewMetrics(context.Context, string, metrics.QueryParams) (metrics.ReviewMetrics, error)
 	GetDeploymentMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.DeploymentMetrics, error)
+	GetWorkloadDistribution(context.Context, string, metrics.QueryParams) (metrics.WorkloadDistribution, error)
 	GetHotspots(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error)
 	GetRepositoryMetrics(context.Context, string, metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error)
 	GetReviewQueue(context.Context, string, metrics.HotspotQueryParams) (metrics.ReviewQueueResult, error)
@@ -46,6 +47,7 @@ func (h *MetricsHandler) RegisterRoutes(r chi.Router) {
 		r.Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
 		r.Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
 		r.Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
+		r.Get("/repositories/{repositoryId}/metrics/workload-distribution", h.getWorkloadDistribution)
 		r.Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
 		return
 	}
@@ -61,6 +63,7 @@ func (h *MetricsHandler) RegisterRoutes(r chi.Router) {
 		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
 		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
 		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/workload-distribution", h.getWorkloadDistribution)
 		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
 	})
 }
@@ -188,6 +191,21 @@ func (h *MetricsHandler) getDeploymentMetrics(w http.ResponseWriter, r *http.Req
 		QueryParams: params,
 		Environment: environment,
 	})
+	if err != nil {
+		writeMetricsError(w, r, err)
+		return
+	}
+
+	WriteData(w, http.StatusOK, response)
+}
+
+func (h *MetricsHandler) getWorkloadDistribution(w http.ResponseWriter, r *http.Request) {
+	repositoryID, params, ok := h.parseRepositoryMetricsQuery(w, r, false)
+	if !ok {
+		return
+	}
+
+	response, err := h.service.GetWorkloadDistribution(r.Context(), repositoryID, params)
 	if err != nil {
 		writeMetricsError(w, r, err)
 		return

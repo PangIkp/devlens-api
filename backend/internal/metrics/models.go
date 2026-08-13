@@ -110,6 +110,35 @@ type RepositoryMetrics struct {
 	Hotspots      []HotspotFile      `json:"hotspots"`
 }
 
+type ContributorDistributionItem struct {
+	Author           string  `json:"author"`
+	PullRequestCount int     `json:"pullRequestCount"`
+	Share            float64 `json:"share"`
+}
+
+type ReviewerDistributionItem struct {
+	Reviewer                 string  `json:"reviewer"`
+	ReviewCount              int     `json:"reviewCount"`
+	ReviewedPullRequestCount int     `json:"reviewedPullRequestCount"`
+	Share                    float64 `json:"share"`
+}
+
+type WorkloadDistributionSummary struct {
+	RepositoryID        string  `json:"repositoryId"`
+	From                string  `json:"from"`
+	To                  string  `json:"to"`
+	TotalPullRequests   int     `json:"totalPullRequests"`
+	TotalReviews        int     `json:"totalReviews"`
+	TopContributorShare float64 `json:"topContributorShare"`
+	TopReviewerShare    float64 `json:"topReviewerShare"`
+}
+
+type WorkloadDistribution struct {
+	Summary      WorkloadDistributionSummary   `json:"summary"`
+	Contributors []ContributorDistributionItem `json:"contributors"`
+	Reviewers    []ReviewerDistributionItem    `json:"reviewers"`
+}
+
 type ReviewQueueItem struct {
 	PullRequestID     string     `json:"pullRequestId"`
 	Number            int        `json:"number"`

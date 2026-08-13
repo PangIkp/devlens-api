@@ -1154,6 +1154,32 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
+  /repositories/{repositoryId}/metrics/workload-distribution:
+    get:
+      tags:
+        - Workload Distribution
+      summary: Get contributor and reviewer workload distribution
+      operationId: getWorkloadDistribution
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+      responses:
+        "200":
+          description: Workload distribution metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadDistributionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /repositories/{repositoryId}/metrics/hotspots:
     get:
       tags:
@@ -2311,6 +2337,51 @@ components:
         commitCount:
           type: integer
 
+    PullRequestTimelineEvent:
+      type: object
+      required:
+        - type
+        - label
+        - occurredAt
+      properties:
+        type:
+          type: string
+          enum:
+            - created
+            - review_requested
+            - review_started
+            - review_submitted
+            - merged
+            - closed
+        label:
+          type: string
+        actor:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+        occurredAt:
+          type: string
+          format: date-time
+
+    PullRequestRiskIndicator:
+      type: object
+      required:
+        - level
+        - reasons
+      properties:
+        level:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+        reasons:
+          type: array
+          items:
+            type: string
+
     PullRequestRepositoryRef:
       type: object
       required:
@@ -2340,6 +2411,8 @@ components:
         - isDraft
         - reviews
         - fileChanges
+        - timeline
+        - riskIndicator
       properties:
         id:
           type: string
@@ -2384,6 +2457,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PullRequestFileChange"
+        timeline:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestTimelineEvent"
+        riskIndicator:
+          $ref: "#/components/schemas/PullRequestRiskIndicator"
 
     PullRequestResponse:
       type: object
@@ -2782,6 +2861,104 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/DeploymentMetrics"
+
+    ContributorDistributionItem:
+      type: object
+      required:
+        - author
+        - pullRequestCount
+        - share
+      properties:
+        author:
+          type: string
+        pullRequestCount:
+          type: integer
+        share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    ReviewerDistributionItem:
+      type: object
+      required:
+        - reviewer
+        - reviewCount
+        - reviewedPullRequestCount
+        - share
+      properties:
+        reviewer:
+          type: string
+        reviewCount:
+          type: integer
+        reviewedPullRequestCount:
+          type: integer
+        share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    WorkloadDistributionSummary:
+      type: object
+      required:
+        - repositoryId
+        - from
+        - to
+        - totalPullRequests
+        - totalReviews
+        - topContributorShare
+        - topReviewerShare
+      properties:
+        repositoryId:
+          type: string
+          format: uuid
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        totalPullRequests:
+          type: integer
+        totalReviews:
+          type: integer
+        topContributorShare:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        topReviewerShare:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    WorkloadDistribution:
+      type: object
+      required:
+        - summary
+        - contributors
+        - reviewers
+      properties:
+        summary:
+          $ref: "#/components/schemas/WorkloadDistributionSummary"
+        contributors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContributorDistributionItem"
+        reviewers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewerDistributionItem"
+
+    WorkloadDistributionResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/WorkloadDistribution"
 
     HotspotFile:
       type: object
