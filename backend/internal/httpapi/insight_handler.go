@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/insights"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,19 +20,36 @@ type InsightService interface {
 }
 
 type InsightHandler struct {
-	service InsightService
+	service    InsightService
+	authorizer AuthorizationService
 }
 
-func NewInsightHandler(service InsightService) *InsightHandler {
-	return &InsightHandler{service: service}
+func NewInsightHandler(service InsightService, authorizer ...AuthorizationService) *InsightHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &InsightHandler{service: service, authorizer: authz}
 }
 
 func (h *InsightHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/insights", h.list)
-	r.Get("/organizations/{organizationId}/insights", h.list)
-	r.Post("/organizations/{organizationId}/insights/{insightKey}/review", h.review)
-	r.Post("/organizations/{organizationId}/insights/{insightKey}/dismiss", h.dismiss)
-	r.Post("/organizations/{organizationId}/insights/{insightKey}/reopen", h.reopen)
+	if h.authorizer == nil {
+		r.Get("/insights", h.list)
+		r.Get("/organizations/{organizationId}/insights", h.list)
+		r.Post("/organizations/{organizationId}/insights/{insightKey}/review", h.review)
+		r.Post("/organizations/{organizationId}/insights/{insightKey}/dismiss", h.dismiss)
+		r.Post("/organizations/{organizationId}/insights/{insightKey}/reopen", h.reopen)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationQueryRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/insights", h.list)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/insights", h.list)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/insights/{insightKey}/review", h.review)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/insights/{insightKey}/dismiss", h.dismiss)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/insights/{insightKey}/reopen", h.reopen)
+	})
 }
 
 func (h *InsightHandler) list(w http.ResponseWriter, r *http.Request) {

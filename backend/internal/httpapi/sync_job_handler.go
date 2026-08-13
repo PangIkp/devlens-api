@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
 	"github.com/go-chi/chi/v5"
 )
@@ -19,19 +21,36 @@ type SyncJobService interface {
 }
 
 type SyncJobHandler struct {
-	service SyncJobService
+	service    SyncJobService
+	authorizer AuthorizationService
 }
 
-func NewSyncJobHandler(service SyncJobService) *SyncJobHandler {
-	return &SyncJobHandler{service: service}
+func NewSyncJobHandler(service SyncJobService, authorizer ...AuthorizationService) *SyncJobHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &SyncJobHandler{service: service, authorizer: authz}
 }
 
 func (h *SyncJobHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/repositories/{repositoryId}/sync", h.create)
-	r.Get("/repositories/{repositoryId}/sync-jobs", h.list)
-	r.Get("/sync-jobs/{syncJobId}", h.get)
-	r.Post("/sync-jobs/{syncJobId}/retry", h.retry)
-	r.Post("/sync-jobs/{syncJobId}/cancel", h.cancel)
+	if h.authorizer == nil {
+		r.Post("/repositories/{repositoryId}/sync", h.create)
+		r.Get("/repositories/{repositoryId}/sync-jobs", h.list)
+		r.Get("/sync-jobs/{syncJobId}", h.get)
+		r.Post("/sync-jobs/{syncJobId}/retry", h.retry)
+		r.Post("/sync-jobs/{syncJobId}/cancel", h.cancel)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/repositories/{repositoryId}/sync", h.create)
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/repositories/{repositoryId}/sync-jobs", h.list)
+		r.With(requireSyncJobRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/sync-jobs/{syncJobId}", h.get)
+		r.With(requireSyncJobRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/sync-jobs/{syncJobId}/retry", h.retry)
+		r.With(requireSyncJobRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/sync-jobs/{syncJobId}/cancel", h.cancel)
+	})
 }
 
 func (h *SyncJobHandler) create(w http.ResponseWriter, r *http.Request) {

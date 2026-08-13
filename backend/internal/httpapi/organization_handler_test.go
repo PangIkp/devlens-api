@@ -15,23 +15,23 @@ import (
 )
 
 type stubOrganizationService struct {
-	createFn func(context.Context, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
+	createFn func(context.Context, string, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
 	getFn    func(context.Context, string) (organization.OrganizationResponse, error)
-	listFn   func(context.Context, organization.ListParams) (organization.ListResult, error)
+	listFn   func(context.Context, string, organization.ListParams) (organization.ListResult, error)
 	updateFn func(context.Context, string, organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error)
 	deleteFn func(context.Context, string) error
 }
 
-func (s stubOrganizationService) Create(ctx context.Context, req organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
-	return s.createFn(ctx, req)
+func (s stubOrganizationService) Create(ctx context.Context, userID string, req organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+	return s.createFn(ctx, userID, req)
 }
 
 func (s stubOrganizationService) GetByID(ctx context.Context, id string) (organization.OrganizationResponse, error) {
 	return s.getFn(ctx, id)
 }
 
-func (s stubOrganizationService) List(ctx context.Context, params organization.ListParams) (organization.ListResult, error) {
-	return s.listFn(ctx, params)
+func (s stubOrganizationService) List(ctx context.Context, userID string, params organization.ListParams) (organization.ListResult, error) {
+	return s.listFn(ctx, userID, params)
 }
 
 func (s stubOrganizationService) Update(ctx context.Context, id string, req organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error) {
@@ -47,7 +47,10 @@ func TestCreateOrganizationHandlerSuccess(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		createFn: func(_ context.Context, req organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+		createFn: func(_ context.Context, userID string, req organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+			if userID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected user id %q", userID)
+			}
 			if req.GithubID != 123 || req.Slug != "devlens" || req.Name != "DevLens" {
 				t.Fatalf("unexpected request %+v", req)
 			}
@@ -63,6 +66,7 @@ func TestCreateOrganizationHandlerSuccess(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/organizations", strings.NewReader(`{"githubId":123,"slug":"devlens","name":"DevLens"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -77,13 +81,14 @@ func TestCreateOrganizationHandlerInvalidBody(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		createFn: func(_ context.Context, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+		createFn: func(_ context.Context, _ string, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
 			t.Fatal("service should not be called")
 			return organization.OrganizationResponse{}, nil
 		},
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/organizations", strings.NewReader(`{"githubId":"x"}`))
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -105,6 +110,7 @@ func TestGetOrganizationHandlerInvalidUUID(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations/not-a-uuid", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -125,6 +131,7 @@ func TestGetOrganizationHandlerNotFound(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -139,12 +146,13 @@ func TestCreateOrganizationHandlerDuplicate(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		createFn: func(_ context.Context, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+		createFn: func(_ context.Context, _ string, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
 			return organization.OrganizationResponse{}, organization.ErrOrganizationConflict
 		},
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/organizations", strings.NewReader(`{"githubId":123,"slug":"devlens","name":"DevLens"}`))
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -159,7 +167,7 @@ func TestCreateOrganizationHandlerInvalidSlug(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		createFn: func(_ context.Context, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
+		createFn: func(_ context.Context, _ string, _ organization.CreateOrganizationRequest) (organization.OrganizationResponse, error) {
 			return organization.OrganizationResponse{}, &organization.ValidationError{
 				Message: "request validation failed",
 				Details: []organization.ValidationIssue{
@@ -173,6 +181,7 @@ func TestCreateOrganizationHandlerInvalidSlug(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/organizations", strings.NewReader(`{"githubId":123,"slug":"DevLens","name":"DevLens"}`))
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -187,7 +196,10 @@ func TestListOrganizationsHandlerPaginationDefault(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		listFn: func(_ context.Context, params organization.ListParams) (organization.ListResult, error) {
+		listFn: func(_ context.Context, userID string, params organization.ListParams) (organization.ListResult, error) {
+			if userID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+				t.Fatalf("unexpected user id %q", userID)
+			}
 			if params.Page != 1 || params.PageSize != 20 {
 				t.Fatalf("unexpected params %+v", params)
 			}
@@ -196,6 +208,7 @@ func TestListOrganizationsHandlerPaginationDefault(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -210,13 +223,14 @@ func TestListOrganizationsHandlerPaginationInvalidValue(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		listFn: func(_ context.Context, _ organization.ListParams) (organization.ListResult, error) {
+		listFn: func(_ context.Context, _ string, _ organization.ListParams) (organization.ListResult, error) {
 			t.Fatal("service should not be called")
 			return organization.ListResult{}, nil
 		},
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations?page=0", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -231,7 +245,7 @@ func TestListOrganizationsHandlerResponseShape(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewOrganizationHandler(stubOrganizationService{
-		listFn: func(_ context.Context, _ organization.ListParams) (organization.ListResult, error) {
+		listFn: func(_ context.Context, _ string, _ organization.ListParams) (organization.ListResult, error) {
 			return organization.ListResult{
 				Items: []organization.OrganizationResponse{
 					{ID: "1", GithubID: 1, Slug: "devlens", Name: "DevLens", CreatedAt: time.Now().UTC()},
@@ -242,6 +256,7 @@ func TestListOrganizationsHandlerResponseShape(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations?page=1&pageSize=20", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -271,6 +286,7 @@ func TestGetOrganizationHandlerInternalError(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodGet, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", nil)
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -304,6 +320,7 @@ func TestUpdateOrganizationHandlerSuccess(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodPatch, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", strings.NewReader(`{"name":"DevLens Platform"}`))
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -329,6 +346,7 @@ func TestUpdateOrganizationHandlerInvalidUpdate(t *testing.T) {
 	}).RegisterRoutes(router)
 
 	req := httptest.NewRequest(http.MethodPatch, "/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", strings.NewReader(`{}`))
+	req = withAuthenticatedUser(req)
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)

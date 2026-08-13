@@ -25,15 +25,16 @@ func NewService(repository repository) *Service {
 	return &Service{repository: repository}
 }
 
-func (s *Service) Create(ctx context.Context, req CreateOrganizationRequest) (OrganizationResponse, error) {
+func (s *Service) Create(ctx context.Context, userID string, req CreateOrganizationRequest) (OrganizationResponse, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return OrganizationResponse{}, err
 	}
 
 	return s.repository.Create(ctx, CreateParams{
-		GithubID: req.GithubID,
-		Slug:     strings.TrimSpace(req.Slug),
-		Name:     strings.TrimSpace(req.Name),
+		GithubID:      req.GithubID,
+		Slug:          strings.TrimSpace(req.Slug),
+		Name:          strings.TrimSpace(req.Name),
+		CreatorUserID: strings.TrimSpace(userID),
 	})
 }
 
@@ -41,7 +42,8 @@ func (s *Service) GetByID(ctx context.Context, id string) (OrganizationResponse,
 	return s.repository.GetByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, params ListParams) (ListResult, error) {
+func (s *Service) List(ctx context.Context, userID string, params ListParams) (ListResult, error) {
+	params.UserID = strings.TrimSpace(userID)
 	return s.repository.List(ctx, params)
 }
 

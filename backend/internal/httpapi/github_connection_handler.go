@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/githubconnection"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -19,19 +21,36 @@ type GitHubConnectionService interface {
 }
 
 type GitHubConnectionHandler struct {
-	service GitHubConnectionService
+	service    GitHubConnectionService
+	authorizer AuthorizationService
 }
 
-func NewGitHubConnectionHandler(service GitHubConnectionService) *GitHubConnectionHandler {
-	return &GitHubConnectionHandler{service: service}
+func NewGitHubConnectionHandler(service GitHubConnectionService, authorizer ...AuthorizationService) *GitHubConnectionHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &GitHubConnectionHandler{service: service, authorizer: authz}
 }
 
 func (h *GitHubConnectionHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/organizations/{organizationId}/github/connection", h.getConnection)
-	r.Post("/organizations/{organizationId}/github/installations/start", h.startInstallation)
-	r.Get("/organizations/{organizationId}/github/installations/callback", h.completeInstallation)
-	r.Get("/organizations/{organizationId}/github/repositories", h.listAccessibleRepositories)
-	r.Post("/organizations/{organizationId}/github/repositories/select", h.selectRepositories)
+	if h.authorizer == nil {
+		r.Get("/organizations/{organizationId}/github/connection", h.getConnection)
+		r.Post("/organizations/{organizationId}/github/installations/start", h.startInstallation)
+		r.Get("/organizations/{organizationId}/github/installations/callback", h.completeInstallation)
+		r.Get("/organizations/{organizationId}/github/repositories", h.listAccessibleRepositories)
+		r.Post("/organizations/{organizationId}/github/repositories/select", h.selectRepositories)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/connection", h.getConnection)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/github/installations/start", h.startInstallation)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/installations/callback", h.completeInstallation)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/repositories", h.listAccessibleRepositories)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/github/repositories/select", h.selectRepositories)
+	})
 }
 
 func (h *GitHubConnectionHandler) getConnection(w http.ResponseWriter, r *http.Request) {

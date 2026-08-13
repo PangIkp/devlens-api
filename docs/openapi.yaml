@@ -165,6 +165,7 @@ paths:
       tags:
         - Organizations
       summary: Create organization
+      description: Creates an organization and assigns the authenticated user as the initial owner.
       operationId: createOrganization
       requestBody:
         required: true
@@ -181,6 +182,8 @@ paths:
                 $ref: "#/components/schemas/OrganizationResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
     get:
@@ -200,6 +203,8 @@ paths:
                 $ref: "#/components/schemas/OrganizationListResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /organizations/{organizationId}:
     get:
@@ -218,6 +223,10 @@ paths:
                 $ref: "#/components/schemas/OrganizationResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     patch:
@@ -242,6 +251,10 @@ paths:
                 $ref: "#/components/schemas/OrganizationResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -258,6 +271,10 @@ paths:
           description: Organization deleted
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -278,6 +295,10 @@ paths:
                 $ref: "#/components/schemas/OrganizationMemberListResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     post:
@@ -285,7 +306,6 @@ paths:
         - Organizations
       summary: Add organization member
       operationId: createOrganizationMember
-      description: Authentication is deferred in the current milestone, so `userId` is provided in the request body.
       parameters:
         - $ref: "#/components/parameters/OrganizationId"
       requestBody:
@@ -303,6 +323,10 @@ paths:
                 $ref: "#/components/schemas/OrganizationMemberResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -332,6 +356,10 @@ paths:
                 $ref: "#/components/schemas/OrganizationMemberResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
     delete:
@@ -348,6 +376,10 @@ paths:
           description: Organization member removed
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":

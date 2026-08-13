@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/pullrequest"
 	"github.com/go-chi/chi/v5"
 )
@@ -16,16 +18,30 @@ type PullRequestService interface {
 }
 
 type PullRequestHandler struct {
-	service PullRequestService
+	service    PullRequestService
+	authorizer AuthorizationService
 }
 
-func NewPullRequestHandler(service PullRequestService) *PullRequestHandler {
-	return &PullRequestHandler{service: service}
+func NewPullRequestHandler(service PullRequestService, authorizer ...AuthorizationService) *PullRequestHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &PullRequestHandler{service: service, authorizer: authz}
 }
 
 func (h *PullRequestHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/pull-requests", h.list)
-	r.Get("/pull-requests/{pullRequestId}", h.get)
+	if h.authorizer == nil {
+		r.Get("/pull-requests", h.list)
+		r.Get("/pull-requests/{pullRequestId}", h.get)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireRepositoryQueryRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/pull-requests", h.list)
+		r.With(requirePullRequestRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/pull-requests/{pullRequestId}", h.get)
+	})
 }
 
 func (h *PullRequestHandler) list(w http.ResponseWriter, r *http.Request) {

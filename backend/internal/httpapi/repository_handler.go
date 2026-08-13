@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,18 +20,34 @@ type RepositoryService interface {
 }
 
 type RepositoryHandler struct {
-	service RepositoryService
+	service    RepositoryService
+	authorizer AuthorizationService
 }
 
-func NewRepositoryHandler(service RepositoryService) *RepositoryHandler {
-	return &RepositoryHandler{service: service}
+func NewRepositoryHandler(service RepositoryService, authorizer ...AuthorizationService) *RepositoryHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &RepositoryHandler{service: service, authorizer: authz}
 }
 
 func (h *RepositoryHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/organizations/{organizationId}/repositories", h.create)
-	r.Get("/organizations/{organizationId}/repositories", h.list)
-	r.Get("/repositories/{repositoryId}", h.get)
-	r.Patch("/repositories/{repositoryId}", h.update)
+	if h.authorizer == nil {
+		r.Post("/organizations/{organizationId}/repositories", h.create)
+		r.Get("/organizations/{organizationId}/repositories", h.list)
+		r.Get("/repositories/{repositoryId}", h.get)
+		r.Patch("/repositories/{repositoryId}", h.update)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/repositories", h.create)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/repositories", h.list)
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/repositories/{repositoryId}", h.get)
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Patch("/repositories/{repositoryId}", h.update)
+	})
 }
 
 func (h *RepositoryHandler) create(w http.ResponseWriter, r *http.Request) {

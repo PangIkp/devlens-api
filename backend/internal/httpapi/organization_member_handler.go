@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/go-chi/chi/v5"
 )
@@ -17,18 +19,34 @@ type OrganizationMemberService interface {
 }
 
 type OrganizationMemberHandler struct {
-	service OrganizationMemberService
+	service    OrganizationMemberService
+	authorizer AuthorizationService
 }
 
-func NewOrganizationMemberHandler(service OrganizationMemberService) *OrganizationMemberHandler {
-	return &OrganizationMemberHandler{service: service}
+func NewOrganizationMemberHandler(service OrganizationMemberService, authorizer ...AuthorizationService) *OrganizationMemberHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &OrganizationMemberHandler{service: service, authorizer: authz}
 }
 
 func (h *OrganizationMemberHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/organizations/{organizationId}/members", h.list)
-	r.Post("/organizations/{organizationId}/members", h.create)
-	r.Patch("/organizations/{organizationId}/members/{memberId}", h.update)
-	r.Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+	if h.authorizer == nil {
+		r.Get("/organizations/{organizationId}/members", h.list)
+		r.Post("/organizations/{organizationId}/members", h.create)
+		r.Patch("/organizations/{organizationId}/members/{memberId}", h.update)
+		r.Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/members", h.list)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/members", h.create)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Patch("/organizations/{organizationId}/members/{memberId}", h.update)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+	})
 }
 
 func (h *OrganizationMemberHandler) list(w http.ResponseWriter, r *http.Request) {

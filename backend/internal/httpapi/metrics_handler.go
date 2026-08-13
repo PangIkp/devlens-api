@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/go-chi/chi/v5"
 )
@@ -22,23 +24,45 @@ type MetricsService interface {
 }
 
 type MetricsHandler struct {
-	service MetricsService
+	service    MetricsService
+	authorizer AuthorizationService
 }
 
-func NewMetricsHandler(service MetricsService) *MetricsHandler {
-	return &MetricsHandler{service: service}
+func NewMetricsHandler(service MetricsService, authorizer ...AuthorizationService) *MetricsHandler {
+	var authz AuthorizationService
+	if len(authorizer) > 0 {
+		authz = authorizer[0]
+	}
+	return &MetricsHandler{service: service, authorizer: authz}
 }
 
 func (h *MetricsHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/repositories/{repositoryId}/dashboard/summary", h.getDashboardSummary)
-	r.Get("/repositories/{repositoryId}/dashboard/pr-cycle-time", h.getPullRequestMetrics)
-	r.Get("/repositories/{repositoryId}/dashboard/review-wait-time", h.getReviewMetrics)
-	r.Get("/repositories/{repositoryId}/dashboard/review-queue", h.getReviewQueue)
-	r.Get("/repositories/{repositoryId}/metrics", h.getRepositoryMetrics)
-	r.Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
-	r.Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
-	r.Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
-	r.Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
+	if h.authorizer == nil {
+		r.Get("/repositories/{repositoryId}/dashboard/summary", h.getDashboardSummary)
+		r.Get("/repositories/{repositoryId}/dashboard/pr-cycle-time", h.getPullRequestMetrics)
+		r.Get("/repositories/{repositoryId}/dashboard/review-wait-time", h.getReviewMetrics)
+		r.Get("/repositories/{repositoryId}/dashboard/review-queue", h.getReviewQueue)
+		r.Get("/repositories/{repositoryId}/metrics", h.getRepositoryMetrics)
+		r.Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
+		r.Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
+		r.Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
+		r.Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		withAccess := requireRepositoryPathRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)
+		r.With(withAccess).Get("/repositories/{repositoryId}/dashboard/summary", h.getDashboardSummary)
+		r.With(withAccess).Get("/repositories/{repositoryId}/dashboard/pr-cycle-time", h.getPullRequestMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/dashboard/review-wait-time", h.getReviewMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/dashboard/review-queue", h.getReviewQueue)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics", h.getRepositoryMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/pull-requests", h.getPullRequestMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/reviews", h.getReviewMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/deployments", h.getDeploymentMetrics)
+		r.With(withAccess).Get("/repositories/{repositoryId}/metrics/hotspots", h.getHotspots)
+	})
 }
 
 func (h *MetricsHandler) getReviewQueue(w http.ResponseWriter, r *http.Request) {

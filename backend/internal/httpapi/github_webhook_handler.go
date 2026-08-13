@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -27,7 +28,10 @@ func NewGitHubWebhookHandler(service GitHubWebhookService) *GitHubWebhookHandler
 func (h *GitHubWebhookHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/github/webhook", h.handle)
 	r.Post("/webhooks/github", h.handle)
-	r.Post("/github/webhook-deliveries/{deliveryId}/retry", h.retry)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.Post("/github/webhook-deliveries/{deliveryId}/retry", h.retry)
+	})
 }
 
 func (h *GitHubWebhookHandler) handle(w http.ResponseWriter, r *http.Request) {

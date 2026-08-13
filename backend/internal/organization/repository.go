@@ -20,9 +20,10 @@ var (
 )
 
 type CreateParams struct {
-	GithubID int64
-	Slug     string
-	Name     string
+	GithubID      int64
+	Slug          string
+	Name          string
+	CreatorUserID string
 }
 
 type UpdateParams struct {
@@ -32,6 +33,7 @@ type UpdateParams struct {
 }
 
 type ListParams struct {
+	UserID   string
 	Page     int
 	PageSize int
 }
@@ -43,16 +45,25 @@ type ListResult struct {
 
 // Repository owns PostgreSQL access for organization use cases.
 type Repository struct {
+	db      *postgres.DB
 	queries *sqlcgen.Queries
 }
 
 func NewRepository(db *postgres.DB) *Repository {
-	return &Repository{queries: db.Queries()}
+	return &Repository{db: db, queries: db.Queries()}
 }
 
 func (r *Repository) Create(ctx context.Context, params CreateParams) (OrganizationResponse, error) {
-	row, err := r.queries.CreateOrganization(ctx, sqlcgen.CreateOrganizationParams{
-		ID:       newUUID(),
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return OrganizationResponse{}, fmt.Errorf("begin organization create transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := sqlcgen.New(tx)
+	orgID := newUUID()
+	row, err := queries.CreateOrganization(ctx, sqlcgen.CreateOrganizationParams{
+		ID:       orgID,
 		GithubID: params.GithubID,
 		Slug:     params.Slug,
 		Name:     textValue(params.Name),
@@ -61,8 +72,20 @@ func (r *Repository) Create(ctx context.Context, params CreateParams) (Organizat
 		if isUniqueViolation(err) {
 			return OrganizationResponse{}, ErrOrganizationConflict
 		}
-
 		return OrganizationResponse{}, fmt.Errorf("create organization: %w", err)
+	}
+
+	if _, err := queries.CreateOrganizationMember(ctx, sqlcgen.CreateOrganizationMemberParams{
+		ID:             newUUID(),
+		OrganizationID: orgID,
+		UserID:         parseUUID(params.CreatorUserID),
+		Role:           "owner",
+	}); err != nil {
+		return OrganizationResponse{}, fmt.Errorf("create owner membership: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return OrganizationResponse{}, fmt.Errorf("commit organization create transaction: %w", err)
 	}
 
 	return toCreateResponse(row), nil
@@ -82,25 +105,54 @@ func (r *Repository) GetByID(ctx context.Context, id string) (OrganizationRespon
 }
 
 func (r *Repository) List(ctx context.Context, params ListParams) (ListResult, error) {
-	items, err := r.queries.ListOrganizations(ctx, sqlcgen.ListOrganizationsParams{
-		Limit:  int32(params.PageSize),
-		Offset: int32((params.Page - 1) * params.PageSize),
-	})
+	rows, err := r.db.Pool().Query(ctx, `
+SELECT o.id, o.github_id, o.slug, o.name, o.created_at, o.updated_at
+FROM organizations o
+INNER JOIN organization_members om ON om.organization_id = o.id
+WHERE om.user_id = $1
+  AND o.deleted_at IS NULL
+ORDER BY o.created_at DESC
+LIMIT $2 OFFSET $3`,
+		parseUUID(params.UserID),
+		params.PageSize,
+		(params.Page-1)*params.PageSize,
+	)
 	if err != nil {
 		return ListResult{}, fmt.Errorf("list organizations: %w", err)
 	}
+	defer rows.Close()
 
-	totalItems, err := r.queries.CountOrganizations(ctx)
-	if err != nil {
+	result := ListResult{Items: make([]OrganizationResponse, 0)}
+	for rows.Next() {
+		var (
+			id        pgtype.UUID
+			name      pgtype.Text
+			createdAt pgtype.Timestamptz
+			updatedAt pgtype.Timestamptz
+			item      OrganizationResponse
+		)
+		if err := rows.Scan(&id, &item.GithubID, &item.Slug, &name, &createdAt, &updatedAt); err != nil {
+			return ListResult{}, fmt.Errorf("scan organization row: %w", err)
+		}
+		item.ID = uuidString(id)
+		item.Name = name.String
+		item.CreatedAt = timeValue(createdAt)
+		item.UpdatedAt = optionalTimeValue(updatedAt)
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ListResult{}, fmt.Errorf("iterate organizations: %w", err)
+	}
+
+	if err := r.db.Pool().QueryRow(ctx, `
+SELECT COUNT(*)
+FROM organizations o
+INNER JOIN organization_members om ON om.organization_id = o.id
+WHERE om.user_id = $1
+  AND o.deleted_at IS NULL`,
+		parseUUID(params.UserID),
+	).Scan(&result.TotalItems); err != nil {
 		return ListResult{}, fmt.Errorf("count organizations: %w", err)
-	}
-
-	result := ListResult{
-		Items:      make([]OrganizationResponse, 0, len(items)),
-		TotalItems: int(totalItems),
-	}
-	for _, item := range items {
-		result.Items = append(result.Items, toListResponse(item))
 	}
 
 	return result, nil
