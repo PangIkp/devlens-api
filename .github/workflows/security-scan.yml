@@ -45,3 +45,45 @@ jobs:
 
       - name: Run govulncheck
         run: govulncheck ./...
+
+  trivy-filesystem:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+
+  trivy-image:
+    name: Trivy Image Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          tags: devlens-backend:scan
+          load: true
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: devlens-backend:scan
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
