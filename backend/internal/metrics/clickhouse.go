@@ -85,6 +85,7 @@ type fileChangeRecord struct {
 }
 
 type metricsDailyRecord struct {
+	MetricVersion             int64   `json:"metric_version"`
 	RepositoryID              string  `json:"repository_id"`
 	MetricDate                string  `json:"metric_date"`
 	PRCycleTimeMinutes        float64 `json:"pr_cycle_time_minutes"`
@@ -245,8 +246,8 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 
 	fileChanges, err := s.pg.Queries().ListFileChangesForAnalytics(ctx, sqlcgen.ListFileChangesForAnalyticsParams{
 		RepositoryID: repositoryID,
-		CreatedAt:    toTimestamp(bounds.From),
-		CreatedAt_2:  toTimestamp(bounds.ToExclusive),
+		MergedAt:     toTimestamp(bounds.From),
+		CreatedAt:    toTimestamp(bounds.ToExclusive),
 	})
 	if err != nil {
 		return fmt.Errorf("list file_changes for analytics: %w", err)
@@ -395,6 +396,7 @@ func nullableText(value pgtype.Text) *string {
 func (s *Service) listMetricsDaily(ctx context.Context, repositoryID string, bounds dateBounds) ([]metricsDailyRecord, error) {
 	query := fmt.Sprintf(`
 SELECT
+  metric_version,
   repository_id,
   toString(metric_date) AS metric_date,
   pr_cycle_time_minutes,
@@ -489,11 +491,13 @@ WHERE pr.repository_id = '%s'
 	return rows, nil
 }
 
-func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDailyRecord) DashboardSummary {
+func aggregateSummary(repositoryID string, bounds dateBounds, dayType string, rows []metricsDailyRecord) DashboardSummary {
 	summary := DashboardSummary{
-		RepositoryID: repositoryID,
-		From:         formatDate(bounds.From),
-		To:           formatDate(bounds.ToInclusive),
+		MetricVersion: CurrentMetricVersion,
+		DayType:       dayType,
+		RepositoryID:  repositoryID,
+		From:          formatDate(bounds.From),
+		To:            formatDate(bounds.ToInclusive),
 	}
 
 	var totalCycleWeighted float64
@@ -522,8 +526,8 @@ func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDail
 	if totalWaitSamples > 0 {
 		summary.ReviewWaitMinutes = totalWaitWeighted / float64(totalWaitSamples)
 	}
-	if bounds.DaysInclusive > 0 {
-		summary.DeploymentFrequency = float64(totalSuccessful) / float64(bounds.DaysInclusive)
+	if dayCount := bounds.dayCount(dayType); dayCount > 0 {
+		summary.DeploymentFrequency = float64(totalSuccessful) / float64(dayCount)
 	}
 	if totalDeployments := totalSuccessful + totalFailed; totalDeployments > 0 {
 		summary.ChangeFailureRate = float64(totalFailed) / float64(totalDeployments)
@@ -535,8 +539,10 @@ func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDail
 	return summary
 }
 
-func aggregatePullRequestMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) PullRequestMetrics {
+func aggregatePullRequestMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) PullRequestMetrics {
 	result := PullRequestMetrics{
+		MetricVersion:  CurrentMetricVersion,
+		DayType:        dayType,
 		CycleTimeTrend: make([]MetricPoint, 0),
 	}
 
@@ -576,8 +582,10 @@ func aggregatePullRequestMetrics(bounds dateBounds, interval string, rows []metr
 	return result
 }
 
-func aggregateReviewMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) ReviewMetrics {
+func aggregateReviewMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) ReviewMetrics {
 	result := ReviewMetrics{
+		MetricVersion: CurrentMetricVersion,
+		DayType:       dayType,
 		WaitTimeTrend: make([]MetricPoint, 0),
 	}
 
@@ -618,8 +626,10 @@ func aggregateReviewMetrics(bounds dateBounds, interval string, rows []metricsDa
 	return result
 }
 
-func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) DeploymentMetrics {
+func aggregateDeploymentMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) DeploymentMetrics {
 	result := DeploymentMetrics{
+		MetricVersion:   CurrentMetricVersion,
+		DayType:         dayType,
 		DeploymentTrend: make([]MetricPoint, 0),
 	}
 
@@ -631,8 +641,8 @@ func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metri
 	}
 
 	result.DeploymentCount = int(totalSuccessful)
-	if bounds.DaysInclusive > 0 {
-		result.DeploymentFrequency = float64(totalSuccessful) / float64(bounds.DaysInclusive)
+	if dayCount := bounds.dayCount(dayType); dayCount > 0 {
+		result.DeploymentFrequency = float64(totalSuccessful) / float64(dayCount)
 	}
 	if totalDeployments := totalSuccessful + totalFailed; totalDeployments > 0 {
 		result.ChangeFailureRate = float64(totalFailed) / float64(totalDeployments)
@@ -649,7 +659,7 @@ func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metri
 	return result
 }
 
-func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, rows []deploymentRecord) DeploymentMetrics {
+func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, dayType string, rows []deploymentRecord) DeploymentMetrics {
 	daily := make([]metricsDailyRecord, 0, bounds.DaysInclusive)
 	byDay := make(map[string]*metricsDailyRecord, bounds.DaysInclusive)
 	for day := bounds.From; !day.After(bounds.ToInclusive); day = day.AddDate(0, 0, 1) {
@@ -675,10 +685,10 @@ func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, rows 
 		daily = append(daily, *byDay[formatDate(day)])
 	}
 
-	return aggregateDeploymentMetrics(bounds, interval, daily)
+	return aggregateDeploymentMetrics(bounds, interval, dayType, daily)
 }
 
-func aggregateHotspots(rows []hotspotRow) []HotspotFile {
+func aggregateHotspots(rows []hotspotRow, rules RuleConfig) []HotspotFile {
 	byFile := make(map[string]*HotspotFile)
 	for _, row := range rows {
 		item, ok := byFile[row.FilePath]
@@ -689,7 +699,9 @@ func aggregateHotspots(rows []hotspotRow) []HotspotFile {
 		item.Additions += int(row.Additions)
 		item.Deletions += int(row.Deletions)
 		item.CommitCount += int(row.CommitCount)
-		item.HotspotScore = float64(item.CommitCount + item.Additions + item.Deletions)
+		item.HotspotScore = float64(item.CommitCount)*rules.HotspotCommitWeight +
+			float64(item.Additions)*rules.HotspotAdditionsWeight +
+			float64(item.Deletions)*rules.HotspotDeletionsWeight
 	}
 
 	files := make([]HotspotFile, 0, len(byFile))

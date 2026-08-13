@@ -9,7 +9,7 @@ POSTGRES_DSN ?= postgres://devlens:devlens@localhost:5432/devlens?sslmode=disabl
 ENV_FILE := $(PWD)/.env
 LOAD_ENV = if [ -f "$(ENV_FILE)" ]; then set -a; source "$(ENV_FILE)"; set +a; fi;
 
-.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook backup-postgres restore-postgres verify-postgres-restore
+.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate metrics-rebuild load-dashboard load-webhook backup-postgres restore-postgres verify-postgres-restore
 
 fmt:
 	$(GO_RUN) gofmt -w .
@@ -41,6 +41,10 @@ migrate-status:
 sqlc-generate:
 	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
 	cd backend && $(GO_TOOL_ENV) go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+
+metrics-rebuild:
+	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
+	@$(LOAD_ENV) cd backend && $(GO_TOOL_ENV) go run ./cmd/metricsrebuild -repository-id "$${METRICS_REPOSITORY_ID}" -from "$${METRICS_FROM}" -to "$${METRICS_TO}"
 
 load-dashboard:
 	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"

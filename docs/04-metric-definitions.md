@@ -27,6 +27,15 @@
 - Metric ที่ใช้ค่าเฉลี่ยหลายวันต้อง Aggregate ด้วย sample/count ที่ถูกต้อง เพื่อหลีกเลี่ยง average-of-averages
 - ต้องรองรับ Duplicate Event และ Out-of-order Event จาก GitHub
 - สูตร Metric ต้องมี Version เพื่อให้รู้ว่าค่าที่แสดงถูกคำนวณด้วยนิยามใด
+- Metric ที่เป็นค่า "ต่อวัน" ต้องระบุชัดว่าใช้ `calendar day` หรือ `business day`
+
+## Calendar Day vs Business Day
+
+- `calendar day` = ทุกวันในช่วงที่เลือก รวมเสาร์อาทิตย์
+- `business day` = วันจันทร์ถึงศุกร์ในช่วงที่เลือก โดยยังไม่หัก public holidays ใน MVP ปัจจุบัน
+- Metric ที่เป็น elapsed duration เช่น `PR Cycle Time`, `Review Wait Time`, `Review Time` ยังใช้เวลาจริงตาม timestamp ไม่แปลงเป็น business minutes
+- Metric ที่ normalize เป็นค่า "ต่อวัน" เช่น `Deployment Frequency` สามารถคำนวณได้ทั้งแบบ `calendar` และ `business`
+- หาก client ไม่ส่งพารามิเตอร์เพิ่ม backend จะใช้ค่า default จาก server-side metric rules
 
 ---
 
@@ -623,6 +632,12 @@ Score
 ### Notes
 
 น้ำหนัก (`Weight`) ยังไม่ได้กำหนดค่าตายตัวในเอกสารปัจจุบัน ดังนั้น implementation ต้องผูกกับ `metric_version` และห้ามเปลี่ยนสูตรโดยไม่มี version ใหม่
+
+MVP ปัจจุบันรองรับการปรับน้ำหนักผ่าน server-side metric rules สำหรับ:
+
+- commit count
+- additions
+- deletions
 
 ---
 

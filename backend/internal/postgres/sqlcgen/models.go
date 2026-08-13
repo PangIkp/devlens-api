@@ -8,12 +8,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditLog struct {
+	ID             pgtype.UUID
+	OrganizationID pgtype.UUID
+	ActorUserID    pgtype.UUID
+	Action         string
+	ResourceType   string
+	ResourceID     pgtype.UUID
+	MetadataJson   []byte
+	CreatedAt      pgtype.Timestamptz
+}
+
+type CommitEvent struct {
+	ID              pgtype.UUID
+	RepositoryID    pgtype.UUID
+	GithubCommitSha string
+	Author          string
+	AuthorEmail     pgtype.Text
+	Message         string
+	AuthoredAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
 type Deployment struct {
-	ID           pgtype.UUID
-	RepositoryID pgtype.UUID
-	Environment  string
-	Status       string
-	DeployedAt   pgtype.Timestamptz
+	ID                 pgtype.UUID
+	RepositoryID       pgtype.UUID
+	Environment        string
+	Status             string
+	DeployedAt         pgtype.Timestamptz
+	GithubDeploymentID pgtype.Int8
 }
 
 type FileChange struct {
@@ -26,10 +50,55 @@ type FileChange struct {
 }
 
 type GithubInstallation struct {
+	ID                      pgtype.UUID
+	OrganizationID          pgtype.UUID
+	InstallationID          pgtype.Int8
+	InstalledAt             pgtype.Timestamptz
+	AccountLogin            pgtype.Text
+	AccountType             pgtype.Text
+	TargetType              pgtype.Text
+	Status                  string
+	PermissionsJson         []byte
+	InstalledByGithubUserID pgtype.Int8
+	SuspendedAt             pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	DisconnectedAt          pgtype.Timestamptz
+}
+
+type GithubInstallationRepository struct {
+	ID                   pgtype.UUID
+	GithubInstallationID pgtype.UUID
+	GithubRepositoryID   int64
+	Name                 string
+	OwnerLogin           string
+	FullName             string
+	Private              bool
+	DefaultBranch        pgtype.Text
+	InstallationStatus   string
+	SelectionStatus      string
+	PermissionsJson      []byte
+	LinkedRepositoryID   pgtype.UUID
+	LastSyncedAt         pgtype.Timestamptz
+	SyncErrorMessage     pgtype.Text
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	LastDiscoveredAt     pgtype.Timestamptz
+}
+
+type InsightStatus struct {
 	ID             pgtype.UUID
 	OrganizationID pgtype.UUID
-	InstallationID pgtype.Int8
-	InstalledAt    pgtype.Timestamptz
+	RepositoryID   pgtype.UUID
+	InsightKey     string
+	InsightType    string
+	Status         string
+	EvidenceJson   []byte
+	ReviewedBy     pgtype.UUID
+	ReviewedAt     pgtype.Timestamptz
+	DismissedAt    pgtype.Timestamptz
+	ReopenedAt     pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type Organization struct {
@@ -78,30 +147,50 @@ type PullRequestReview struct {
 }
 
 type Repository struct {
-	ID             pgtype.UUID
-	OrganizationID pgtype.UUID
-	GithubID       int64
-	Name           string
-	FullName       string
-	DefaultBranch  pgtype.Text
-	IsActive       bool
-	LastSyncedAt   pgtype.Timestamptz
-	CreatedAt      pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
-	ArchivedAt     pgtype.Timestamptz
+	ID                             pgtype.UUID
+	OrganizationID                 pgtype.UUID
+	GithubID                       int64
+	Name                           string
+	FullName                       string
+	DefaultBranch                  pgtype.Text
+	IsActive                       bool
+	LastSyncedAt                   pgtype.Timestamptz
+	CreatedAt                      pgtype.Timestamptz
+	UpdatedAt                      pgtype.Timestamptz
+	ArchivedAt                     pgtype.Timestamptz
+	GithubInstallationRepositoryID pgtype.UUID
+	InitialSyncStatus              pgtype.Text
+	InitialSyncCompletedAt         pgtype.Timestamptz
+	SyncErrorMessage               pgtype.Text
+}
+
+type SyncCheckpoint struct {
+	ID              pgtype.UUID
+	SyncJobID       pgtype.UUID
+	RepositoryID    pgtype.UUID
+	ResourceType    string
+	CheckpointKey   string
+	CheckpointValue pgtype.Text
+	Status          string
+	LastProcessedAt pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type SyncJob struct {
-	ID           pgtype.UUID
-	RepositoryID pgtype.UUID
-	Status       string
-	Progress     int32
-	StartedAt    pgtype.Timestamptz
-	FinishedAt   pgtype.Timestamptz
-	TriggeredBy  pgtype.UUID
-	ErrorMessage pgtype.Text
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID             pgtype.UUID
+	RepositoryID   pgtype.UUID
+	Status         string
+	Progress       int32
+	StartedAt      pgtype.Timestamptz
+	FinishedAt     pgtype.Timestamptz
+	TriggeredBy    pgtype.UUID
+	ErrorMessage   pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	JobType        string
+	IdempotencyKey pgtype.Text
+	ErrorCode      pgtype.Text
 }
 
 type User struct {
@@ -112,15 +201,50 @@ type User struct {
 	CreatedAt pgtype.Timestamptz
 }
 
-type WebhookDelivery struct {
+type UserSession struct {
 	ID               pgtype.UUID
-	RepositoryID     pgtype.UUID
-	GithubDeliveryID pgtype.Text
-	EventType        pgtype.Text
-	Processed        bool
-	ReceivedAt       pgtype.Timestamptz
-	Action           pgtype.Text
-	Payload          []byte
-	SyncJobID        pgtype.UUID
+	UserID           pgtype.UUID
+	AccessTokenHash  string
+	RefreshTokenHash string
+	ExpiresAt        pgtype.Timestamptz
+	RefreshExpiresAt pgtype.Timestamptz
+	LastUsedAt       pgtype.Timestamptz
+	RevokedAt        pgtype.Timestamptz
+	UserAgent        pgtype.Text
+	IpAddress        pgtype.Text
+	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+}
+
+type WebhookDelivery struct {
+	ID                    pgtype.UUID
+	RepositoryID          pgtype.UUID
+	GithubDeliveryID      pgtype.Text
+	EventType             pgtype.Text
+	Processed             bool
+	ReceivedAt            pgtype.Timestamptz
+	Action                pgtype.Text
+	Payload               []byte
+	SyncJobID             pgtype.UUID
+	UpdatedAt             pgtype.Timestamptz
+	GithubInstallationID  pgtype.UUID
+	ProcessingStatus      string
+	PayloadRetentionUntil pgtype.Timestamptz
+	ErrorMessage          pgtype.Text
+	ProcessedAt           pgtype.Timestamptz
+	RetryCount            int32
+	NextRetryAt           pgtype.Timestamptz
+}
+
+type WorkflowEvent struct {
+	ID                  pgtype.UUID
+	RepositoryID        pgtype.UUID
+	GithubWorkflowRunID int64
+	WorkflowName        string
+	Status              pgtype.Text
+	Conclusion          pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
 }

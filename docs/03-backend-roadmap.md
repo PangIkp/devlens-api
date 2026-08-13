@@ -264,6 +264,8 @@ insights.generate
 - [ ] กำหนดวิธี Rebuild Metric
 - [ ] หลีกเลี่ยง Update จำนวนมากใน ClickHouse
 - [ ] ใช้ Batch Insert
+- [x] ตัดสินใจเรื่อง Materialized View สำหรับ MVP ปัจจุบัน
+  ตอนนี้เลือก `ยังไม่ใช้ Materialized View` และใช้ application-managed rebuild/write ไปที่ aggregate tables แทน เพื่อรองรับ metric versioning, day type selection, และ date-range rebuild ได้ยืดหยุ่นกว่า
 
 ---
 

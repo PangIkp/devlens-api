@@ -24,6 +24,10 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("WEBHOOK_RETRY_CONCURRENCY", "3")
 	t.Setenv("WEBHOOK_RETRY_TIMEOUT", "45s")
 	t.Setenv("GITHUB_RATE_LIMIT_MIN_REMAINING", "75")
+	t.Setenv("METRICS_DEFAULT_DAY_TYPE", "business")
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_COMMITS", "2")
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_ADDITIONS", "0.5")
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_DELETIONS", "1.5")
 
 	cfg, err := Load()
 	if err != nil {
@@ -84,6 +88,18 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	if cfg.Sync.GitHubRateLimitRemaining != 75 {
 		t.Fatalf("unexpected github rate limit remaining threshold %d", cfg.Sync.GitHubRateLimitRemaining)
 	}
+	if cfg.Metrics.DefaultDayType != "business" {
+		t.Fatalf("unexpected metrics default day type %q", cfg.Metrics.DefaultDayType)
+	}
+	if cfg.Metrics.HotspotCommitWeight != 2 {
+		t.Fatalf("unexpected hotspot commit weight %v", cfg.Metrics.HotspotCommitWeight)
+	}
+	if cfg.Metrics.HotspotAdditionsWeight != 0.5 {
+		t.Fatalf("unexpected hotspot additions weight %v", cfg.Metrics.HotspotAdditionsWeight)
+	}
+	if cfg.Metrics.HotspotDeletionsWeight != 1.5 {
+		t.Fatalf("unexpected hotspot deletions weight %v", cfg.Metrics.HotspotDeletionsWeight)
+	}
 }
 
 func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
@@ -107,6 +123,26 @@ func TestLoadRejectsInvalidWebhookRetryInterval(t *testing.T) {
 
 func TestLoadRejectsInvalidWorkerConcurrency(t *testing.T) {
 	t.Setenv("SYNC_WORKER_CONCURRENCY", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsInvalidMetricsDefaultDayType(t *testing.T) {
+	t.Setenv("METRICS_DEFAULT_DAY_TYPE", "weird")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsAllZeroHotspotWeights(t *testing.T) {
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_COMMITS", "0")
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_ADDITIONS", "0")
+	t.Setenv("METRICS_HOTSPOT_WEIGHT_DELETIONS", "0")
 
 	_, err := Load()
 	if err == nil {

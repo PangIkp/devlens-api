@@ -623,6 +623,12 @@ Table file_change_events {
 Primary repository/day aggregate used by dashboard range queries.
 
 Count fields are stored to avoid incorrect "average of daily averages".
+
+MVP decision:
+- keep this as an application-managed aggregate table
+- do not add ClickHouse Materialized Views yet
+- reason: metric_version changes, business-day/calendar-day selection, and
+  date-range rebuild/backfill are easier to control explicitly in the metric engine
 */
 Table repository_daily_metrics {
   repository_id uuid

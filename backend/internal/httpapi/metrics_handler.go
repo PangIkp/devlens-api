@@ -255,8 +255,9 @@ func (h *MetricsHandler) parseRepositoryMetricsQuery(w http.ResponseWriter, r *h
 	}
 
 	params := metrics.QueryParams{
-		From: bounds.From,
-		To:   bounds.To,
+		From:    bounds.From,
+		To:      bounds.To,
+		DayType: strings.TrimSpace(r.URL.Query().Get("dayType")),
 	}
 	if withInterval {
 		params.Interval = strings.TrimSpace(r.URL.Query().Get("interval"))

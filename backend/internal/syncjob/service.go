@@ -36,12 +36,12 @@ type store interface {
 }
 
 type Service struct {
-	store        store
-	githubClient githubclient.Client
-	publisher    completionPublisher
-	now          func() time.Time
-	metrics      *observability.Metrics
-	sleep        func(context.Context, time.Duration) error
+	store                 store
+	githubClient          githubclient.Client
+	publisher             completionPublisher
+	now                   func() time.Time
+	metrics               *observability.Metrics
+	sleep                 func(context.Context, time.Duration) error
 	minRateLimitRemaining int
 }
 
@@ -52,6 +52,8 @@ type SyncCompletedEvent struct {
 	SyncJobID    string    `json:"syncJobId"`
 	OccurredAt   time.Time `json:"occurredAt"`
 	EventType    string    `json:"eventType"`
+	From         time.Time `json:"from,omitempty"`
+	To           time.Time `json:"to,omitempty"`
 }
 
 type completionPublisher interface {
@@ -356,11 +358,17 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 
 	completedAt := s.now().UTC()
 	if s.publisher != nil {
+		metricsFrom := time.Time{}
+		if cutoff != nil {
+			metricsFrom = cutoff.UTC()
+		}
 		if err := s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
 			EventType:    "repository.sync.completed",
 			RepositoryID: job.RepositoryID,
 			SyncJobID:    job.ID,
 			OccurredAt:   completedAt,
+			From:         metricsFrom,
+			To:           completedAt,
 		}); err != nil {
 			return s.failJob(ctx, job, options.mode, runStarted, fmt.Errorf("trigger metrics calculation: %w", err))
 		}

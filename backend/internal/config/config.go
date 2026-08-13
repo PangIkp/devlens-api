@@ -19,6 +19,7 @@ type Config struct {
 	GitHub     GitHubConfig
 	NATS       NATSConfig
 	Sync       SyncConfig
+	Metrics    MetricsConfig
 	Tracing    TracingConfig
 }
 
@@ -86,15 +87,15 @@ type NATSConfig struct {
 }
 
 type SyncConfig struct {
-	WorkerPollInterval        time.Duration
-	WorkerBatchSize           int
-	WorkerConcurrency         int
-	JobTimeout                time.Duration
-	WebhookRetryInterval      time.Duration
-	WebhookRetryBatchSize     int
-	WebhookRetryConcurrency   int
-	WebhookRetryTimeout       time.Duration
-	GitHubRateLimitRemaining  int
+	WorkerPollInterval       time.Duration
+	WorkerBatchSize          int
+	WorkerConcurrency        int
+	JobTimeout               time.Duration
+	WebhookRetryInterval     time.Duration
+	WebhookRetryBatchSize    int
+	WebhookRetryConcurrency  int
+	WebhookRetryTimeout      time.Duration
+	GitHubRateLimitRemaining int
 }
 
 type TracingConfig struct {
@@ -103,6 +104,13 @@ type TracingConfig struct {
 	ExporterEndpoint string
 	Insecure         bool
 	SampleRatio      float64
+}
+
+type MetricsConfig struct {
+	DefaultDayType         string
+	HotspotCommitWeight    float64
+	HotspotAdditionsWeight float64
+	HotspotDeletionsWeight float64
 }
 
 func Load() (Config, error) {
@@ -234,6 +242,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	metricsHotspotCommitWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_COMMITS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsHotspotAdditionsWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_ADDITIONS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsHotspotDeletionsWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_DELETIONS", 1)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -304,6 +324,12 @@ func Load() (Config, error) {
 			WebhookRetryConcurrency:  webhookRetryConcurrency,
 			WebhookRetryTimeout:      webhookRetryTimeout,
 			GitHubRateLimitRemaining: githubRateLimitRemaining,
+		},
+		Metrics: MetricsConfig{
+			DefaultDayType:         strings.TrimSpace(strings.ToLower(getEnv("METRICS_DEFAULT_DAY_TYPE", "calendar"))),
+			HotspotCommitWeight:    metricsHotspotCommitWeight,
+			HotspotAdditionsWeight: metricsHotspotAdditionsWeight,
+			HotspotDeletionsWeight: metricsHotspotDeletionsWeight,
 		},
 		Tracing: TracingConfig{
 			Enabled:          getBool("OTEL_ENABLED", false),
@@ -413,6 +439,21 @@ func Load() (Config, error) {
 	if cfg.ClickHouse.Timeout <= 0 {
 		return Config{}, fmt.Errorf("CLICKHOUSE_HTTP_TIMEOUT must be greater than 0")
 	}
+	if cfg.Metrics.DefaultDayType != "calendar" && cfg.Metrics.DefaultDayType != "business" {
+		return Config{}, fmt.Errorf("METRICS_DEFAULT_DAY_TYPE must be one of calendar, business")
+	}
+	if cfg.Metrics.HotspotCommitWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_COMMITS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotAdditionsWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_ADDITIONS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotDeletionsWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_DELETIONS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotCommitWeight == 0 && cfg.Metrics.HotspotAdditionsWeight == 0 && cfg.Metrics.HotspotDeletionsWeight == 0 {
+		return Config{}, fmt.Errorf("at least one hotspot metric weight must be greater than 0")
+	}
 
 	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
 		return Config{}, fmt.Errorf("CLICKHOUSE_DSN must be a valid URL: %w", err)
@@ -504,6 +545,20 @@ func getInt(key string, fallback int) (int, error) {
 	return value, nil
 }
 
+func getFloat64(key string, fallback float64) (float64, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid float for %s: %w", key, err)
+	}
+
+	return value, nil
+}
+
 func getInt64Value(key string) int64 {
 	raw, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -530,20 +585,6 @@ func getBool(key string, fallback bool) bool {
 	}
 
 	return value
-}
-
-func getFloat64(key string, fallback float64) (float64, error) {
-	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return fallback, nil
-	}
-
-	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid float for %s: %w", key, err)
-	}
-
-	return value, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

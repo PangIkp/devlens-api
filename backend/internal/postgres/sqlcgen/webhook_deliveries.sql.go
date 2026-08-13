@@ -51,7 +51,20 @@ type CreateWebhookDeliveryParams struct {
 	UpdatedAt        pgtype.Timestamptz
 }
 
-func (q *Queries) CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDeliveryParams) (WebhookDelivery, error) {
+type CreateWebhookDeliveryRow struct {
+	ID               pgtype.UUID
+	RepositoryID     pgtype.UUID
+	GithubDeliveryID pgtype.Text
+	EventType        pgtype.Text
+	Processed        bool
+	ReceivedAt       pgtype.Timestamptz
+	Action           pgtype.Text
+	Payload          []byte
+	SyncJobID        pgtype.UUID
+	UpdatedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDeliveryParams) (CreateWebhookDeliveryRow, error) {
 	row := q.db.QueryRow(ctx, createWebhookDelivery,
 		arg.ID,
 		arg.RepositoryID,
@@ -63,7 +76,7 @@ func (q *Queries) CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDe
 		arg.SyncJobID,
 		arg.UpdatedAt,
 	)
-	var i WebhookDelivery
+	var i CreateWebhookDeliveryRow
 	err := row.Scan(
 		&i.ID,
 		&i.RepositoryID,
@@ -85,9 +98,22 @@ FROM webhook_deliveries
 WHERE github_delivery_id = $1
 `
 
-func (q *Queries) GetWebhookDeliveryByGithubDeliveryID(ctx context.Context, githubDeliveryID pgtype.Text) (WebhookDelivery, error) {
+type GetWebhookDeliveryByGithubDeliveryIDRow struct {
+	ID               pgtype.UUID
+	RepositoryID     pgtype.UUID
+	GithubDeliveryID pgtype.Text
+	EventType        pgtype.Text
+	Processed        bool
+	ReceivedAt       pgtype.Timestamptz
+	Action           pgtype.Text
+	Payload          []byte
+	SyncJobID        pgtype.UUID
+	UpdatedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) GetWebhookDeliveryByGithubDeliveryID(ctx context.Context, githubDeliveryID pgtype.Text) (GetWebhookDeliveryByGithubDeliveryIDRow, error) {
 	row := q.db.QueryRow(ctx, getWebhookDeliveryByGithubDeliveryID, githubDeliveryID)
-	var i WebhookDelivery
+	var i GetWebhookDeliveryByGithubDeliveryIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.RepositoryID,
@@ -119,14 +145,27 @@ type MarkWebhookDeliveryProcessedParams struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
-func (q *Queries) MarkWebhookDeliveryProcessed(ctx context.Context, arg MarkWebhookDeliveryProcessedParams) (WebhookDelivery, error) {
+type MarkWebhookDeliveryProcessedRow struct {
+	ID               pgtype.UUID
+	RepositoryID     pgtype.UUID
+	GithubDeliveryID pgtype.Text
+	EventType        pgtype.Text
+	Processed        bool
+	ReceivedAt       pgtype.Timestamptz
+	Action           pgtype.Text
+	Payload          []byte
+	SyncJobID        pgtype.UUID
+	UpdatedAt        pgtype.Timestamptz
+}
+
+func (q *Queries) MarkWebhookDeliveryProcessed(ctx context.Context, arg MarkWebhookDeliveryProcessedParams) (MarkWebhookDeliveryProcessedRow, error) {
 	row := q.db.QueryRow(ctx, markWebhookDeliveryProcessed,
 		arg.ID,
 		arg.Processed,
 		arg.SyncJobID,
 		arg.UpdatedAt,
 	)
-	var i WebhookDelivery
+	var i MarkWebhookDeliveryProcessedRow
 	err := row.Scan(
 		&i.ID,
 		&i.RepositoryID,

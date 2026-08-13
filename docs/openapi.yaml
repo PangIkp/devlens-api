@@ -930,6 +930,7 @@ paths:
         - $ref: "#/components/parameters/RepositoryId"
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/DayType"
       responses:
         "200":
           description: Dashboard summary
@@ -957,6 +958,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
       responses:
         "200":
           description: Pull request cycle time metrics
@@ -984,6 +986,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
       responses:
         "200":
           description: Review wait time metrics
@@ -1039,6 +1042,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
         - $ref: "#/components/parameters/Environment"
       responses:
         "200":
@@ -1067,6 +1071,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
       responses:
         "200":
           description: Pull request metrics
@@ -1094,6 +1099,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
       responses:
         "200":
           description: Review metrics
@@ -1121,6 +1127,7 @@ paths:
         - $ref: "#/components/parameters/DateFrom"
         - $ref: "#/components/parameters/DateTo"
         - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/DayType"
         - $ref: "#/components/parameters/Environment"
       responses:
         "200":
@@ -1519,6 +1526,16 @@ components:
           - week
           - month
         default: day
+
+    DayType:
+      name: dayType
+      in: query
+      description: Controls how per-day normalized metrics such as deployment frequency are divided across the selected range. Duration metrics still use elapsed calendar time. When omitted, the backend uses its configured metric rule default.
+      schema:
+        type: string
+        enum:
+          - calendar
+          - business
 
     Environment:
       name: environment
@@ -2538,6 +2555,8 @@ components:
     DashboardSummary:
       type: object
       required:
+        - metricVersion
+        - dayType
         - repositoryId
         - from
         - to
@@ -2547,6 +2566,13 @@ components:
         - changeFailureRate
         - reviewCoverage
       properties:
+        metricVersion:
+          type: integer
+        dayType:
+          type: string
+          enum:
+            - calendar
+            - business
         repositoryId:
           type: string
           format: uuid
@@ -2600,12 +2626,21 @@ components:
     PullRequestMetrics:
       type: object
       required:
+        - metricVersion
+        - dayType
         - averageCycleTimeMinutes
         - averageFilesChanged
         - averageAdditions
         - averageDeletions
         - cycleTimeTrend
       properties:
+        metricVersion:
+          type: integer
+        dayType:
+          type: string
+          enum:
+            - calendar
+            - business
         averageCycleTimeMinutes:
           type: number
           format: double
@@ -2634,11 +2669,20 @@ components:
     ReviewMetrics:
       type: object
       required:
+        - metricVersion
+        - dayType
         - averageWaitMinutes
         - averageReviewMinutes
         - reviewCoverage
         - waitTimeTrend
       properties:
+        metricVersion:
+          type: integer
+        dayType:
+          type: string
+          enum:
+            - calendar
+            - business
         averageWaitMinutes:
           type: number
           format: double
@@ -2666,11 +2710,20 @@ components:
     DeploymentMetrics:
       type: object
       required:
+        - metricVersion
+        - dayType
         - deploymentCount
         - deploymentFrequency
         - changeFailureRate
         - deploymentTrend
       properties:
+        metricVersion:
+          type: integer
+        dayType:
+          type: string
+          enum:
+            - calendar
+            - business
         deploymentCount:
           type: integer
         deploymentFrequency:
@@ -2732,6 +2785,8 @@ components:
     RepositoryMetricsPayload:
       type: object
       required:
+        - metricVersion
+        - dayType
         - repositoryId
         - from
         - to
@@ -2742,6 +2797,13 @@ components:
         - deployments
         - hotspots
       properties:
+        metricVersion:
+          type: integer
+        dayType:
+          type: string
+          enum:
+            - calendar
+            - business
         repositoryId:
           type: string
           format: uuid

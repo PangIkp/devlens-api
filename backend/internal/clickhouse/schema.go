@@ -84,6 +84,7 @@ var schemaStatements = []string{
 	) ENGINE = ReplacingMergeTree(synced_at)
 	ORDER BY (pull_request_id, file_path, id)`,
 	`CREATE TABLE IF NOT EXISTS metrics_daily (
+		metric_version UInt32,
 		repository_id String,
 		metric_date Date,
 		pr_cycle_time_minutes Float64,
@@ -106,6 +107,7 @@ var schemaStatements = []string{
 	) ENGINE = ReplacingMergeTree(calculated_at)
 	PARTITION BY toYYYYMM(metric_date)
 	ORDER BY (repository_id, metric_date)`,
+	`ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS metric_version UInt32 DEFAULT 1`,
 }
 
 func EnsureSchema(ctx context.Context, db *DB) error {

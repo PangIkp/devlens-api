@@ -121,11 +121,16 @@ func TestMetricsHandlerRepositoryMetrics(t *testing.T) {
 			if repositoryID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
 				t.Fatalf("unexpected repository id %s", repositoryID)
 			}
+			if params.DayType != metrics.DayTypeBusiness {
+				t.Fatalf("expected dayType=%q, got %q", metrics.DayTypeBusiness, params.DayType)
+			}
 			return metrics.RepositoryMetrics{
-				RepositoryID: repositoryID,
-				From:         "2026-07-01",
-				To:           "2026-07-07",
-				Interval:     "day",
+				MetricVersion: metrics.CurrentMetricVersion,
+				DayType:       params.DayType,
+				RepositoryID:  repositoryID,
+				From:          "2026-07-01",
+				To:            "2026-07-07",
+				Interval:      "day",
 			}, nil
 		},
 	})
@@ -133,12 +138,42 @@ func TestMetricsHandlerRepositoryMetrics(t *testing.T) {
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
-	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics?from=2026-07-01&to=2026-07-07&interval=day", nil)
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics?from=2026-07-01&to=2026-07-07&interval=day&dayType=business", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMetricsHandlerRejectsInvalidDayType(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMetricsHandler(stubMetricsService{
+		getRepositoryMetricsFn: func(_ context.Context, _ string, params metrics.DeploymentQueryParams) (metrics.RepositoryMetrics, error) {
+			if params.DayType != "weird" {
+				t.Fatalf("expected raw dayType to reach service, got %q", params.DayType)
+			}
+			return metrics.RepositoryMetrics{}, &metrics.ValidationError{
+				Message: "request validation failed",
+				Details: []metrics.ValidationIssue{{Field: "dayType", Message: "must be one of calendar, business"}},
+			}
+		},
+		getHotspotsFn: func(context.Context, string, metrics.HotspotQueryParams) (metrics.HotspotResult, error) {
+			return metrics.HotspotResult{}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/metrics?from=2026-07-01&to=2026-07-07&interval=day&dayType=weird", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

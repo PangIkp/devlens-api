@@ -37,6 +37,27 @@ type fallbackCalculator interface {
 	CalculateRepositoryMetrics(context.Context, string, metrics.CalculationRequest) error
 }
 
+func calculationRequestForEvent(event syncjob.SyncCompletedEvent) metrics.CalculationRequest {
+	from := event.From.UTC()
+	if from.IsZero() {
+		from, _ = time.Parse("2006-01-02", historyStart)
+	}
+
+	to := event.To.UTC()
+	if to.IsZero() {
+		to = event.OccurredAt.UTC()
+	}
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+
+	return metrics.CalculationRequest{
+		From:          from.UTC(),
+		To:            to.UTC(),
+		MetricVersion: metrics.CurrentMetricVersion,
+	}
+}
+
 func Open(url string, metrics *observability.Metrics) (*Client, error) {
 	conn, err := nats.Connect(url, nats.Name("devlens-metrics"))
 	if err != nil {
@@ -137,11 +158,7 @@ func (p *Publisher) PublishRepositorySyncCompleted(ctx context.Context, event sy
 	}
 
 	if p.calculator != nil {
-		from, _ := time.Parse("2006-01-02", historyStart)
-		if err := p.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, metrics.CalculationRequest{
-			From: from.UTC(),
-			To:   event.OccurredAt.UTC(),
-		}); err != nil {
+		if err := p.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, calculationRequestForEvent(event)); err != nil {
 			if publishErr != nil {
 				return fmt.Errorf("publish metrics event: %w; fallback calculation: %w", publishErr, err)
 			}
@@ -226,11 +243,9 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 		to = time.Now().UTC()
 	}
 
-	from, _ := time.Parse("2006-01-02", historyStart)
-	if err := c.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, metrics.CalculationRequest{
-		From: from.UTC(),
-		To:   to,
-	}); err != nil {
+	request := calculationRequestForEvent(event)
+	request.To = to
+	if err := c.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, request); err != nil {
 		c.logger.Error("calculate metrics failed", "repository_id", event.RepositoryID, "sync_job_id", event.SyncJobID, "error", err)
 		if c.metrics != nil {
 			c.metrics.RecordQueueConsume("metricsbus", subjectName, "error", time.Since(started))

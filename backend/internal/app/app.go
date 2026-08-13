@@ -104,7 +104,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService, authorizationService, auditService)
-	metricsService := metrics.NewService(postgresDB, clickhouseDB)
+	metricsService := metrics.NewService(postgresDB, clickhouseDB, metrics.RuleConfig{
+		DefaultDayType:         cfg.Metrics.DefaultDayType,
+		HotspotCommitWeight:    cfg.Metrics.HotspotCommitWeight,
+		HotspotAdditionsWeight: cfg.Metrics.HotspotAdditionsWeight,
+		HotspotDeletionsWeight: cfg.Metrics.HotspotDeletionsWeight,
+	})
 	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
 	insightRepository := insights.NewRepository(postgresDB)
 	insightService := insights.NewService(insightRepository)

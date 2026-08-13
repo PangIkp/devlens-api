@@ -18,12 +18,55 @@ import (
 var ErrRepositoryNotFound = errors.New("repository not found")
 
 type Service struct {
-	pg *postgres.DB
-	ch *clickhouse.DB
+	pg    *postgres.DB
+	ch    *clickhouse.DB
+	rules RuleConfig
 }
 
-func NewService(pg *postgres.DB, ch *clickhouse.DB) *Service {
-	return &Service{pg: pg, ch: ch}
+type RuleConfig struct {
+	DefaultDayType         string
+	HotspotCommitWeight    float64
+	HotspotAdditionsWeight float64
+	HotspotDeletionsWeight float64
+}
+
+func DefaultRuleConfig() RuleConfig {
+	return RuleConfig{
+		DefaultDayType:         DayTypeCalendar,
+		HotspotCommitWeight:    1,
+		HotspotAdditionsWeight: 1,
+		HotspotDeletionsWeight: 1,
+	}
+}
+
+func normalizeRuleConfig(cfg RuleConfig) RuleConfig {
+	defaults := DefaultRuleConfig()
+	if cfg.DefaultDayType != DayTypeBusiness && cfg.DefaultDayType != DayTypeCalendar {
+		cfg.DefaultDayType = defaults.DefaultDayType
+	}
+	if cfg.HotspotCommitWeight < 0 {
+		cfg.HotspotCommitWeight = defaults.HotspotCommitWeight
+	}
+	if cfg.HotspotAdditionsWeight < 0 {
+		cfg.HotspotAdditionsWeight = defaults.HotspotAdditionsWeight
+	}
+	if cfg.HotspotDeletionsWeight < 0 {
+		cfg.HotspotDeletionsWeight = defaults.HotspotDeletionsWeight
+	}
+	if cfg.HotspotCommitWeight == 0 && cfg.HotspotAdditionsWeight == 0 && cfg.HotspotDeletionsWeight == 0 {
+		cfg.HotspotCommitWeight = defaults.HotspotCommitWeight
+		cfg.HotspotAdditionsWeight = defaults.HotspotAdditionsWeight
+		cfg.HotspotDeletionsWeight = defaults.HotspotDeletionsWeight
+	}
+	return cfg
+}
+
+func NewService(pg *postgres.DB, ch *clickhouse.DB, rules ...RuleConfig) *Service {
+	cfg := DefaultRuleConfig()
+	if len(rules) > 0 {
+		cfg = normalizeRuleConfig(rules[0])
+	}
+	return &Service{pg: pg, ch: ch, rules: cfg}
 }
 
 func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID string, req CalculationRequest) error {
@@ -31,6 +74,7 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 		return err
 	}
 
+	req = normalizeCalculationRequest(req)
 	bounds, err := normalizeBounds(req.From, req.To)
 	if err != nil {
 		return err
@@ -53,7 +97,7 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 
 	payload := make([]metricsDailyRecord, 0, len(rows))
 	for _, row := range rows {
-		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt))
+		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt, req.MetricVersion))
 	}
 
 	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO metrics_daily", payload); err != nil {
@@ -72,6 +116,10 @@ func (s *Service) GetDashboardSummary(ctx context.Context, repositoryID string, 
 	if err != nil {
 		return DashboardSummary{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return DashboardSummary{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return DashboardSummary{}, err
@@ -82,7 +130,7 @@ func (s *Service) GetDashboardSummary(ctx context.Context, repositoryID string, 
 		return DashboardSummary{}, err
 	}
 
-	summary := aggregateSummary(repositoryID, bounds, rows)
+	summary := aggregateSummary(repositoryID, bounds, dayType, rows)
 	return summary, nil
 }
 
@@ -100,6 +148,10 @@ func (s *Service) GetPullRequestMetrics(ctx context.Context, repositoryID string
 	if err != nil {
 		return PullRequestMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return PullRequestMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return PullRequestMetrics{}, err
@@ -110,7 +162,7 @@ func (s *Service) GetPullRequestMetrics(ctx context.Context, repositoryID string
 		return PullRequestMetrics{}, err
 	}
 
-	return aggregatePullRequestMetrics(bounds, interval, rows), nil
+	return aggregatePullRequestMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, params QueryParams) (ReviewMetrics, error) {
@@ -127,6 +179,10 @@ func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, par
 	if err != nil {
 		return ReviewMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return ReviewMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return ReviewMetrics{}, err
@@ -137,7 +193,7 @@ func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, par
 		return ReviewMetrics{}, err
 	}
 
-	return aggregateReviewMetrics(bounds, interval, rows), nil
+	return aggregateReviewMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string, params DeploymentQueryParams) (DeploymentMetrics, error) {
@@ -154,6 +210,10 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 	if err != nil {
 		return DeploymentMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return DeploymentMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return DeploymentMetrics{}, err
@@ -164,7 +224,7 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 		if err != nil {
 			return DeploymentMetrics{}, err
 		}
-		return aggregateDeploymentMetricsFromRaw(bounds, interval, deployments), nil
+		return aggregateDeploymentMetricsFromRaw(bounds, interval, dayType, deployments), nil
 	}
 
 	rows, err := s.listMetricsDaily(ctx, repositoryID, bounds)
@@ -172,7 +232,7 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 		return DeploymentMetrics{}, err
 	}
 
-	return aggregateDeploymentMetrics(bounds, interval, rows), nil
+	return aggregateDeploymentMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params HotspotQueryParams) (HotspotResult, error) {
@@ -211,7 +271,7 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 		return HotspotResult{}, err
 	}
 
-	files := aggregateHotspots(rows)
+	files := aggregateHotspots(rows, s.rules)
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].HotspotScore == files[j].HotspotScore {
 			if order == "asc" {
@@ -277,16 +337,25 @@ func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string,
 	}
 
 	return RepositoryMetrics{
-		RepositoryID: repositoryID,
-		From:         params.From.UTC().Format("2006-01-02"),
-		To:           params.To.UTC().Format("2006-01-02"),
-		Interval:     interval,
-		Summary:      summary,
-		PullRequests: pullRequests,
-		Reviews:      reviews,
-		Deployments:  deployments,
-		Hotspots:     hotspots.Items,
+		MetricVersion: CurrentMetricVersion,
+		DayType:       s.normalizeDayTypeOrDefault(params.DayType),
+		RepositoryID:  repositoryID,
+		From:          params.From.UTC().Format("2006-01-02"),
+		To:            params.To.UTC().Format("2006-01-02"),
+		Interval:      interval,
+		Summary:       summary,
+		PullRequests:  pullRequests,
+		Reviews:       reviews,
+		Deployments:   deployments,
+		Hotspots:      hotspots.Items,
 	}, nil
+}
+
+func normalizeCalculationRequest(req CalculationRequest) CalculationRequest {
+	if req.MetricVersion < 1 {
+		req.MetricVersion = CurrentMetricVersion
+	}
+	return req
 }
 
 func (s *Service) GetReviewQueue(ctx context.Context, repositoryID string, params HotspotQueryParams) (ReviewQueueResult, error) {
@@ -450,6 +519,31 @@ func normalizeInterval(value string) (string, error) {
 	}
 }
 
+func normalizeDayType(value string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if trimmed == "" {
+		return DayTypeCalendar, nil
+	}
+
+	switch trimmed {
+	case DayTypeCalendar, DayTypeBusiness:
+		return trimmed, nil
+	default:
+		return "", &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "dayType", Message: "must be one of calendar, business"}},
+		}
+	}
+}
+
+func (s *Service) normalizeDayTypeOrDefault(value string) string {
+	dayType, err := normalizeDayType(value)
+	if err != nil {
+		return s.rules.DefaultDayType
+	}
+	return dayType
+}
+
 func parseUUID(value string) pgtype.UUID {
 	var id pgtype.UUID
 	_ = id.Scan(value)
@@ -465,6 +559,22 @@ type dateBounds struct {
 	ToInclusive   time.Time
 	ToExclusive   time.Time
 	DaysInclusive int
+}
+
+func (b dateBounds) dayCount(dayType string) int {
+	switch dayType {
+	case DayTypeBusiness:
+		count := 0
+		for day := b.From; !day.After(b.ToInclusive); day = day.AddDate(0, 0, 1) {
+			weekday := day.Weekday()
+			if weekday != time.Saturday && weekday != time.Sunday {
+				count++
+			}
+		}
+		return count
+	default:
+		return b.DaysInclusive
+	}
 }
 
 type dailyMetric struct {
@@ -487,8 +597,9 @@ type dailyMetric struct {
 	FailedDeploymentCount     int64
 }
 
-func (d dailyMetric) toClickHouseRecord(repositoryID string, calculatedAt time.Time) metricsDailyRecord {
+func (d dailyMetric) toClickHouseRecord(repositoryID string, calculatedAt time.Time, metricVersion int) metricsDailyRecord {
 	return metricsDailyRecord{
+		MetricVersion:             int64(metricVersion),
 		RepositoryID:              repositoryID,
 		MetricDate:                formatDate(d.Date),
 		PRCycleTimeMinutes:        d.PRCycleTimeMinutes,
