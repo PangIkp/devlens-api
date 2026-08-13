@@ -28,6 +28,12 @@ type HTTPConfig struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 	AllowedOrigins  []string
+	RateLimit       RateLimitConfig
+}
+
+type RateLimitConfig struct {
+	Requests int
+	Window   time.Duration
 }
 
 type PostgresConfig struct {
@@ -108,6 +114,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rateLimitWindow, err := getDuration("RATE_LIMIT_WINDOW", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	rateLimitRequests, err := getInt("RATE_LIMIT_REQUESTS", 120)
+	if err != nil {
+		return Config{}, err
+	}
 
 	pgMaxConnLifetime, err := getDuration("POSTGRES_MAX_CONN_LIFETIME", 30*time.Minute)
 	if err != nil {
@@ -180,6 +194,10 @@ func Load() (Config, error) {
 		IdleTimeout:     idleTimeout,
 		ShutdownTimeout: shutdownTimeout,
 		AllowedOrigins:  splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")),
+		RateLimit: RateLimitConfig{
+			Requests: rateLimitRequests,
+			Window:   rateLimitWindow,
+		},
 	}
 
 	cfg := Config{
@@ -236,6 +254,12 @@ func Load() (Config, error) {
 
 	if strings.TrimSpace(cfg.HTTP.Addr) == "" {
 		return Config{}, fmt.Errorf("HTTP_ADDR must not be empty")
+	}
+	if cfg.HTTP.RateLimit.Requests < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_REQUESTS must be greater than or equal to 0")
+	}
+	if cfg.HTTP.RateLimit.Requests > 0 && cfg.HTTP.RateLimit.Window <= 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_WINDOW must be greater than 0 when rate limiting is enabled")
 	}
 
 	if strings.TrimSpace(cfg.Postgres.Host) == "" && strings.TrimSpace(cfg.Postgres.DSN) == "" {

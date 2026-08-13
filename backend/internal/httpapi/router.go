@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,8 @@ type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	ClickHouse          ClickHouseHealthChecker
 	AllowedOrigins      []string
+	RateLimitRequests   int
+	RateLimitWindow     time.Duration
 	Auth                *AuthHandler
 	Authenticator       middleware.Authenticator
 	Organizations       *OrganizationHandler
@@ -38,9 +41,11 @@ type Dependencies struct {
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router := chi.NewRouter()
+	rateLimiter := middleware.NewRateLimiter(deps.RateLimitRequests, deps.RateLimitWindow)
 
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.CORS(deps.AllowedOrigins))
+	router.Use(middleware.RateLimit(rateLimiter))
 	router.Use(middleware.Recoverer(logger))
 	router.Use(middleware.RequestLogger(logger))
 	router.Use(middleware.OptionalAuth(deps.Authenticator))

@@ -108,3 +108,20 @@ func TestLoadCORSAllowedOriginsFromEnv(t *testing.T) {
 		t.Fatalf("unexpected second origin %q", cfg.HTTP.AllowedOrigins[1])
 	}
 }
+
+func TestLoadRateLimitFromEnv(t *testing.T) {
+	t.Setenv("RATE_LIMIT_REQUESTS", "30")
+	t.Setenv("RATE_LIMIT_WINDOW", "30s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.HTTP.RateLimit.Requests != 30 {
+		t.Fatalf("unexpected rate limit requests %d", cfg.HTTP.RateLimit.Requests)
+	}
+	if cfg.HTTP.RateLimit.Window != 30*time.Second {
+		t.Fatalf("unexpected rate limit window %s", cfg.HTTP.RateLimit.Window)
+	}
+}

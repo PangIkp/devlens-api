@@ -143,6 +143,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
 		AllowedOrigins:      cfg.HTTP.AllowedOrigins,
+		RateLimitRequests:   cfg.HTTP.RateLimit.Requests,
+		RateLimitWindow:     cfg.HTTP.RateLimit.Window,
 		Auth:                authHandler,
 		Authenticator:       authService,
 		Me:                  meHandler,

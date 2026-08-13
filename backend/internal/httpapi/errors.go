@@ -19,6 +19,7 @@ const (
 	ErrorCodeConflict         = "CONFLICT"
 	ErrorCodeInternal         = "INTERNAL_ERROR"
 	ErrorCodeMethodNotAllowed = "METHOD_NOT_ALLOWED"
+	ErrorCodeTooManyRequests  = "TOO_MANY_REQUESTS"
 )
 
 type Error struct {
@@ -84,6 +85,13 @@ func NewInternalError() Error {
 	return Error{
 		Code:    ErrorCodeInternal,
 		Message: "Internal server error",
+	}
+}
+
+func NewTooManyRequestsError(message string) Error {
+	return Error{
+		Code:    ErrorCodeTooManyRequests,
+		Message: message,
 	}
 }
 

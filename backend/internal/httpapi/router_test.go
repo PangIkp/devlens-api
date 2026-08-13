@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 )
 
@@ -293,5 +294,69 @@ func TestCORSOmitsHeadersForDisallowedOrigin(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("expected empty allow origin, got %q", got)
+	}
+}
+
+func TestRateLimitReturnsTooManyRequests(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		RateLimitRequests: 1,
+		RateLimitWindow:   time.Minute,
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req1.RemoteAddr = "127.0.0.1:5000"
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req2.RemoteAddr = "127.0.0.1:5000"
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req3.RemoteAddr = "127.0.0.1:5000"
+	rec3 := httptest.NewRecorder()
+	router.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", rec3.Code)
+	}
+
+	var body ErrorResponse
+	if err := json.Unmarshal(rec3.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Error.Code != ErrorCodeTooManyRequests {
+		t.Fatalf("expected %s, got %s", ErrorCodeTooManyRequests, body.Error.Code)
+	}
+}
+
+func TestRateLimitUsesAuthenticatedUserKey(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		RateLimitRequests: 1,
+		RateLimitWindow:   time.Minute,
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req1.RemoteAddr = "127.0.0.1:5000"
+	req1 = req1.WithContext(auth.WithPrincipal(req1.Context(), auth.SessionPrincipal{User: auth.User{ID: "user-1"}}))
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req2.RemoteAddr = "127.0.0.1:5000"
+	req2 = req2.WithContext(auth.WithPrincipal(req2.Context(), auth.SessionPrincipal{User: auth.User{ID: "user-2"}}))
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec2.Code)
 	}
 }
