@@ -17,6 +17,7 @@ type store interface {
 	HasActiveJob(context.Context, string) (bool, error)
 	Create(context.Context, createParams) (SyncJobResponse, error)
 	GetByID(context.Context, string) (SyncJobResponse, error)
+	GetRepositoryOrganizationID(context.Context, string) (string, error)
 	ListByRepository(context.Context, ListParams) (ListResult, error)
 	Retry(context.Context, string, time.Time) (SyncJobResponse, error)
 	Cancel(context.Context, string, time.Time) (SyncJobResponse, error)
@@ -48,16 +49,46 @@ type Service struct {
 var errSyncCanceled = errors.New("sync job canceled")
 
 type SyncCompletedEvent struct {
-	RepositoryID string    `json:"repositoryId"`
-	SyncJobID    string    `json:"syncJobId"`
-	OccurredAt   time.Time `json:"occurredAt"`
-	EventType    string    `json:"eventType"`
-	From         time.Time `json:"from,omitempty"`
-	To           time.Time `json:"to,omitempty"`
+	OrganizationID string    `json:"organizationId,omitempty"`
+	RepositoryID   string    `json:"repositoryId"`
+	SyncJobID      string    `json:"syncJobId"`
+	OccurredAt     time.Time `json:"occurredAt"`
+	EventType      string    `json:"eventType"`
+	From           time.Time `json:"from,omitempty"`
+	To             time.Time `json:"to,omitempty"`
 }
 
 type completionPublisher interface {
 	PublishRepositorySyncCompleted(context.Context, SyncCompletedEvent) error
+}
+
+type CompositePublisher struct {
+	publishers []completionPublisher
+}
+
+func NewCompositePublisher(publishers ...completionPublisher) *CompositePublisher {
+	items := make([]completionPublisher, 0, len(publishers))
+	for _, publisher := range publishers {
+		if publisher != nil {
+			items = append(items, publisher)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return &CompositePublisher{publishers: items}
+}
+
+func (p *CompositePublisher) PublishRepositorySyncCompleted(ctx context.Context, event SyncCompletedEvent) error {
+	if p == nil {
+		return nil
+	}
+	for _, publisher := range p.publishers {
+		if err := publisher.PublishRepositorySyncCompleted(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewService(store store, githubClient githubclient.Client, metrics *observability.Metrics) *Service {
@@ -362,13 +393,18 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		if cutoff != nil {
 			metricsFrom = cutoff.UTC()
 		}
+		organizationID, err := s.store.GetRepositoryOrganizationID(ctx, job.RepositoryID)
+		if err != nil {
+			return s.failJob(ctx, job, options.mode, runStarted, fmt.Errorf("load repository organization: %w", err))
+		}
 		if err := s.publisher.PublishRepositorySyncCompleted(ctx, SyncCompletedEvent{
-			EventType:    "repository.sync.completed",
-			RepositoryID: job.RepositoryID,
-			SyncJobID:    job.ID,
-			OccurredAt:   completedAt,
-			From:         metricsFrom,
-			To:           completedAt,
+			EventType:      "repository.sync.completed",
+			OrganizationID: organizationID,
+			RepositoryID:   job.RepositoryID,
+			SyncJobID:      job.ID,
+			OccurredAt:     completedAt,
+			From:           metricsFrom,
+			To:             completedAt,
 		}); err != nil {
 			return s.failJob(ctx, job, options.mode, runStarted, fmt.Errorf("trigger metrics calculation: %w", err))
 		}

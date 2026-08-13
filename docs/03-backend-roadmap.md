@@ -165,27 +165,30 @@
 
 ```text
 repository.sync.completed
-repository.sync.completed.dlq
 metrics.calculate
+metrics.calculate.dlq
 insights.generate
+insights.generate.dlq
 ```
 
 หมายเหตุ:
 
 - sync orchestration หลักของ backend ปัจจุบันใช้ PostgreSQL-backed `sync_jobs` และ polling workers
 - NATS JetStream ใช้สำหรับ downstream asynchronous workloads หลัง sync เสร็จ เช่น metric recalculation และงาน derived processing อื่น
+- implementation ปัจจุบัน publish `repository.sync.completed` เป็น domain event แล้ว fan-out ไป derived work subjects เช่น `metrics.calculate` และ `insights.generate`
+- การประเมินล่าสุดยังคงให้ sync ทั้ง flow อยู่บน PostgreSQL queue ต่อไปก่อน เพราะรองรับ checkpoint, cancel, retry, และ repository-scoped mutual exclusion ได้ตรงกว่า stage-level event choreography
 - หากภายหน้าจะย้าย sync ทั้ง flow ไป event-driven queue เต็มรูปแบบ ค่อยแตก subject เพิ่มตาม stage ที่ต้องการจริง
 
 ### Worker
 
-- [ ] กำหนด Consumer Group สำหรับ NATS consumers ที่ใช้งานจริง
-- [ ] จำกัด Worker Concurrency
-- [ ] Ack เมื่อบันทึกข้อมูลสำเร็จใน NATS consumers ที่ใช้งานจริง
-- [ ] Nak หรือ Retry เมื่อเกิด Temporary Error ใน NATS consumers ที่ใช้งานจริง
-- [ ] Dead-letter Subject สำหรับ asynchronous workloads ที่วิ่งผ่าน NATS
-- [ ] Job Timeout
-- [ ] Idempotency Key
-- [ ] Structured Error
+- [X] กำหนด Consumer Group สำหรับ NATS consumers ที่ใช้งานจริง
+- [X] จำกัด Worker Concurrency
+- [X] Ack เมื่อบันทึกข้อมูลสำเร็จใน NATS consumers ที่ใช้งานจริง
+- [X] Nak หรือ Retry เมื่อเกิด Temporary Error ใน NATS consumers ที่ใช้งานจริง
+- [X] Dead-letter Subject สำหรับ asynchronous workloads ที่วิ่งผ่าน NATS
+- [X] Job Timeout
+- [X] Idempotency Key
+- [X] Structured Error
 
 ---
 

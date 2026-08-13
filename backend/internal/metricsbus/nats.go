@@ -18,13 +18,16 @@ import (
 )
 
 const (
-	streamName   = "METRICS"
-	subjectName  = "repository.sync.completed"
-	dlqSubject   = "repository.sync.completed.dlq"
-	durableName  = "metrics-calculator"
-	ackWait      = 30 * time.Second
-	maxDeliver   = 5
-	historyStart = "1970-01-01"
+	streamName      = "METRICS"
+	eventSubject    = "repository.sync.completed"
+	workSubject     = "metrics.calculate"
+	dlqSubject      = "metrics.calculate.dlq"
+	durableName     = "metrics-calculator"
+	ackWait         = 30 * time.Second
+	maxDeliver      = 5
+	historyStart    = "1970-01-01"
+	publisherName   = "devlens-metrics"
+	traceNamePrefix = "devlens/nats"
 )
 
 type Client struct {
@@ -59,7 +62,7 @@ func calculationRequestForEvent(event syncjob.SyncCompletedEvent) metrics.Calcul
 }
 
 func Open(url string, metrics *observability.Metrics) (*Client, error) {
-	conn, err := nats.Connect(url, nats.Name("devlens-metrics"))
+	conn, err := nats.Connect(url, nats.Name(publisherName))
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
@@ -98,30 +101,44 @@ func (c *Client) PublishRepositorySyncCompleted(ctx context.Context, event syncj
 	payload, err := json.Marshal(event)
 	if err != nil {
 		if c.metrics != nil {
-			c.metrics.RecordQueuePublish("metricsbus", subjectName, "error")
+			c.metrics.RecordQueuePublish("metricsbus", workSubject, "error")
 		}
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("marshal metrics event: %w", err)
 	}
 
 	_, err = c.js.PublishMsg(&nats.Msg{
-		Subject: subjectName,
+		Subject: eventSubject,
 		Data:    payload,
-		Header:  nats.Header{"Nats-Msg-Id": []string{event.SyncJobID}},
+		Header:  nats.Header{"Nats-Msg-Id": []string{event.SyncJobID + ":event"}},
 	})
 	if err != nil {
 		if c.metrics != nil {
-			c.metrics.RecordQueuePublish("metricsbus", subjectName, "error")
+			c.metrics.RecordQueuePublish("metricsbus", eventSubject, "error")
+		}
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("publish sync completed event: %w", err)
+	}
+
+	_, err = c.js.PublishMsg(&nats.Msg{
+		Subject: workSubject,
+		Data:    payload,
+		Header:  nats.Header{"Nats-Msg-Id": []string{event.SyncJobID + ":metrics"}},
+	})
+	if err != nil {
+		if c.metrics != nil {
+			c.metrics.RecordQueuePublish("metricsbus", workSubject, "error")
 		}
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("publish metrics event: %w", err)
 	}
 	if c.metrics != nil {
-		c.metrics.RecordQueuePublish("metricsbus", subjectName, "ok")
+		c.metrics.RecordQueuePublish("metricsbus", eventSubject, "ok")
+		c.metrics.RecordQueuePublish("metricsbus", workSubject, "ok")
 	}
 	span.SetAttributes(
 		attribute.String("messaging.system", "nats"),
-		attribute.String("messaging.destination.name", subjectName),
+		attribute.String("messaging.destination.name", workSubject),
 		attribute.String("devlens.sync_job_id", event.SyncJobID),
 		attribute.Int64("devlens.nats.publish_ms", time.Since(started).Milliseconds()),
 	)
@@ -204,7 +221,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		return nil
 	}
 
-	sub, err := c.js.Subscribe(subjectName, c.handleMessage, nats.Durable(durableName), nats.ManualAck(), nats.DeliverNew(), nats.AckWait(ackWait), nats.MaxDeliver(maxDeliver))
+	sub, err := c.js.Subscribe(workSubject, c.handleMessage, nats.Durable(durableName), nats.ManualAck(), nats.DeliverNew(), nats.AckWait(ackWait), nats.MaxDeliver(maxDeliver))
 	if err != nil {
 		return fmt.Errorf("subscribe metrics consumer: %w", err)
 	}
@@ -223,14 +240,14 @@ func (c *Consumer) Run(ctx context.Context) error {
 
 func (c *Consumer) handleMessage(msg *nats.Msg) {
 	started := time.Now()
-	ctx, span := otel.Tracer("devlens/nats").Start(context.Background(), "nats.consume.repository_sync_completed")
+	ctx, span := otel.Tracer(traceNamePrefix).Start(context.Background(), "nats.consume.metrics_calculate")
 	defer span.End()
 
 	var event syncjob.SyncCompletedEvent
 	if err := json.Unmarshal(msg.Data, &event); err != nil {
 		c.logger.Error("decode metrics event failed", "error", err)
 		if c.metrics != nil {
-			c.metrics.RecordQueueConsume("metricsbus", subjectName, "decode_error", time.Since(started))
+			c.metrics.RecordQueueConsume("metricsbus", workSubject, "decode_error", time.Since(started))
 		}
 		c.recordLag()
 		span.SetStatus(codes.Error, err.Error())
@@ -248,7 +265,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 	if err := c.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, request); err != nil {
 		c.logger.Error("calculate metrics failed", "repository_id", event.RepositoryID, "sync_job_id", event.SyncJobID, "error", err)
 		if c.metrics != nil {
-			c.metrics.RecordQueueConsume("metricsbus", subjectName, "error", time.Since(started))
+			c.metrics.RecordQueueConsume("metricsbus", workSubject, "error", time.Since(started))
 		}
 		c.recordLag()
 		span.SetStatus(codes.Error, err.Error())
@@ -265,12 +282,12 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 		return
 	}
 	if c.metrics != nil {
-		c.metrics.RecordQueueConsume("metricsbus", subjectName, "ok", time.Since(started))
+		c.metrics.RecordQueueConsume("metricsbus", workSubject, "ok", time.Since(started))
 	}
 	c.recordLag()
 	span.SetAttributes(
 		attribute.String("messaging.system", "nats"),
-		attribute.String("messaging.destination.name", subjectName),
+		attribute.String("messaging.destination.name", workSubject),
 		attribute.String("devlens.repository_id", event.RepositoryID),
 		attribute.String("devlens.sync_job_id", event.SyncJobID),
 		attribute.Int64("devlens.nats.consume_ms", time.Since(started).Milliseconds()),
@@ -288,7 +305,7 @@ func (c *Consumer) recordLag() {
 	if err != nil || info == nil {
 		return
 	}
-	c.metrics.RecordQueueLag("metricsbus", subjectName, int64(info.NumPending))
+	c.metrics.RecordQueueLag("metricsbus", workSubject, int64(info.NumPending))
 }
 
 func (c *Client) ensureStream() error {
@@ -302,7 +319,7 @@ func (c *Client) ensureStream() error {
 
 	_, err = c.js.AddStream(&nats.StreamConfig{
 		Name:      streamName,
-		Subjects:  []string{subjectName, dlqSubject},
+		Subjects:  []string{eventSubject, workSubject, dlqSubject},
 		Retention: nats.LimitsPolicy,
 		Storage:   nats.FileStorage,
 	})

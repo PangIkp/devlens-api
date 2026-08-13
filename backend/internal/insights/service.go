@@ -56,62 +56,9 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 		}
 	}
 
-	repositories, err := s.repository.ListRepositories(ctx, params.OrganizationID, params.RepositoryID)
+	allInsights, err := s.loadInsights(ctx, params.OrganizationID, params.RepositoryID, params.From, params.To)
 	if err != nil {
 		return ListResult{}, err
-	}
-
-	allInsights := make([]Insight, 0)
-	for _, repo := range repositories {
-		items, err := s.generateRepositoryInsights(ctx, repo, params.From, params.To)
-		if err != nil {
-			return ListResult{}, err
-		}
-		for i := range items {
-			items[i].OrganizationID = params.OrganizationID
-			items[i].RepositoryName = repo.FullName
-			items[i].Status = StatusOpen
-		}
-		allInsights = append(allInsights, items...)
-	}
-	allInsights = s.deduplicateInsights(allInsights)
-
-	if len(allInsights) == 0 {
-		return ListResult{Items: []Insight{}, TotalItems: 0}, nil
-	}
-
-	statuses, err := s.repository.ListStatusesByKeys(ctx, params.OrganizationID, insightKeys(allInsights))
-	if err != nil {
-		return ListResult{}, err
-	}
-
-	for i := range allInsights {
-		if status, ok := statuses[allInsights[i].InsightKey]; ok {
-			applyStatus(&allInsights[i], status)
-			if s.shouldReopen(status, allInsights[i]) {
-				result, reopenErr := s.repository.UpsertStatus(ctx, upsertStatusParams{
-					OrganizationID: params.OrganizationID,
-					RepositoryID:   optionalString(allInsights[i].RepositoryID),
-					InsightKey:     allInsights[i].InsightKey,
-					InsightType:    allInsights[i].InsightType,
-					Status:         StatusOpen,
-					Evidence:       allInsights[i].Evidence,
-					ReviewedBy:     status.ReviewedBy,
-					ReviewedAt:     status.ReviewedAt,
-					DismissedAt:    nil,
-					ReopenedAt:     timePtr(s.now()),
-					UpdatedAt:      s.now(),
-				})
-				if reopenErr != nil {
-					return ListResult{}, reopenErr
-				}
-				allInsights[i].Status = result.Status
-				allInsights[i].ReviewedBy = result.ReviewedBy
-				allInsights[i].ReviewedAt = result.ReviewedAt
-				allInsights[i].DismissedAt = result.DismissedAt
-				allInsights[i].ReopenedAt = result.ReopenedAt
-			}
-		}
 	}
 
 	filtered := filterInsights(allInsights, params.Type, params.Status)
@@ -132,6 +79,113 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 		end = totalItems
 	}
 	return ListResult{Items: filtered[start:end], TotalItems: totalItems}, nil
+}
+
+func (s *Service) RefreshRepository(ctx context.Context, organizationID string, repositoryID string, from time.Time, to time.Time) error {
+	if strings.TrimSpace(organizationID) == "" {
+		return &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "organizationId", Message: "is required"}},
+		}
+	}
+	if !isUUID(repositoryID) {
+		return &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "repositoryId", Message: "must be a valid UUID"}},
+		}
+	}
+	if from.IsZero() || to.IsZero() || to.Before(from) {
+		return &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "from", Message: "must define a valid date range"}},
+		}
+	}
+	items, err := s.loadInsights(ctx, organizationID, repositoryID, from, to)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Status != StatusOpen {
+			continue
+		}
+		if _, err := s.repository.UpsertStatus(ctx, upsertStatusParams{
+			OrganizationID: organizationID,
+			RepositoryID:   optionalString(item.RepositoryID),
+			InsightKey:     item.InsightKey,
+			InsightType:    item.InsightType,
+			Status:         StatusOpen,
+			Evidence:       item.Evidence,
+			ReviewedBy:     item.ReviewedBy,
+			ReviewedAt:     item.ReviewedAt,
+			DismissedAt:    nil,
+			ReopenedAt:     item.ReopenedAt,
+			UpdatedAt:      s.now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) loadInsights(ctx context.Context, organizationID string, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+	repositories, err := s.repository.ListRepositories(ctx, organizationID, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+
+	allInsights := make([]Insight, 0)
+	for _, repo := range repositories {
+		items, err := s.generateRepositoryInsights(ctx, repo, from, to)
+		if err != nil {
+			return nil, err
+		}
+		for i := range items {
+			items[i].OrganizationID = organizationID
+			items[i].RepositoryName = repo.FullName
+			items[i].Status = StatusOpen
+		}
+		allInsights = append(allInsights, items...)
+	}
+	allInsights = s.deduplicateInsights(allInsights)
+	if len(allInsights) == 0 {
+		return []Insight{}, nil
+	}
+
+	statuses, err := s.repository.ListStatusesByKeys(ctx, organizationID, insightKeys(allInsights))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range allInsights {
+		if status, ok := statuses[allInsights[i].InsightKey]; ok {
+			applyStatus(&allInsights[i], status)
+			if s.shouldReopen(status, allInsights[i]) {
+				result, reopenErr := s.repository.UpsertStatus(ctx, upsertStatusParams{
+					OrganizationID: organizationID,
+					RepositoryID:   optionalString(allInsights[i].RepositoryID),
+					InsightKey:     allInsights[i].InsightKey,
+					InsightType:    allInsights[i].InsightType,
+					Status:         StatusOpen,
+					Evidence:       allInsights[i].Evidence,
+					ReviewedBy:     status.ReviewedBy,
+					ReviewedAt:     status.ReviewedAt,
+					DismissedAt:    nil,
+					ReopenedAt:     timePtr(s.now()),
+					UpdatedAt:      s.now(),
+				})
+				if reopenErr != nil {
+					return nil, reopenErr
+				}
+				allInsights[i].Status = result.Status
+				allInsights[i].ReviewedBy = result.ReviewedBy
+				allInsights[i].ReviewedAt = result.ReviewedAt
+				allInsights[i].DismissedAt = result.DismissedAt
+				allInsights[i].ReopenedAt = result.ReopenedAt
+			}
+		}
+	}
+
+	return allInsights, nil
 }
 
 func (s *Service) Review(ctx context.Context, organizationID string, insightKey string, req ReviewRequest) (StatusResult, error) {

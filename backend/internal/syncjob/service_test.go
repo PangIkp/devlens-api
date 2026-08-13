@@ -14,6 +14,7 @@ type stubStore struct {
 	hasActiveJobFn            func(context.Context, string) (bool, error)
 	createFn                  func(context.Context, createParams) (SyncJobResponse, error)
 	getByIDFn                 func(context.Context, string) (SyncJobResponse, error)
+	getRepositoryOrgIDFn      func(context.Context, string) (string, error)
 	listByRepositoryFn        func(context.Context, ListParams) (ListResult, error)
 	retryFn                   func(context.Context, string, time.Time) (SyncJobResponse, error)
 	cancelFn                  func(context.Context, string, time.Time) (SyncJobResponse, error)
@@ -58,6 +59,13 @@ func (s stubStore) GetByID(ctx context.Context, id string) (SyncJobResponse, err
 		return SyncJobResponse{}, nil
 	}
 	return s.getByIDFn(ctx, id)
+}
+
+func (s stubStore) GetRepositoryOrganizationID(ctx context.Context, repositoryID string) (string, error) {
+	if s.getRepositoryOrgIDFn == nil {
+		return "bd546e60-e65d-b1fd-3713-6f56aa60f149", nil
+	}
+	return s.getRepositoryOrgIDFn(ctx, repositoryID)
 }
 
 func (s stubStore) ListByRepository(ctx context.Context, params ListParams) (ListResult, error) {

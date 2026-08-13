@@ -25,7 +25,7 @@ func TestPublishRepositorySyncCompletedIntegration(t *testing.T) {
 	}
 	t.Cleanup(client.Close)
 
-	sub, err := client.js.SubscribeSync(subjectName, nats.DeliverNew())
+	sub, err := client.js.SubscribeSync(workSubject, nats.DeliverNew())
 	if err != nil {
 		t.Fatalf("subscribe to metrics subject: %v", err)
 	}

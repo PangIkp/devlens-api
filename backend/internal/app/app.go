@@ -21,6 +21,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/githubconnection"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
+	"github.com/PangIkp/devlens/backend/internal/insightbus"
 	"github.com/PangIkp/devlens/backend/internal/insights"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/metricsbus"
@@ -44,6 +45,8 @@ type App struct {
 	webhookWorker   *githubwebhook.Worker
 	metricsBus      *metricsbus.Client
 	metricsConsumer *metricsbus.Consumer
+	insightBus      *insightbus.Client
+	insightConsumer *insightbus.Consumer
 	tracing         *observability.Tracing
 	appMetrics      *observability.Metrics
 }
@@ -191,6 +194,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer
+	var insightBusClient *insightbus.Client
+	var insightConsumer *insightbus.Consumer
 	if clickhouseDB != nil {
 		if client, err := metricsbus.Open(cfg.NATS.URL, appMetrics); err != nil {
 			logger.Warn("metrics bus unavailable during startup", "error", err)
@@ -198,7 +203,16 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 			metricsBusClient = client
 			metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
 		}
-		syncJobService.SetCompletionPublisher(metricsbus.NewPublisher(logger, metricsBusClient, metricsService))
+		if client, err := insightbus.Open(cfg.NATS.URL, appMetrics); err != nil {
+			logger.Warn("insight bus unavailable during startup", "error", err)
+		} else {
+			insightBusClient = client
+			insightConsumer = insightbus.NewConsumer(logger, client, insightService)
+		}
+		syncJobService.SetCompletionPublisher(syncjob.NewCompositePublisher(
+			metricsbus.NewPublisher(logger, metricsBusClient, metricsService),
+			insightbus.NewPublisher(logger, insightBusClient),
+		))
 	}
 
 	var clickhouseHealthChecker httpapi.ClickHouseHealthChecker
@@ -245,6 +259,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		webhookWorker:   webhookWorker,
 		metricsBus:      metricsBusClient,
 		metricsConsumer: metricsConsumer,
+		insightBus:      insightBusClient,
+		insightConsumer: insightConsumer,
 		tracing:         tracing,
 		appMetrics:      appMetrics,
 	}, nil
@@ -279,6 +295,13 @@ func (a *App) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	if a.insightConsumer != nil {
+		go func() {
+			if err := a.insightConsumer.Run(ctx); err != nil {
+				a.logger.Error("insight consumer stopped", "error", err)
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -309,6 +332,9 @@ func (a *App) close() {
 	}
 	if a.metricsBus != nil {
 		a.metricsBus.Close()
+	}
+	if a.insightBus != nil {
+		a.insightBus.Close()
 	}
 	if a.tracing != nil {
 		_ = a.tracing.Shutdown(context.Background())

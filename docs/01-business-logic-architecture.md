@@ -176,9 +176,11 @@ flowchart LR
     PG --> SW
     SW --> NATS[NATS JetStream]
     NATS --> MW[Metric Worker]
+    NATS --> IW[Insight Worker]
     SW --> PG[(PostgreSQL)]
     SW --> CH[(ClickHouse)]
     MW --> CH
+    IW --> PG
     PG --> API[Go API]
     CH --> API
     API --> FE[React Dashboard]
@@ -213,9 +215,11 @@ flowchart LR
 ### Go Ingestor และ Worker
 
 - ดึงข้อมูลย้อนหลังจาก GitHub
-- รับ Event จาก Queue
+- orchestration หลักของ sync ใช้ PostgreSQL-backed queue และ polling workers
+- รับ derived event จาก NATS หลัง sync สำเร็จ
 - Normalize ข้อมูล GitHub
 - คำนวณและอัปเดต Metric
+- generate และ refresh insight status
 - Retry งานที่ล้มเหลว
 
 ### PostgreSQL

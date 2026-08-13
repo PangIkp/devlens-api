@@ -284,3 +284,78 @@ func TestListAutoReopensDismissedInsightWhenDetectedAgain(t *testing.T) {
 		t.Fatalf("expected open insight after reopen, got %+v", result.Items)
 	}
 }
+
+func TestRefreshRepositoryPersistsOnlyOpenInsights(t *testing.T) {
+	t.Parallel()
+
+	detectedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	openKey := buildInsightKey(TypeHotspotDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "file-a")
+	reviewedKey := buildInsightKey(TypeLargePRDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12")
+	upserted := make([]upsertStatusParams, 0)
+
+	service := NewService(stubStore{
+		ensureRepositoryFn: func(context.Context, string, string) error { return nil },
+		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
+			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
+		},
+		listLargePRsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+			return []Insight{{
+				InsightKey:   reviewedKey,
+				InsightType:  TypeLargePRDetection,
+				Severity:     SeverityHigh,
+				DetectedAt:   detectedAt,
+				RepositoryID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+				Evidence:     map[string]any{"entityKey": "pr-12"},
+			}}, nil
+		},
+		listHotspotsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+			return []Insight{{
+				InsightKey:   openKey,
+				InsightType:  TypeHotspotDetection,
+				Severity:     SeverityMedium,
+				DetectedAt:   detectedAt,
+				RepositoryID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+				Evidence:     map[string]any{"entityKey": "file-a"},
+			}}, nil
+		},
+		listStatusesFn: func(context.Context, string, []string) (map[string]statusRecord, error) {
+			return map[string]statusRecord{
+				reviewedKey: {Status: StatusReviewed, ReviewedAt: timePtr(detectedAt.Add(-time.Hour))},
+			}, nil
+		},
+		upsertStatusFn: func(_ context.Context, params upsertStatusParams) (StatusResult, error) {
+			upserted = append(upserted, params)
+			return StatusResult{
+				InsightKey:  params.InsightKey,
+				InsightType: params.InsightType,
+				Status:      params.Status,
+				UpdatedAt:   params.UpdatedAt,
+			}, nil
+		},
+	}, RuleConfig{
+		AutoReopen: AutoReopenRuleConfig{
+			OnReviewed:      false,
+			OnDismissed:     true,
+			MinimumSeverity: SeverityMedium,
+		},
+		Deduplicate: DeduplicateRuleConfig{
+			Enabled: true,
+			Version: 1,
+		},
+	})
+	service.now = func() time.Time { return detectedAt.Add(2 * time.Hour) }
+
+	err := service.RefreshRepository(context.Background(), "bd546e60-e65d-b1fd-3713-6f56aa60f149", "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("refresh repository insights: %v", err)
+	}
+	if len(upserted) != 1 {
+		t.Fatalf("expected 1 open insight upsert, got %d", len(upserted))
+	}
+	if upserted[0].InsightKey != openKey {
+		t.Fatalf("expected open insight key %q, got %q", openKey, upserted[0].InsightKey)
+	}
+	if upserted[0].Status != StatusOpen {
+		t.Fatalf("expected persisted status open, got %s", upserted[0].Status)
+	}
+}

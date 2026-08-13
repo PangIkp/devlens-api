@@ -352,9 +352,25 @@ Notes:
 - pull request upsert uses `github_pr_id` as the primary external identity
 - pull request data also enforces `(repository_id, number)` as a secondary consistency constraint
 - pull request review upsert uses `github_review_id` as the provider identity
-- full repository sync from webhook and direct event projection are intentionally deferred
-- metrics recalculation is triggered by `repository.sync.completed` events on NATS JetStream
-- deployment ingestion and file change ingestion are intentionally deferred in this branch; the schema and repositories are prepared so dashboards can safely return `0` or empty lists until those sources are populated
+- webhook-created sync jobs now run as full repository syncs when repository mapping is available
+- direct event projection is implemented for supported webhook resource types alongside sync-job enqueue
+- sync orchestration remains PostgreSQL-backed; NATS JetStream is used for downstream derived workloads after sync completion
+- `repository.sync.completed` is published as a domain event, then fanned out to `metrics.calculate` and `insights.generate`
+- deployment ingestion, workflow ingestion, commit ingestion, and file-change ingestion are implemented and feed analytics storage
+
+## Deployment And Operations
+
+- primary operational guidance lives in [`docs/07-operations-runbook.md`](./docs/07-operations-runbook.md)
+- data retention, cleanup, and ClickHouse backup/restore notes live in [`docs/09-data-lifecycle-and-backup.md`](./docs/09-data-lifecycle-and-backup.md)
+- security-sensitive secret handling and rotation guidance lives in [`docs/10-security-hardening.md`](./docs/10-security-hardening.md)
+
+Production-like deployment expectations today:
+
+- deploy a versioned backend artifact or image
+- provision PostgreSQL, ClickHouse, and NATS outside the app process
+- run migrations before shifting write traffic
+- inject secrets through the environment or platform secret manager
+- verify health, readiness, metrics scrape, worker activity, webhook retry flow, and one known repository metrics path after rollout
 
 ## Local Services
 

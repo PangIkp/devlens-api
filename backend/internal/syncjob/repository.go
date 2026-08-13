@@ -274,6 +274,18 @@ func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID strin
 	}, nil
 }
 
+func (r *Repository) GetRepositoryOrganizationID(ctx context.Context, repositoryID string) (string, error) {
+	var organizationID string
+	err := r.db.Pool().QueryRow(ctx, `SELECT organization_id::text FROM repositories WHERE id = $1`, parseUUID(repositoryID)).Scan(&organizationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrRepositoryNotFound
+		}
+		return "", fmt.Errorf("get repository organization id: %w", err)
+	}
+	return organizationID, nil
+}
+
 func (r *Repository) MarkRunning(ctx context.Context, id string, progress int, at time.Time) (SyncJobResponse, error) {
 	row, err := r.queries.UpdateSyncJobRunning(ctx, sqlcgen.UpdateSyncJobRunningParams{
 		ID:        parseUUID(id),
