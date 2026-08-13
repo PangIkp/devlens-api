@@ -127,22 +127,22 @@ paths:
     get:
       tags:
         - Health
-      summary: Check API health
+      summary: Check API liveness
       operationId: getHealth
       security: []
       responses:
         "200":
-          description: API is healthy
+          description: API process is alive and core stores are reachable
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthResponse"
+                $ref: "#/components/schemas/LivenessHealthResponse"
         "503":
-          description: One or more dependencies are unavailable
+          description: Core stores required for liveness are unavailable
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthResponse"
+                $ref: "#/components/schemas/LivenessHealthResponse"
 
   /readiness:
     get:
@@ -157,13 +157,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthResponse"
+                $ref: "#/components/schemas/ReadinessHealthResponse"
         "503":
           description: One or more required dependencies are unavailable
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthResponse"
+                $ref: "#/components/schemas/ReadinessHealthResponse"
 
   /organizations:
     post:
@@ -1626,7 +1626,31 @@ components:
         example: 7b0ce8d6611b40e5b32ea3cbe3d98d0a
 
   schemas:
-    HealthResponse:
+    LivenessHealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - dependencies
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          required:
+            - postgres
+            - clickhouse
+          properties:
+            postgres:
+              $ref: "#/components/schemas/DependencyStatus"
+            clickhouse:
+              $ref: "#/components/schemas/DependencyStatus"
+
+    ReadinessHealthResponse:
       type: object
       required:
         - status

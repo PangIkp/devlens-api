@@ -101,6 +101,24 @@ type InsightStatus struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
+type MetricDefinition struct {
+	ID               pgtype.UUID
+	MetricKey        string
+	Name             string
+	MetricVersion    int32
+	AlgorithmVersion pgtype.Text
+	Unit             pgtype.Text
+	Description      pgtype.Text
+	ConfigJson       []byte
+	IsActive         bool
+	CreatedAt        pgtype.Timestamptz
+	CreatedBy        pgtype.UUID
+	UpdatedAt        pgtype.Timestamptz
+	UpdatedBy        pgtype.UUID
+	DeletedAt        pgtype.Timestamptz
+	DeletedBy        pgtype.UUID
+}
+
 type Organization struct {
 	ID        pgtype.UUID
 	GithubID  int64

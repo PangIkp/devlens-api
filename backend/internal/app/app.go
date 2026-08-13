@@ -23,6 +23,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
 	"github.com/PangIkp/devlens/backend/internal/insightbus"
 	"github.com/PangIkp/devlens/backend/internal/insights"
+	"github.com/PangIkp/devlens/backend/internal/metricdefinition"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/metricsbus"
 	"github.com/PangIkp/devlens/backend/internal/observability"
@@ -107,12 +108,18 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
 	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService, authorizationService, auditService)
-	metricsService := metrics.NewService(postgresDB, clickhouseDB, metrics.RuleConfig{
+	metricsRules := metrics.RuleConfig{
 		DefaultDayType:         cfg.Metrics.DefaultDayType,
 		HotspotCommitWeight:    cfg.Metrics.HotspotCommitWeight,
 		HotspotAdditionsWeight: cfg.Metrics.HotspotAdditionsWeight,
 		HotspotDeletionsWeight: cfg.Metrics.HotspotDeletionsWeight,
-	})
+	}
+	metricDefinitionRepository := metricdefinition.NewRepository(postgresDB)
+	metricsRules, err = metricDefinitionRepository.LoadMetricsRuleConfig(ctx, metricsRules)
+	if err != nil {
+		return nil, fmt.Errorf("load metric definition config: %w", err)
+	}
+	metricsService := metrics.NewService(postgresDB, clickhouseDB, metricsRules)
 	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
 	insightRules := insights.RuleConfig{
 		LargePR: insights.LargePRRuleConfig{

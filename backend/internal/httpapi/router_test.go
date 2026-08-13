@@ -59,8 +59,8 @@ func TestHealthHandlerSuccess(t *testing.T) {
 	if body.Dependencies.Postgres.Status != "ok" {
 		t.Fatalf("expected postgres status ok, got %q", body.Dependencies.Postgres.Status)
 	}
-	if body.Dependencies.NATS.Status != "ok" {
-		t.Fatalf("expected nats status ok, got %q", body.Dependencies.NATS.Status)
+	if body.Dependencies.NATS != nil {
+		t.Fatalf("expected nats dependency to be omitted for liveness, got %+v", *body.Dependencies.NATS)
 	}
 
 	if time.Since(body.Timestamp) > time.Minute {
@@ -151,6 +151,12 @@ func TestReadinessHandlerSuccess(t *testing.T) {
 	if body.Status != "ok" {
 		t.Fatalf("expected status ok, got %q", body.Status)
 	}
+	if body.Dependencies.NATS == nil {
+		t.Fatal("expected readiness to include nats dependency")
+	}
+	if body.Dependencies.NATS.Status != "ok" {
+		t.Fatalf("expected nats status ok, got %q", body.Dependencies.NATS.Status)
+	}
 }
 
 func TestReadinessHandlerUnavailableClickHouse(t *testing.T) {
@@ -201,6 +207,9 @@ func TestReadinessHandlerUnavailableNATS(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 
+	if body.Dependencies.NATS == nil {
+		t.Fatal("expected readiness to include nats dependency")
+	}
 	if body.Dependencies.NATS.Status != "unavailable" {
 		t.Fatalf("expected unavailable nats status, got %q", body.Dependencies.NATS.Status)
 	}

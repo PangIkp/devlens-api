@@ -15,7 +15,7 @@ type DependencyStatus struct {
 type HealthDependencies struct {
 	Postgres   DependencyStatus `json:"postgres"`
 	ClickHouse DependencyStatus `json:"clickhouse"`
-	NATS       DependencyStatus `json:"nats"`
+	NATS       *DependencyStatus `json:"nats,omitempty"`
 }
 
 type HealthResponse struct {
@@ -63,7 +63,6 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Dependencies: HealthDependencies{
 			Postgres:   DependencyStatus{Status: "ok"},
 			ClickHouse: DependencyStatus{Status: "ok"},
-			NATS:       DependencyStatus{Status: "ok"},
 		},
 	}
 
@@ -88,10 +87,11 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.mode == healthModeReadiness {
+		response.Dependencies.NATS = &DependencyStatus{Status: "ok"}
 		if err := h.checkNATS(r.Context()); err != nil {
 			statusCode = http.StatusServiceUnavailable
 			response.Status = "degraded"
-			response.Dependencies.NATS = DependencyStatus{
+			response.Dependencies.NATS = &DependencyStatus{
 				Status:  "unavailable",
 				Message: "NATS unavailable",
 			}
