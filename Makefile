@@ -9,7 +9,7 @@ POSTGRES_DSN ?= postgres://devlens:devlens@localhost:5432/devlens?sslmode=disabl
 ENV_FILE := $(PWD)/.env
 LOAD_ENV = if [ -f "$(ENV_FILE)" ]; then set -a; source "$(ENV_FILE)"; set +a; fi;
 
-.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate
+.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook
 
 fmt:
 	$(GO_RUN) gofmt -w .
@@ -41,3 +41,11 @@ migrate-status:
 sqlc-generate:
 	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
 	cd backend && $(GO_TOOL_ENV) go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+
+load-dashboard:
+	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
+	@$(LOAD_ENV) cd backend && $(GO_TOOL_ENV) go run ./cmd/loadtest -scenario dashboard -repository-id "$${LOADTEST_REPOSITORY_ID}" -requests "$${LOADTEST_REQUESTS:-100}" -concurrency "$${LOADTEST_CONCURRENCY:-10}" -from "$${LOADTEST_FROM:-2026-08-01}" -to "$${LOADTEST_TO:-2026-08-13}" -page "$${LOADTEST_PAGE:-1}" -page-size "$${LOADTEST_PAGE_SIZE:-20}"
+
+load-webhook:
+	mkdir -p "$(GO_TOOL_CACHE_DIR)" "$(GO_TOOL_MOD_CACHE_DIR)"
+	@$(LOAD_ENV) cd backend && $(GO_TOOL_ENV) go run ./cmd/loadtest -scenario webhook -requests "$${LOADTEST_REQUESTS:-100}" -concurrency "$${LOADTEST_CONCURRENCY:-10}" -webhook-event "$${LOADTEST_WEBHOOK_EVENT:-pull_request}" -webhook-body "$${LOADTEST_WEBHOOK_BODY:-{\"action\":\"opened\",\"repository\":{\"id\":42,\"full_name\":\"pangikp/devlens-api\"}}}"

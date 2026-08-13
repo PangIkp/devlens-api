@@ -80,6 +80,13 @@ make test
 make run
 ```
 
+7. Run lightweight local load tests:
+
+```sh
+LOADTEST_REPOSITORY_ID=<repository-uuid> make load-dashboard
+GITHUB_WEBHOOK_SECRET=<your-webhook-secret> make load-webhook
+```
+
 ## Organization API
 
 Current `Organization` shape:
