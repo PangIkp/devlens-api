@@ -88,3 +88,77 @@ func TestBuildRiskIndicatorLowRisk(t *testing.T) {
 		t.Fatalf("expected no risk reasons, got %+v", risk.Reasons)
 	}
 }
+
+func TestComputeCycleTimeMinutesReturnsNilWhenUnmerged(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	if got := computeCycleTimeMinutes(createdAt, nil); got != nil {
+		t.Fatalf("expected nil cycle time for unmerged PR, got %v", *got)
+	}
+}
+
+func TestComputeCycleTimeMinutesComputesDelta(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	mergedAt := createdAt.Add(90 * time.Minute)
+
+	got := computeCycleTimeMinutes(createdAt, &mergedAt)
+	if got == nil || *got != 90 {
+		t.Fatalf("expected 90 minutes cycle time, got %v", got)
+	}
+}
+
+func TestComputeReviewWaitMinutesSkipsBotsAndPicksEarliestHumanReview(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	botFirstReview := requestedAt.Add(5 * time.Minute)
+	humanFirstReview := requestedAt.Add(45 * time.Minute)
+	laterHumanFirstReview := requestedAt.Add(120 * time.Minute)
+
+	got := computeReviewWaitMinutes([]Review{
+		{Reviewer: "dependabot[bot]", ReviewRequestedAt: &requestedAt, FirstReviewAt: &botFirstReview},
+		{Reviewer: "pangikp", ReviewRequestedAt: &requestedAt, FirstReviewAt: &laterHumanFirstReview},
+		{Reviewer: "itsara", ReviewRequestedAt: &requestedAt, FirstReviewAt: &humanFirstReview},
+	})
+
+	if got == nil || *got != 45 {
+		t.Fatalf("expected 45 minutes review wait from earliest human reviewer, got %v", got)
+	}
+}
+
+func TestComputeReviewWaitMinutesReturnsNilWithoutHumanReview(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	firstReviewAt := requestedAt.Add(5 * time.Minute)
+
+	got := computeReviewWaitMinutes([]Review{
+		{Reviewer: "github-actions", ReviewRequestedAt: &requestedAt, FirstReviewAt: &firstReviewAt},
+		{Reviewer: "itsara", ReviewRequestedAt: &requestedAt, FirstReviewAt: nil},
+	})
+
+	if got != nil {
+		t.Fatalf("expected nil review wait when no human has reviewed yet, got %v", *got)
+	}
+}
+
+func TestIsBotReviewer(t *testing.T) {
+	t.Parallel()
+
+	botNames := []string{"dependabot[bot]", "renovate-bot", "github-actions", "web-flow", "", "  "}
+	for _, name := range botNames {
+		if !isBotReviewer(name) {
+			t.Fatalf("expected %q to be treated as a bot reviewer", name)
+		}
+	}
+
+	humanNames := []string{"itsara", "pangikp", "octocat"}
+	for _, name := range humanNames {
+		if isBotReviewer(name) {
+			t.Fatalf("expected %q to be treated as a human reviewer", name)
+		}
+	}
+}

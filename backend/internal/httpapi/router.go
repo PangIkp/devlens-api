@@ -25,25 +25,27 @@ type NATSHealthChecker interface {
 }
 
 type Dependencies struct {
-	Postgres            PostgresHealthChecker
-	ClickHouse          ClickHouseHealthChecker
-	NATS                NATSHealthChecker
-	AppMetrics          *observability.Metrics
-	AllowedOrigins      []string
-	RateLimitRequests   int
-	RateLimitWindow     time.Duration
-	Auth                *AuthHandler
-	Authenticator       middleware.Authenticator
-	Organizations       *OrganizationHandler
-	OrganizationMembers *OrganizationMemberHandler
-	Me                  *MeHandler
-	GitHubConnections   *GitHubConnectionHandler
-	PullRequests        *PullRequestHandler
-	Repositories        *RepositoryHandler
-	Metrics             *MetricsHandler
-	Insights            *InsightHandler
-	SyncJobs            *SyncJobHandler
-	GitHubWebhook       *GitHubWebhookHandler
+	Postgres                      PostgresHealthChecker
+	ClickHouse                    ClickHouseHealthChecker
+	NATS                          NATSHealthChecker
+	AppMetrics                    *observability.Metrics
+	AllowedOrigins                []string
+	RateLimitRequests             int
+	RateLimitWindow               time.Duration
+	Auth                          *AuthHandler
+	Authenticator                 middleware.Authenticator
+	Organizations                 *OrganizationHandler
+	OrganizationMembers           *OrganizationMemberHandler
+	Me                            *MeHandler
+	GitHubConnections             *GitHubConnectionHandler
+	PullRequests                  *PullRequestHandler
+	Repositories                  *RepositoryHandler
+	Metrics                       *MetricsHandler
+	Insights                      *InsightHandler
+	SyncJobs                      *SyncJobHandler
+	GitHubWebhook                 *GitHubWebhookHandler
+	OrganizationRuleSettings      *OrganizationRuleSettingsHandler
+	OrganizationRetentionSettings *OrganizationRetentionSettingsHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
@@ -112,6 +114,12 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		}
 		if deps.GitHubWebhook != nil {
 			deps.GitHubWebhook.RegisterRoutes(r)
+		}
+		if deps.OrganizationRuleSettings != nil {
+			deps.OrganizationRuleSettings.RegisterRoutes(r)
+		}
+		if deps.OrganizationRetentionSettings != nil {
+			deps.OrganizationRetentionSettings.RegisterRoutes(r)
 		}
 	})
 

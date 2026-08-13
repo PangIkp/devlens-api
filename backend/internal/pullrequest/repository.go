@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -179,7 +180,66 @@ WHERE pr.id = $1`
 	response.FileChanges = changes
 	response.Timeline = buildTimeline(response.Author, response.CreatedAt, response.MergedAt, response.ClosedAt, reviews)
 	response.RiskIndicator = buildRiskIndicator(response, reviews, changes)
+	response.CycleTimeMinutes = computeCycleTimeMinutes(response.CreatedAt, response.MergedAt)
+	response.ReviewWaitMinutes = computeReviewWaitMinutes(reviews)
 	return response, nil
+}
+
+func computeCycleTimeMinutes(createdAt time.Time, mergedAt *time.Time) *int64 {
+	if mergedAt == nil || mergedAt.Before(createdAt) {
+		return nil
+	}
+	minutes := int64(mergedAt.Sub(createdAt).Minutes())
+	return &minutes
+}
+
+func computeReviewWaitMinutes(reviews []Review) *int64 {
+	var earliest *time.Time
+	var waitMinutes int64
+
+	for _, review := range reviews {
+		if isBotReviewer(review.Reviewer) {
+			continue
+		}
+		if review.ReviewRequestedAt == nil || review.FirstReviewAt == nil {
+			continue
+		}
+		if review.FirstReviewAt.Before(*review.ReviewRequestedAt) {
+			continue
+		}
+		if earliest != nil && !review.FirstReviewAt.Before(*earliest) {
+			continue
+		}
+		firstReviewAt := *review.FirstReviewAt
+		earliest = &firstReviewAt
+		waitMinutes = int64(review.FirstReviewAt.Sub(*review.ReviewRequestedAt).Minutes())
+	}
+
+	if earliest == nil {
+		return nil
+	}
+	return &waitMinutes
+}
+
+func isBotReviewer(reviewer string) bool {
+	name := strings.ToLower(strings.TrimSpace(reviewer))
+	if name == "" {
+		return true
+	}
+	switch {
+	case strings.HasSuffix(name, "[bot]"):
+		return true
+	case strings.HasPrefix(name, "dependabot"):
+		return true
+	case strings.HasSuffix(name, "-bot"):
+		return true
+	case name == "github-actions":
+		return true
+	case name == "web-flow":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Repository) listReviews(ctx context.Context, pullRequestID string) ([]Review, error) {

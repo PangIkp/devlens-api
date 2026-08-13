@@ -14,11 +14,12 @@ import (
 )
 
 type stubGitHubConnectionService struct {
-	getFn      func(context.Context, string) (githubconnection.ConnectionResponse, error)
-	startFn    func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
-	completeFn func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
-	listFn     func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
-	selectFn   func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
+	getFn        func(context.Context, string) (githubconnection.ConnectionResponse, error)
+	startFn      func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
+	completeFn   func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
+	listFn       func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
+	selectFn     func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
+	disconnectFn func(context.Context, string) error
 }
 
 func (s stubGitHubConnectionService) GetConnection(ctx context.Context, organizationID string) (githubconnection.ConnectionResponse, error) {
@@ -39,6 +40,13 @@ func (s stubGitHubConnectionService) ListAccessibleRepositories(ctx context.Cont
 
 func (s stubGitHubConnectionService) SelectRepositories(ctx context.Context, organizationID string, req githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
 	return s.selectFn(ctx, organizationID, req)
+}
+
+func (s stubGitHubConnectionService) Disconnect(ctx context.Context, organizationID string) error {
+	if s.disconnectFn == nil {
+		return nil
+	}
+	return s.disconnectFn(ctx, organizationID)
 }
 
 func TestGetGitHubConnectionHandler(t *testing.T) {
@@ -181,5 +189,98 @@ func TestGetGitHubConnectionHandlerReturnsNotModifiedWhenETagMatches(t *testing.
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("expected status 304, got %d", rec.Code)
+	}
+}
+
+func TestDisconnectGitHubConnectionHandler(t *testing.T) {
+	t.Parallel()
+
+	var disconnectedOrgID string
+	service := stubGitHubConnectionService{
+		getFn: func(_ context.Context, organizationID string) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{
+				OrganizationID: organizationID,
+				Provider:       "github",
+				State:          githubconnection.StateNotConnected,
+			}, nil
+		},
+		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+			return githubconnection.StartInstallationResponse{}, nil
+		},
+		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{}, nil
+		},
+		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
+			return githubconnection.ListAccessibleRepositoriesResult{}, nil
+		},
+		selectFn: func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
+			return githubconnection.SelectRepositoriesResponse{}, nil
+		},
+		disconnectFn: func(_ context.Context, organizationID string) error {
+			disconnectedOrgID = organizationID
+			return nil
+		},
+	}
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		GitHubConnections: NewGitHubConnectionHandler(service),
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/github/connection", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if disconnectedOrgID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" {
+		t.Fatalf("expected disconnect to be called with organization id, got %q", disconnectedOrgID)
+	}
+
+	var body DataResponse[githubconnection.ConnectionResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.State != githubconnection.StateNotConnected {
+		t.Fatalf("expected not_connected state, got %q", body.Data.State)
+	}
+}
+
+func TestDisconnectGitHubConnectionHandlerReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	service := stubGitHubConnectionService{
+		getFn: func(context.Context, string) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{}, nil
+		},
+		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+			return githubconnection.StartInstallationResponse{}, nil
+		},
+		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{}, nil
+		},
+		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
+			return githubconnection.ListAccessibleRepositoriesResult{}, nil
+		},
+		selectFn: func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
+			return githubconnection.SelectRepositoriesResponse{}, nil
+		},
+		disconnectFn: func(context.Context, string) error {
+			return githubconnection.ErrInstallationNotFound
+		},
+	}
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		GitHubConnections: NewGitHubConnectionHandler(service),
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/github/connection", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rec.Code)
 	}
 }

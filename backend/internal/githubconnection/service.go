@@ -2,6 +2,7 @@ package githubconnection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,10 +22,13 @@ type store interface {
 	ListAccessibleRepositories(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error)
 	GetAccessibleRepositoriesByGitHubIDs(context.Context, string, []int64) ([]accessibleRepositoryRecord, error)
 	LinkRepositoryAndMarkSelected(context.Context, string, int64, bool) (string, error)
+	ListLinkedRepositoryIDs(context.Context, string) ([]string, error)
 }
 
 type syncCreator interface {
 	Enqueue(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	ListByRepository(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
+	Cancel(context.Context, string) (syncjob.SyncJobResponse, error)
 }
 
 type Service struct {
@@ -172,6 +176,55 @@ func (s *Service) ListAccessibleRepositories(ctx context.Context, params ListAcc
 		params.PageSize = 20
 	}
 	return s.store.ListAccessibleRepositories(ctx, params)
+}
+
+func (s *Service) Disconnect(ctx context.Context, organizationID string) error {
+	if err := s.store.EnsureOrganizationExists(ctx, organizationID); err != nil {
+		return err
+	}
+
+	installation, err := s.store.GetInstallation(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+	if installation == nil {
+		return ErrInstallationNotFound
+	}
+
+	repositoryIDs, err := s.store.ListLinkedRepositoryIDs(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+
+	for _, repositoryID := range repositoryIDs {
+		if err := s.cancelActiveSyncJobs(ctx, repositoryID); err != nil {
+			return err
+		}
+	}
+
+	now := s.now().UTC()
+	return s.disconnectInstallation(ctx, installation.InstallationID, &now)
+}
+
+func (s *Service) cancelActiveSyncJobs(ctx context.Context, repositoryID string) error {
+	if s.syncJobs == nil {
+		return nil
+	}
+
+	jobs, err := s.syncJobs.ListByRepository(ctx, syncjob.ListParams{RepositoryID: repositoryID, Page: 1, PageSize: 20})
+	if err != nil {
+		return err
+	}
+
+	for _, job := range jobs.Items {
+		if job.Status != syncjob.StatusPending && job.Status != syncjob.StatusRunning {
+			continue
+		}
+		if _, err := s.syncJobs.Cancel(ctx, job.ID); err != nil && !errors.Is(err, syncjob.ErrSyncJobCancelState) && !errors.Is(err, syncjob.ErrSyncJobNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) HandleInstallationEvent(ctx context.Context, eventType string, installationID int64, action string) error {

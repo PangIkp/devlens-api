@@ -20,6 +20,7 @@ type GitHubConnectionService interface {
 	CompleteInstallation(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
 	ListAccessibleRepositories(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
 	SelectRepositories(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
+	Disconnect(context.Context, string) error
 }
 
 type GitHubConnectionHandler struct {
@@ -36,6 +37,7 @@ func NewGitHubConnectionHandler(service GitHubConnectionService, deps ...any) *G
 func (h *GitHubConnectionHandler) RegisterRoutes(r chi.Router) {
 	if h.authorizer == nil {
 		r.Get("/organizations/{organizationId}/github/connection", h.getConnection)
+		r.Delete("/organizations/{organizationId}/github/connection", h.disconnect)
 		r.Post("/organizations/{organizationId}/github/installations/start", h.startInstallation)
 		r.Get("/organizations/{organizationId}/github/installations/callback", h.completeInstallation)
 		r.Get("/organizations/{organizationId}/github/repositories", h.listAccessibleRepositories)
@@ -46,6 +48,7 @@ func (h *GitHubConnectionHandler) RegisterRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireAuth())
 		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/connection", h.getConnection)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Delete("/organizations/{organizationId}/github/connection", h.disconnect)
 		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/github/installations/start", h.startInstallation)
 		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/installations/callback", h.completeInstallation)
 		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/github/repositories", h.listAccessibleRepositories)
@@ -67,6 +70,36 @@ func (h *GitHubConnectionHandler) getConnection(w http.ResponseWriter, r *http.R
 	}
 
 	WriteDataConditional(w, r, http.StatusOK, item)
+}
+
+func (h *GitHubConnectionHandler) disconnect(w http.ResponseWriter, r *http.Request) {
+	organizationID, err := validateUUIDPathParam("organizationId", chi.URLParam(r, "organizationId"))
+	if err != nil {
+		WriteError(w, r, http.StatusBadRequest, *err)
+		return
+	}
+
+	if svcErr := h.service.Disconnect(r.Context(), organizationID); svcErr != nil {
+		writeGitHubConnectionError(w, r, svcErr)
+		return
+	}
+
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "github_connection.disconnect",
+		ResourceType:   "github_installation",
+		ResourceID:     stringRef(organizationID),
+	})
+
+	item, svcErr := h.service.GetConnection(r.Context(), organizationID)
+	if svcErr != nil {
+		writeGitHubConnectionError(w, r, svcErr)
+		return
+	}
+
+	WriteData(w, http.StatusOK, item)
 }
 
 func (h *GitHubConnectionHandler) startInstallation(w http.ResponseWriter, r *http.Request) {

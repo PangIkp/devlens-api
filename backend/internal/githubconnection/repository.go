@@ -109,6 +109,37 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 	return &rec, nil
 }
 
+func (r *Repository) ListLinkedRepositoryIDs(ctx context.Context, organizationID string) ([]string, error) {
+	installation, err := r.GetInstallation(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if installation == nil {
+		return nil, ErrInstallationNotFound
+	}
+
+	rows, err := r.db.Pool().Query(ctx, `
+		SELECT linked_repository_id
+		FROM github_installation_repositories
+		WHERE github_installation_id = $1 AND linked_repository_id IS NOT NULL`,
+		parseUUID(installation.ID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list linked repository ids: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan linked repository id: %w", err)
+		}
+		ids = append(ids, id.String())
+	}
+	return ids, nil
+}
+
 func (r *Repository) FindOrganizationIDByInstallationID(ctx context.Context, installationID int64) (*string, error) {
 	var organizationID pgtype.UUID
 	err := r.db.Pool().QueryRow(ctx, `

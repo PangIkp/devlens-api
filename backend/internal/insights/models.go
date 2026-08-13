@@ -96,6 +96,7 @@ type RuleConfig struct {
 }
 
 type LargePRRuleConfig struct {
+	Enabled                     bool
 	FilesThreshold              int
 	TotalChangesThreshold       int
 	HighSeverityFilesThreshold  int
@@ -103,29 +104,34 @@ type LargePRRuleConfig struct {
 }
 
 type SlowReviewRuleConfig struct {
+	Enabled                        bool
 	WaitHoursThreshold             float64
 	HighSeverityWaitHoursThreshold float64
 }
 
 type HotspotRuleConfig struct {
+	Enabled                    bool
 	ScoreThreshold             int
 	HighSeverityScoreThreshold int
 	TopFilesLimit              int
 }
 
 type DeploymentFailureRuleConfig struct {
+	Enabled                 bool
 	MinimumDeployments      int
 	FailureRateThreshold    float64
 	HighSeverityFailureRate float64
 }
 
 type ReviewConcentrationRuleConfig struct {
+	Enabled                    bool
 	MinimumReviewCount         int
 	ShareThreshold             float64
 	HighSeverityShareThreshold float64
 }
 
 type BottleneckRuleConfig struct {
+	Enabled                         bool
 	MinimumMergedCount              int
 	AverageCycleHoursThreshold      float64
 	HighSeverityCycleHoursThreshold float64

@@ -14,21 +14,28 @@ type store interface {
 	EnsureOrganizationExists(context.Context, string) error
 	EnsureRepositoryInOrganization(context.Context, string, string) error
 	ListRepositories(context.Context, string, string) ([]repositoryRecord, error)
-	ListLargePullRequests(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	ListSlowReviews(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	ListHotspots(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	ListDeploymentFailureTrends(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	ListReviewConcentration(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	ListBottlenecks(context.Context, string, time.Time, time.Time) ([]Insight, error)
+	ListLargePullRequests(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	ListSlowReviews(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	ListHotspots(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	ListDeploymentFailureTrends(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	ListReviewConcentration(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	ListBottlenecks(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
 	ListStatusesByKeys(context.Context, string, []string) (map[string]statusRecord, error)
 	GetStatusByKey(context.Context, string, string) (statusRecord, error)
 	UpsertStatus(context.Context, upsertStatusParams) (StatusResult, error)
 }
 
+// ruleConfigResolver resolves per-organization rule overrides. When nil or
+// when resolution fails, the service falls back to defaultRules.
+type ruleConfigResolver interface {
+	ResolveInsightRules(ctx context.Context, organizationID string) (RuleConfig, error)
+}
+
 type Service struct {
-	repository store
-	rules      RuleConfig
-	now        func() time.Time
+	repository   store
+	defaultRules RuleConfig
+	resolver     ruleConfigResolver
+	now          func() time.Time
 }
 
 func NewService(repository store, rules ...RuleConfig) *Service {
@@ -37,10 +44,27 @@ func NewService(repository store, rules ...RuleConfig) *Service {
 		cfg = normalizeRuleConfig(rules[0])
 	}
 	return &Service{
-		repository: repository,
-		rules:      cfg,
-		now:        func() time.Time { return time.Now().UTC() },
+		repository:   repository,
+		defaultRules: cfg,
+		now:          func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// SetRuleConfigResolver wires a per-organization rule override resolver.
+// Left unset, the service always uses the boot-time default rules.
+func (s *Service) SetRuleConfigResolver(resolver ruleConfigResolver) {
+	s.resolver = resolver
+}
+
+func (s *Service) resolveRules(ctx context.Context, organizationID string) RuleConfig {
+	if s.resolver == nil {
+		return s.defaultRules
+	}
+	rules, err := s.resolver.ResolveInsightRules(ctx, organizationID)
+	if err != nil {
+		return s.defaultRules
+	}
+	return rules
 }
 
 func (s *Service) List(ctx context.Context, params ListParams) (ListResult, error) {
@@ -128,6 +152,8 @@ func (s *Service) RefreshRepository(ctx context.Context, organizationID string, 
 }
 
 func (s *Service) loadInsights(ctx context.Context, organizationID string, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+	rules := s.resolveRules(ctx, organizationID)
+
 	repositories, err := s.repository.ListRepositories(ctx, organizationID, repositoryID)
 	if err != nil {
 		return nil, err
@@ -135,7 +161,7 @@ func (s *Service) loadInsights(ctx context.Context, organizationID string, repos
 
 	allInsights := make([]Insight, 0)
 	for _, repo := range repositories {
-		items, err := s.generateRepositoryInsights(ctx, repo, from, to)
+		items, err := s.generateRepositoryInsights(ctx, repo, from, to, rules)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +172,7 @@ func (s *Service) loadInsights(ctx context.Context, organizationID string, repos
 		}
 		allInsights = append(allInsights, items...)
 	}
-	allInsights = s.deduplicateInsights(allInsights)
+	allInsights = s.deduplicateInsights(allInsights, rules)
 	if len(allInsights) == 0 {
 		return []Insight{}, nil
 	}
@@ -159,7 +185,7 @@ func (s *Service) loadInsights(ctx context.Context, organizationID string, repos
 	for i := range allInsights {
 		if status, ok := statuses[allInsights[i].InsightKey]; ok {
 			applyStatus(&allInsights[i], status)
-			if s.shouldReopen(status, allInsights[i]) {
+			if s.shouldReopen(status, allInsights[i], rules) {
 				result, reopenErr := s.repository.UpsertStatus(ctx, upsertStatusParams{
 					OrganizationID: organizationID,
 					RepositoryID:   optionalString(allInsights[i].RepositoryID),
@@ -250,8 +276,8 @@ func (s *Service) Reopen(ctx context.Context, organizationID string, insightKey 
 	})
 }
 
-func (s *Service) generateRepositoryInsights(ctx context.Context, repo repositoryRecord, from time.Time, to time.Time) ([]Insight, error) {
-	builders := []func(context.Context, string, time.Time, time.Time) ([]Insight, error){
+func (s *Service) generateRepositoryInsights(ctx context.Context, repo repositoryRecord, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	builders := []func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error){
 		s.repository.ListBottlenecks,
 		s.repository.ListLargePullRequests,
 		s.repository.ListSlowReviews,
@@ -262,27 +288,27 @@ func (s *Service) generateRepositoryInsights(ctx context.Context, repo repositor
 
 	items := make([]Insight, 0)
 	for _, build := range builders {
-		result, err := build(ctx, repo.ID, from, to)
+		result, err := build(ctx, repo.ID, from, to, rules)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, result...)
 	}
 	for i := range items {
-		items[i].Evidence = s.enrichEvidence(items[i], from, to)
+		items[i].Evidence = s.enrichEvidence(items[i], from, to, rules)
 	}
 	return items, nil
 }
 
-func (s *Service) deduplicateInsights(items []Insight) []Insight {
-	if !s.rules.Deduplicate.Enabled || len(items) < 2 {
+func (s *Service) deduplicateInsights(items []Insight, rules RuleConfig) []Insight {
+	if !rules.Deduplicate.Enabled || len(items) < 2 {
 		return items
 	}
 
 	seen := make(map[string]Insight, len(items))
 	order := make([]string, 0, len(items))
 	for _, item := range items {
-		fingerprint := insightFingerprint(item, s.rules.Deduplicate.Version)
+		fingerprint := insightFingerprint(item, rules.Deduplicate.Version)
 		if existing, ok := seen[fingerprint]; ok {
 			if shouldReplaceInsight(existing, item) {
 				seen[fingerprint] = item
@@ -300,20 +326,20 @@ func (s *Service) deduplicateInsights(items []Insight) []Insight {
 	return deduped
 }
 
-func (s *Service) shouldReopen(status statusRecord, item Insight) bool {
+func (s *Service) shouldReopen(status statusRecord, item Insight, rules RuleConfig) bool {
 	if status.Status == StatusOpen {
 		return false
 	}
-	if severityRank(item.Severity) < severityRank(s.rules.AutoReopen.MinimumSeverity) {
+	if severityRank(item.Severity) < severityRank(rules.AutoReopen.MinimumSeverity) {
 		return false
 	}
 	switch status.Status {
 	case StatusReviewed:
-		if !s.rules.AutoReopen.OnReviewed {
+		if !rules.AutoReopen.OnReviewed {
 			return false
 		}
 	case StatusDismissed:
-		if !s.rules.AutoReopen.OnDismissed {
+		if !rules.AutoReopen.OnDismissed {
 			return false
 		}
 	}
@@ -324,59 +350,59 @@ func (s *Service) shouldReopen(status statusRecord, item Insight) bool {
 	return item.DetectedAt.After(*cutoff)
 }
 
-func (s *Service) enrichEvidence(item Insight, from time.Time, to time.Time) map[string]any {
+func (s *Service) enrichEvidence(item Insight, from time.Time, to time.Time, rules RuleConfig) map[string]any {
 	evidence := make(map[string]any, len(item.Evidence)+6)
 	for key, value := range item.Evidence {
 		evidence[key] = value
 	}
-	evidence["fingerprint"] = insightFingerprint(item, s.rules.Deduplicate.Version)
-	evidence["dedupeVersion"] = s.rules.Deduplicate.Version
+	evidence["fingerprint"] = insightFingerprint(item, rules.Deduplicate.Version)
+	evidence["dedupeVersion"] = rules.Deduplicate.Version
 	evidence["windowFrom"] = from.UTC()
 	evidence["windowTo"] = to.UTC()
-	evidence["ruleConfig"] = s.ruleEvidence(item.InsightType)
+	evidence["ruleConfig"] = s.ruleEvidence(item.InsightType, rules)
 	return evidence
 }
 
-func (s *Service) ruleEvidence(insightType string) map[string]any {
+func (s *Service) ruleEvidence(insightType string, rules RuleConfig) map[string]any {
 	switch insightType {
 	case TypeLargePRDetection:
 		return map[string]any{
-			"filesThreshold":              s.rules.LargePR.FilesThreshold,
-			"totalChangesThreshold":       s.rules.LargePR.TotalChangesThreshold,
-			"highSeverityFilesThreshold":  s.rules.LargePR.HighSeverityFilesThreshold,
-			"highSeverityChangeThreshold": s.rules.LargePR.HighSeverityChangeThreshold,
+			"filesThreshold":              rules.LargePR.FilesThreshold,
+			"totalChangesThreshold":       rules.LargePR.TotalChangesThreshold,
+			"highSeverityFilesThreshold":  rules.LargePR.HighSeverityFilesThreshold,
+			"highSeverityChangeThreshold": rules.LargePR.HighSeverityChangeThreshold,
 		}
 	case TypeSlowReviewDetection:
 		return map[string]any{
-			"waitHoursThreshold":             s.rules.SlowReview.WaitHoursThreshold,
-			"highSeverityWaitHoursThreshold": s.rules.SlowReview.HighSeverityWaitHoursThreshold,
+			"waitHoursThreshold":             rules.SlowReview.WaitHoursThreshold,
+			"highSeverityWaitHoursThreshold": rules.SlowReview.HighSeverityWaitHoursThreshold,
 		}
 	case TypeHotspotDetection:
 		return map[string]any{
-			"scoreThreshold":             s.rules.Hotspot.ScoreThreshold,
-			"highSeverityScoreThreshold": s.rules.Hotspot.HighSeverityScoreThreshold,
-			"topFilesLimit":              s.rules.Hotspot.TopFilesLimit,
+			"scoreThreshold":             rules.Hotspot.ScoreThreshold,
+			"highSeverityScoreThreshold": rules.Hotspot.HighSeverityScoreThreshold,
+			"topFilesLimit":              rules.Hotspot.TopFilesLimit,
 		}
 	case TypeDeploymentFailureTrend:
 		return map[string]any{
-			"minimumDeployments":      s.rules.DeploymentFailure.MinimumDeployments,
-			"failureRateThreshold":    s.rules.DeploymentFailure.FailureRateThreshold,
-			"highSeverityFailureRate": s.rules.DeploymentFailure.HighSeverityFailureRate,
+			"minimumDeployments":      rules.DeploymentFailure.MinimumDeployments,
+			"failureRateThreshold":    rules.DeploymentFailure.FailureRateThreshold,
+			"highSeverityFailureRate": rules.DeploymentFailure.HighSeverityFailureRate,
 		}
 	case TypeReviewConcentration:
 		return map[string]any{
-			"minimumReviewCount":         s.rules.ReviewConcentration.MinimumReviewCount,
-			"shareThreshold":             s.rules.ReviewConcentration.ShareThreshold,
-			"highSeverityShareThreshold": s.rules.ReviewConcentration.HighSeverityShareThreshold,
+			"minimumReviewCount":         rules.ReviewConcentration.MinimumReviewCount,
+			"shareThreshold":             rules.ReviewConcentration.ShareThreshold,
+			"highSeverityShareThreshold": rules.ReviewConcentration.HighSeverityShareThreshold,
 		}
 	case TypeBottleneckDetection:
 		return map[string]any{
-			"minimumMergedCount":              s.rules.Bottleneck.MinimumMergedCount,
-			"averageCycleHoursThreshold":      s.rules.Bottleneck.AverageCycleHoursThreshold,
-			"highSeverityCycleHoursThreshold": s.rules.Bottleneck.HighSeverityCycleHoursThreshold,
-			"staleOpenCountThreshold":         s.rules.Bottleneck.StaleOpenCountThreshold,
-			"highSeverityStaleOpenThreshold":  s.rules.Bottleneck.HighSeverityStaleOpenThreshold,
-			"staleOpenAgeDays":                s.rules.Bottleneck.StaleOpenAgeDays,
+			"minimumMergedCount":              rules.Bottleneck.MinimumMergedCount,
+			"averageCycleHoursThreshold":      rules.Bottleneck.AverageCycleHoursThreshold,
+			"highSeverityCycleHoursThreshold": rules.Bottleneck.HighSeverityCycleHoursThreshold,
+			"staleOpenCountThreshold":         rules.Bottleneck.StaleOpenCountThreshold,
+			"highSeverityStaleOpenThreshold":  rules.Bottleneck.HighSeverityStaleOpenThreshold,
+			"staleOpenAgeDays":                rules.Bottleneck.StaleOpenAgeDays,
 		}
 	default:
 		return map[string]any{}

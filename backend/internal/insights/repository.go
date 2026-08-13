@@ -21,8 +21,7 @@ var (
 )
 
 type Repository struct {
-	db    *postgres.DB
-	rules RuleConfig
+	db *postgres.DB
 }
 
 type repositoryRecord struct {
@@ -55,12 +54,8 @@ type upsertStatusParams struct {
 	UpdatedAt      time.Time
 }
 
-func NewRepository(db *postgres.DB, rules ...RuleConfig) *Repository {
-	cfg := DefaultRuleConfig()
-	if len(rules) > 0 {
-		cfg = normalizeRuleConfig(rules[0])
-	}
-	return &Repository{db: db, rules: cfg}
+func NewRepository(db *postgres.DB) *Repository {
+	return &Repository{db: db}
 }
 
 func (r *Repository) EnsureOrganizationExists(ctx context.Context, organizationID string) error {
@@ -115,7 +110,10 @@ ORDER BY full_name ASC`
 	return items, nil
 }
 
-func (r *Repository) ListLargePullRequests(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListLargePullRequests(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.LargePR.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT number, title, additions, deletions, files_changed, created_at
 FROM pull_requests
@@ -126,7 +124,7 @@ WHERE repository_id = $1
   AND (files_changed >= $4 OR additions + deletions >= $5)
 ORDER BY created_at DESC`
 
-	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), r.rules.LargePR.FilesThreshold, r.rules.LargePR.TotalChangesThreshold)
+	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), rules.LargePR.FilesThreshold, rules.LargePR.TotalChangesThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("list large pull requests: %w", err)
 	}
@@ -144,7 +142,7 @@ ORDER BY created_at DESC`
 
 		totalChanges := additions + deletions
 		severity := SeverityMedium
-		if filesChanged >= r.rules.LargePR.HighSeverityFilesThreshold || totalChanges >= r.rules.LargePR.HighSeverityChangeThreshold {
+		if filesChanged >= rules.LargePR.HighSeverityFilesThreshold || totalChanges >= rules.LargePR.HighSeverityChangeThreshold {
 			severity = SeverityHigh
 		}
 		items = append(items, Insight{
@@ -169,7 +167,10 @@ ORDER BY created_at DESC`
 	return items, rows.Err()
 }
 
-func (r *Repository) ListSlowReviews(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListSlowReviews(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.SlowReview.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT pr.number,
        pr.title,
@@ -186,7 +187,7 @@ GROUP BY pr.number, pr.title
 HAVING EXTRACT(EPOCH FROM MIN(COALESCE(prr.first_review_at, prr.review_submitted_at) - prr.review_requested_at)) / 3600.0 >= $4
 ORDER BY review_requested_at DESC`
 
-	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), r.rules.SlowReview.WaitHoursThreshold)
+	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), rules.SlowReview.WaitHoursThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("list slow reviews: %w", err)
 	}
@@ -202,7 +203,7 @@ ORDER BY review_requested_at DESC`
 		}
 		waitHours := firstResponseAt.Sub(requestedAt).Hours()
 		severity := SeverityMedium
-		if waitHours >= r.rules.SlowReview.HighSeverityWaitHoursThreshold {
+		if waitHours >= rules.SlowReview.HighSeverityWaitHoursThreshold {
 			severity = SeverityHigh
 		}
 		items = append(items, Insight{
@@ -226,7 +227,10 @@ ORDER BY review_requested_at DESC`
 	return items, rows.Err()
 }
 
-func (r *Repository) ListHotspots(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListHotspots(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.Hotspot.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT fc.file_path,
        SUM(fc.additions) AS additions,
@@ -244,7 +248,7 @@ HAVING SUM(fc.additions + fc.deletions + (fc.commit_count * 5)) >= $4
 ORDER BY hotspot_score DESC
 LIMIT $5`
 
-	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), r.rules.Hotspot.ScoreThreshold, r.rules.Hotspot.TopFilesLimit)
+	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), rules.Hotspot.ScoreThreshold, rules.Hotspot.TopFilesLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list hotspots: %w", err)
 	}
@@ -260,7 +264,7 @@ LIMIT $5`
 			return nil, fmt.Errorf("scan hotspot: %w", err)
 		}
 		severity := SeverityMedium
-		if hotspotScore >= r.rules.Hotspot.HighSeverityScoreThreshold {
+		if hotspotScore >= rules.Hotspot.HighSeverityScoreThreshold {
 			severity = SeverityHigh
 		}
 		items = append(items, Insight{
@@ -284,7 +288,10 @@ LIMIT $5`
 	return items, rows.Err()
 }
 
-func (r *Repository) ListDeploymentFailureTrends(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListDeploymentFailureTrends(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.DeploymentFailure.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT environment,
        COUNT(*) AS total_count,
@@ -299,7 +306,7 @@ HAVING COUNT(*) >= $4
    AND (COUNT(*) FILTER (WHERE status = 'failed'))::double precision / COUNT(*)::double precision >= $5
 ORDER BY detected_at DESC`
 
-	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), r.rules.DeploymentFailure.MinimumDeployments, r.rules.DeploymentFailure.FailureRateThreshold)
+	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to), rules.DeploymentFailure.MinimumDeployments, rules.DeploymentFailure.FailureRateThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("list deployment failure trends: %w", err)
 	}
@@ -315,7 +322,7 @@ ORDER BY detected_at DESC`
 		}
 		failureRate := float64(failedCount) / float64(totalCount)
 		severity := SeverityMedium
-		if failureRate >= r.rules.DeploymentFailure.HighSeverityFailureRate {
+		if failureRate >= rules.DeploymentFailure.HighSeverityFailureRate {
 			severity = SeverityHigh
 		}
 		items = append(items, Insight{
@@ -338,7 +345,10 @@ ORDER BY detected_at DESC`
 	return items, rows.Err()
 }
 
-func (r *Repository) ListReviewConcentration(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListReviewConcentration(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.ReviewConcentration.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT reviewer,
        COUNT(*) AS review_count,
@@ -382,11 +392,11 @@ GROUP BY reviewer`
 			continue
 		}
 		share := float64(item.reviewCount) / float64(totalReviews)
-		if item.reviewCount < r.rules.ReviewConcentration.MinimumReviewCount || share < r.rules.ReviewConcentration.ShareThreshold {
+		if item.reviewCount < rules.ReviewConcentration.MinimumReviewCount || share < rules.ReviewConcentration.ShareThreshold {
 			continue
 		}
 		severity := SeverityMedium
-		if share >= r.rules.ReviewConcentration.HighSeverityShareThreshold {
+		if share >= rules.ReviewConcentration.HighSeverityShareThreshold {
 			severity = SeverityHigh
 		}
 		items = append(items, Insight{
@@ -409,7 +419,10 @@ GROUP BY reviewer`
 	return items, nil
 }
 
-func (r *Repository) ListBottlenecks(ctx context.Context, repositoryID string, from time.Time, to time.Time) ([]Insight, error) {
+func (r *Repository) ListBottlenecks(ctx context.Context, repositoryID string, from time.Time, to time.Time, rules RuleConfig) ([]Insight, error) {
+	if !rules.Bottleneck.Enabled {
+		return nil, nil
+	}
 	query := `
 SELECT COUNT(*) FILTER (WHERE merged_at IS NOT NULL) AS merged_count,
        COALESCE(AVG(EXTRACT(EPOCH FROM (merged_at - created_at)) / 3600.0) FILTER (WHERE merged_at IS NOT NULL), 0) AS avg_cycle_hours,
@@ -424,19 +437,19 @@ WHERE repository_id = $1
 	var mergedCount, staleOpenCount int
 	var avgCycleHours float64
 	var detectedAt pgtype.Timestamptz
-	if err := r.db.Pool().QueryRow(ctx, query, parseUUID(repositoryID), from, endExclusive(to), r.rules.Bottleneck.StaleOpenAgeDays).Scan(&mergedCount, &avgCycleHours, &staleOpenCount, &detectedAt); err != nil {
+	if err := r.db.Pool().QueryRow(ctx, query, parseUUID(repositoryID), from, endExclusive(to), rules.Bottleneck.StaleOpenAgeDays).Scan(&mergedCount, &avgCycleHours, &staleOpenCount, &detectedAt); err != nil {
 		return nil, fmt.Errorf("list bottlenecks: %w", err)
 	}
 
-	if mergedCount < r.rules.Bottleneck.MinimumMergedCount && staleOpenCount == 0 {
+	if mergedCount < rules.Bottleneck.MinimumMergedCount && staleOpenCount == 0 {
 		return nil, nil
 	}
-	if avgCycleHours < r.rules.Bottleneck.AverageCycleHoursThreshold && staleOpenCount < r.rules.Bottleneck.StaleOpenCountThreshold {
+	if avgCycleHours < rules.Bottleneck.AverageCycleHoursThreshold && staleOpenCount < rules.Bottleneck.StaleOpenCountThreshold {
 		return nil, nil
 	}
 
 	severity := SeverityMedium
-	if avgCycleHours >= r.rules.Bottleneck.HighSeverityCycleHoursThreshold || staleOpenCount >= r.rules.Bottleneck.HighSeverityStaleOpenThreshold {
+	if avgCycleHours >= rules.Bottleneck.HighSeverityCycleHoursThreshold || staleOpenCount >= rules.Bottleneck.HighSeverityStaleOpenThreshold {
 		severity = SeverityHigh
 	}
 

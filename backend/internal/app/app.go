@@ -29,6 +29,8 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
+	"github.com/PangIkp/devlens/backend/internal/orgretention"
+	"github.com/PangIkp/devlens/backend/internal/orgrulesettings"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
 	"github.com/PangIkp/devlens/backend/internal/pullrequest"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
@@ -123,31 +125,37 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
 	insightRules := insights.RuleConfig{
 		LargePR: insights.LargePRRuleConfig{
+			Enabled:                     true,
 			FilesThreshold:              cfg.Insights.LargePRFilesThreshold,
 			TotalChangesThreshold:       cfg.Insights.LargePRTotalChangesThreshold,
 			HighSeverityFilesThreshold:  cfg.Insights.LargePRHighSeverityFilesThreshold,
 			HighSeverityChangeThreshold: cfg.Insights.LargePRHighSeverityChangesThreshold,
 		},
 		SlowReview: insights.SlowReviewRuleConfig{
+			Enabled:                        true,
 			WaitHoursThreshold:             cfg.Insights.SlowReviewWaitHoursThreshold,
 			HighSeverityWaitHoursThreshold: cfg.Insights.SlowReviewHighSeverityWaitHours,
 		},
 		Hotspot: insights.HotspotRuleConfig{
+			Enabled:                    true,
 			ScoreThreshold:             cfg.Insights.HotspotScoreThreshold,
 			HighSeverityScoreThreshold: cfg.Insights.HotspotHighSeverityScoreThreshold,
 			TopFilesLimit:              cfg.Insights.HotspotTopFilesLimit,
 		},
 		DeploymentFailure: insights.DeploymentFailureRuleConfig{
+			Enabled:                 true,
 			MinimumDeployments:      cfg.Insights.DeploymentMinimumCount,
 			FailureRateThreshold:    cfg.Insights.DeploymentFailureRateThreshold,
 			HighSeverityFailureRate: cfg.Insights.DeploymentHighSeverityFailureRate,
 		},
 		ReviewConcentration: insights.ReviewConcentrationRuleConfig{
+			Enabled:                    true,
 			MinimumReviewCount:         cfg.Insights.ReviewConcentrationMinimumCount,
 			ShareThreshold:             cfg.Insights.ReviewConcentrationShareThreshold,
 			HighSeverityShareThreshold: cfg.Insights.ReviewConcentrationHighSeverityShare,
 		},
 		Bottleneck: insights.BottleneckRuleConfig{
+			Enabled:                         true,
 			MinimumMergedCount:              cfg.Insights.BottleneckMinimumMergedCount,
 			AverageCycleHoursThreshold:      cfg.Insights.BottleneckAverageCycleHoursThreshold,
 			HighSeverityCycleHoursThreshold: cfg.Insights.BottleneckHighSeverityCycleHours,
@@ -165,8 +173,16 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 			Version: cfg.Insights.DeduplicateVersion,
 		},
 	}
-	insightRepository := insights.NewRepository(postgresDB, insightRules)
+	insightRepository := insights.NewRepository(postgresDB)
 	insightService := insights.NewService(insightRepository, insightRules)
+	orgRuleSettingsRepository := orgrulesettings.NewRepository(postgresDB)
+	orgRuleSettingsService := orgrulesettings.NewService(orgRuleSettingsRepository, insightRules, metricsRules)
+	insightService.SetRuleConfigResolver(orgRuleSettingsService)
+	metricsService.SetRuleConfigResolver(orgRuleSettingsService)
+	orgRuleSettingsHandler := httpapi.NewOrganizationRuleSettingsHandler(orgRuleSettingsService, authorizationService, auditService)
+	orgRetentionRepository := orgretention.NewRepository(postgresDB)
+	orgRetentionService := orgretention.NewService(orgRetentionRepository, cfg.DataLifecycle.AnalyticsRawRetentionDays)
+	orgRetentionHandler := httpapi.NewOrganizationRetentionSettingsHandler(orgRetentionService, authorizationService, auditService)
 	insightHandler := httpapi.NewInsightHandler(insightService, authorizationService, auditService)
 	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
@@ -230,25 +246,27 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	natsHealthChecker := buildNATSHealthChecker(clickhouseDB != nil, metricsBusClient, insightBusClient)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
-		Postgres:            postgresDB,
-		ClickHouse:          clickhouseHealthChecker,
-		NATS:                natsHealthChecker,
-		AppMetrics:          appMetrics,
-		AllowedOrigins:      cfg.HTTP.AllowedOrigins,
-		RateLimitRequests:   cfg.HTTP.RateLimit.Requests,
-		RateLimitWindow:     cfg.HTTP.RateLimit.Window,
-		Auth:                authHandler,
-		Authenticator:       authService,
-		Me:                  meHandler,
-		Organizations:       organizationHandler,
-		OrganizationMembers: organizationMemberHandler,
-		GitHubConnections:   githubConnectionHandler,
-		PullRequests:        pullRequestHandler,
-		Repositories:        repositoryHandler,
-		Metrics:             metricsHandler,
-		Insights:            insightHandler,
-		SyncJobs:            syncJobHandler,
-		GitHubWebhook:       webhookHandler,
+		Postgres:                      postgresDB,
+		ClickHouse:                    clickhouseHealthChecker,
+		NATS:                          natsHealthChecker,
+		AppMetrics:                    appMetrics,
+		AllowedOrigins:                cfg.HTTP.AllowedOrigins,
+		RateLimitRequests:             cfg.HTTP.RateLimit.Requests,
+		RateLimitWindow:               cfg.HTTP.RateLimit.Window,
+		Auth:                          authHandler,
+		Authenticator:                 authService,
+		Me:                            meHandler,
+		Organizations:                 organizationHandler,
+		OrganizationMembers:           organizationMemberHandler,
+		GitHubConnections:             githubConnectionHandler,
+		PullRequests:                  pullRequestHandler,
+		Repositories:                  repositoryHandler,
+		Metrics:                       metricsHandler,
+		Insights:                      insightHandler,
+		SyncJobs:                      syncJobHandler,
+		GitHubWebhook:                 webhookHandler,
+		OrganizationRuleSettings:      orgRuleSettingsHandler,
+		OrganizationRetentionSettings: orgRetentionHandler,
 	})
 
 	server := &http.Server{

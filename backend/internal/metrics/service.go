@@ -20,9 +20,16 @@ var ErrRepositoryNotFound = errors.New("repository not found")
 const clickhouseInsertBatchSize = 500
 
 type Service struct {
-	pg    *postgres.DB
-	ch    *clickhouse.DB
-	rules RuleConfig
+	pg           *postgres.DB
+	ch           *clickhouse.DB
+	defaultRules RuleConfig
+	resolver     ruleConfigResolver
+}
+
+// ruleConfigResolver resolves per-organization metric rule overrides. When
+// nil or when resolution fails, the service falls back to defaultRules.
+type ruleConfigResolver interface {
+	ResolveMetricsRules(ctx context.Context, organizationID string) (RuleConfig, error)
 }
 
 type RuleConfig struct {
@@ -68,7 +75,32 @@ func NewService(pg *postgres.DB, ch *clickhouse.DB, rules ...RuleConfig) *Servic
 	if len(rules) > 0 {
 		cfg = normalizeRuleConfig(rules[0])
 	}
-	return &Service{pg: pg, ch: ch, rules: cfg}
+	return &Service{pg: pg, ch: ch, defaultRules: cfg}
+}
+
+// SetRuleConfigResolver wires a per-organization rule override resolver.
+// Left unset, the service always uses the boot-time default rules.
+func (s *Service) SetRuleConfigResolver(resolver ruleConfigResolver) {
+	s.resolver = resolver
+}
+
+func (s *Service) resolveRules(ctx context.Context, repositoryID string) RuleConfig {
+	if s.resolver == nil {
+		return s.defaultRules
+	}
+	id := parseUUID(repositoryID)
+	if !id.Valid {
+		return s.defaultRules
+	}
+	row, err := s.pg.Queries().GetRepositoryByID(ctx, id)
+	if err != nil {
+		return s.defaultRules
+	}
+	rules, err := s.resolver.ResolveMetricsRules(ctx, row.OrganizationID.String())
+	if err != nil {
+		return s.defaultRules
+	}
+	return rules
 }
 
 func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID string, req CalculationRequest) error {
@@ -273,7 +305,7 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 		return HotspotResult{}, err
 	}
 
-	files := aggregateHotspots(rows, s.rules)
+	files := aggregateHotspots(rows, s.resolveRules(ctx, repositoryID))
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].HotspotScore == files[j].HotspotScore {
 			if order == "asc" {
@@ -340,7 +372,7 @@ func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string,
 
 	return RepositoryMetrics{
 		MetricVersion: CurrentMetricVersion,
-		DayType:       s.normalizeDayTypeOrDefault(params.DayType),
+		DayType:       s.normalizeDayTypeOrDefault(ctx, repositoryID, params.DayType),
 		RepositoryID:  repositoryID,
 		From:          params.From.UTC().Format("2006-01-02"),
 		To:            params.To.UTC().Format("2006-01-02"),
@@ -722,10 +754,10 @@ func normalizeDayType(value string) (string, error) {
 	}
 }
 
-func (s *Service) normalizeDayTypeOrDefault(value string) string {
+func (s *Service) normalizeDayTypeOrDefault(ctx context.Context, repositoryID string, value string) string {
 	dayType, err := normalizeDayType(value)
 	if err != nil {
-		return s.rules.DefaultDayType
+		return s.resolveRules(ctx, repositoryID).DefaultDayType
 	}
 	return dayType
 }

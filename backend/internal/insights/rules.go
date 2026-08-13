@@ -5,31 +5,37 @@ import "strings"
 func DefaultRuleConfig() RuleConfig {
 	return RuleConfig{
 		LargePR: LargePRRuleConfig{
+			Enabled:                     true,
 			FilesThreshold:              25,
 			TotalChangesThreshold:       800,
 			HighSeverityFilesThreshold:  50,
 			HighSeverityChangeThreshold: 1600,
 		},
 		SlowReview: SlowReviewRuleConfig{
+			Enabled:                        true,
 			WaitHoursThreshold:             24,
 			HighSeverityWaitHoursThreshold: 72,
 		},
 		Hotspot: HotspotRuleConfig{
+			Enabled:                    true,
 			ScoreThreshold:             150,
 			HighSeverityScoreThreshold: 300,
 			TopFilesLimit:              10,
 		},
 		DeploymentFailure: DeploymentFailureRuleConfig{
+			Enabled:                 true,
 			MinimumDeployments:      3,
 			FailureRateThreshold:    0.30,
 			HighSeverityFailureRate: 0.50,
 		},
 		ReviewConcentration: ReviewConcentrationRuleConfig{
+			Enabled:                    true,
 			MinimumReviewCount:         5,
 			ShareThreshold:             0.60,
 			HighSeverityShareThreshold: 0.75,
 		},
 		Bottleneck: BottleneckRuleConfig{
+			Enabled:                         true,
 			MinimumMergedCount:              3,
 			AverageCycleHoursThreshold:      72,
 			HighSeverityCycleHoursThreshold: 120,

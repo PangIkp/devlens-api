@@ -136,6 +136,22 @@ type OrganizationMember struct {
 	Role           string
 }
 
+type OrganizationRetentionSetting struct {
+	OrganizationID            pgtype.UUID
+	AnalyticsRawRetentionDays pgtype.Int4
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	UpdatedBy                 pgtype.UUID
+}
+
+type OrganizationRuleSetting struct {
+	OrganizationID pgtype.UUID
+	ConfigJson     []byte
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	UpdatedBy      pgtype.UUID
+}
+
 type PullRequest struct {
 	ID           pgtype.UUID
 	RepositoryID pgtype.UUID

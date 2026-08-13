@@ -10,12 +10,12 @@ type stubStore struct {
 	ensureOrganizationExistsFn func(context.Context, string) error
 	ensureRepositoryFn         func(context.Context, string, string) error
 	listRepositoriesFn         func(context.Context, string, string) ([]repositoryRecord, error)
-	listBottlenecksFn          func(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	listLargePRsFn             func(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	listSlowReviewsFn          func(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	listHotspotsFn             func(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	listDeploymentFn           func(context.Context, string, time.Time, time.Time) ([]Insight, error)
-	listReviewConcentrationFn  func(context.Context, string, time.Time, time.Time) ([]Insight, error)
+	listBottlenecksFn          func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	listLargePRsFn             func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	listSlowReviewsFn          func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	listHotspotsFn             func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	listDeploymentFn           func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
+	listReviewConcentrationFn  func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error)
 	listStatusesFn             func(context.Context, string, []string) (map[string]statusRecord, error)
 	getStatusByKeyFn           func(context.Context, string, string) (statusRecord, error)
 	upsertStatusFn             func(context.Context, upsertStatusParams) (StatusResult, error)
@@ -36,39 +36,39 @@ func (s stubStore) EnsureRepositoryInOrganization(ctx context.Context, orgID str
 func (s stubStore) ListRepositories(ctx context.Context, orgID string, repoID string) ([]repositoryRecord, error) {
 	return s.listRepositoriesFn(ctx, orgID, repoID)
 }
-func (s stubStore) ListLargePullRequests(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListLargePullRequests(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listLargePRsFn != nil {
-		return s.listLargePRsFn(ctx, repoID, from, to)
+		return s.listLargePRsFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
-func (s stubStore) ListSlowReviews(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListSlowReviews(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listSlowReviewsFn != nil {
-		return s.listSlowReviewsFn(ctx, repoID, from, to)
+		return s.listSlowReviewsFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
-func (s stubStore) ListHotspots(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListHotspots(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listHotspotsFn != nil {
-		return s.listHotspotsFn(ctx, repoID, from, to)
+		return s.listHotspotsFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
-func (s stubStore) ListDeploymentFailureTrends(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListDeploymentFailureTrends(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listDeploymentFn != nil {
-		return s.listDeploymentFn(ctx, repoID, from, to)
+		return s.listDeploymentFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
-func (s stubStore) ListReviewConcentration(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListReviewConcentration(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listReviewConcentrationFn != nil {
-		return s.listReviewConcentrationFn(ctx, repoID, from, to)
+		return s.listReviewConcentrationFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
-func (s stubStore) ListBottlenecks(ctx context.Context, repoID string, from, to time.Time) ([]Insight, error) {
+func (s stubStore) ListBottlenecks(ctx context.Context, repoID string, from, to time.Time, rules RuleConfig) ([]Insight, error) {
 	if s.listBottlenecksFn != nil {
-		return s.listBottlenecksFn(ctx, repoID, from, to)
+		return s.listBottlenecksFn(ctx, repoID, from, to, rules)
 	}
 	return nil, nil
 }
@@ -100,7 +100,7 @@ func TestListAppliesStoredStatus(t *testing.T) {
 		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
 			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
 		},
-		listLargePRsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+		listLargePRsFn: func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error) {
 			return []Insight{{
 				InsightKey:   buildInsightKey(TypeLargePRDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12"),
 				InsightType:  TypeLargePRDetection,
@@ -166,7 +166,7 @@ func TestListDeduplicatesByFingerprint(t *testing.T) {
 		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
 			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
 		},
-		listLargePRsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+		listLargePRsFn: func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error) {
 			return []Insight{
 				{
 					InsightKey:   buildInsightKey(TypeLargePRDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12-a"),
@@ -220,7 +220,7 @@ func TestListAutoReopensDismissedInsightWhenDetectedAgain(t *testing.T) {
 		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
 			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
 		},
-		listSlowReviewsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+		listSlowReviewsFn: func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error) {
 			return []Insight{{
 				InsightKey:   buildInsightKey(TypeSlowReviewDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12"),
 				InsightType:  TypeSlowReviewDetection,
@@ -298,7 +298,7 @@ func TestRefreshRepositoryPersistsOnlyOpenInsights(t *testing.T) {
 		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
 			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
 		},
-		listLargePRsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+		listLargePRsFn: func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error) {
 			return []Insight{{
 				InsightKey:   reviewedKey,
 				InsightType:  TypeLargePRDetection,
@@ -308,7 +308,7 @@ func TestRefreshRepositoryPersistsOnlyOpenInsights(t *testing.T) {
 				Evidence:     map[string]any{"entityKey": "pr-12"},
 			}}, nil
 		},
-		listHotspotsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+		listHotspotsFn: func(context.Context, string, time.Time, time.Time, RuleConfig) ([]Insight, error) {
 			return []Insight{{
 				InsightKey:   openKey,
 				InsightType:  TypeHotspotDetection,

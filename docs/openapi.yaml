@@ -38,6 +38,7 @@ tags:
   - name: Deployment Metrics
   - name: Hotspots
   - name: Insights
+  - name: Organization Settings
 
 security:
   - bearerAuth: []
@@ -467,6 +468,32 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      tags:
+        - GitHub Connections
+      summary: Disconnect the GitHub App installation for an organization
+      description: >-
+        Soft-disconnects the organization's GitHub App installation (sets
+        disconnected_at) and cancels any in-progress sync jobs for its
+        repositories. Historical data is retained and purged later per the
+        configured retention window; reconnecting before that purge reuses
+        the existing data.
+      operationId: disconnectGitHubConnection
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: GitHub connection disconnected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubConnectionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /organizations/{organizationId}/github/installations/start:
     post:
@@ -588,6 +615,127 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /organizations/{organizationId}/settings/rules:
+    get:
+      tags:
+        - Organization Settings
+      summary: Get effective insight rule and metric rule settings for an organization
+      description: >-
+        Returns the effective configuration (stored overrides merged over
+        the platform defaults) for the 6 insight rule types and the
+        repository metrics rules (day type, hotspot weights). Fields an
+        organization has never overridden report the platform default.
+      operationId: getOrganizationRuleSettings
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Effective organization rule settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationRuleSettingsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags:
+        - Organization Settings
+      summary: Update insight rule and metric rule settings for an organization
+      description: >-
+        Partially updates the organization's rule overrides. Only the
+        sections/fields included in the request body change; omitted
+        fields keep their previous value (or the platform default if never
+        overridden). High-severity thresholds are not yet configurable and
+        always use the platform default.
+      operationId: updateOrganizationRuleSettings
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationRuleSettingsRequest"
+      responses:
+        "200":
+          description: Updated organization rule settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationRuleSettingsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /organizations/{organizationId}/settings/retention:
+    get:
+      tags:
+        - Organization Settings
+      summary: Get analytics data retention settings for an organization
+      description: >-
+        Returns the organization's effective raw analytics data retention
+        window in days. `enforced` is currently always `false`: the override
+        is stored and reported here for the frontend to build against, but
+        actual deletion still runs on a single global ClickHouse TTL applied
+        to all organizations. Per-organization enforcement is a follow-up.
+      operationId: getOrganizationRetentionSettings
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Effective organization retention settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationRetentionSettingsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags:
+        - Organization Settings
+      summary: Update analytics data retention settings for an organization
+      description: >-
+        Sets the organization's raw analytics retention override in days.
+        Not retroactive: lowering the value does not delete existing data
+        immediately (see the `enforced` note on GET).
+      operationId: updateOrganizationRetentionSettings
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationRetentionSettingsRequest"
+      responses:
+        "200":
+          description: Updated organization retention settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationRetentionSettingsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /repositories/{repositoryId}:
     get:
@@ -1993,6 +2141,306 @@ components:
         data:
           $ref: "#/components/schemas/GitHubConnection"
 
+    OrganizationRuleSettings:
+      type: object
+      required:
+        - largePR
+        - slowReview
+        - hotspot
+        - deploymentFailure
+        - reviewConcentration
+        - bottleneck
+        - metrics
+      properties:
+        largePR:
+          $ref: "#/components/schemas/LargePRRuleSettings"
+        slowReview:
+          $ref: "#/components/schemas/SlowReviewRuleSettings"
+        hotspot:
+          $ref: "#/components/schemas/HotspotRuleSettings"
+        deploymentFailure:
+          $ref: "#/components/schemas/DeploymentFailureRuleSettings"
+        reviewConcentration:
+          $ref: "#/components/schemas/ReviewConcentrationRuleSettings"
+        bottleneck:
+          $ref: "#/components/schemas/BottleneckRuleSettings"
+        metrics:
+          $ref: "#/components/schemas/MetricRuleSettings"
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    LargePRRuleSettings:
+      type: object
+      required:
+        - enabled
+        - filesThreshold
+        - totalChangesThreshold
+      properties:
+        enabled:
+          type: boolean
+        filesThreshold:
+          type: integer
+        totalChangesThreshold:
+          type: integer
+
+    SlowReviewRuleSettings:
+      type: object
+      required:
+        - enabled
+        - waitHoursThreshold
+      properties:
+        enabled:
+          type: boolean
+        waitHoursThreshold:
+          type: number
+          format: double
+
+    HotspotRuleSettings:
+      type: object
+      required:
+        - enabled
+        - scoreThreshold
+      properties:
+        enabled:
+          type: boolean
+        scoreThreshold:
+          type: integer
+
+    DeploymentFailureRuleSettings:
+      type: object
+      required:
+        - enabled
+        - minimumDeployments
+        - failureRateThreshold
+      properties:
+        enabled:
+          type: boolean
+        minimumDeployments:
+          type: integer
+        failureRateThreshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    ReviewConcentrationRuleSettings:
+      type: object
+      required:
+        - enabled
+        - minimumReviewCount
+        - shareThreshold
+      properties:
+        enabled:
+          type: boolean
+        minimumReviewCount:
+          type: integer
+        shareThreshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    BottleneckRuleSettings:
+      type: object
+      required:
+        - enabled
+        - minimumMergedCount
+        - averageCycleHoursThreshold
+        - staleOpenCountThreshold
+        - staleOpenAgeDays
+      properties:
+        enabled:
+          type: boolean
+        minimumMergedCount:
+          type: integer
+        averageCycleHoursThreshold:
+          type: number
+          format: double
+        staleOpenCountThreshold:
+          type: integer
+        staleOpenAgeDays:
+          type: integer
+
+    MetricRuleSettings:
+      type: object
+      required:
+        - defaultDayType
+        - hotspotCommitWeight
+        - hotspotAdditionsWeight
+        - hotspotDeletionsWeight
+      properties:
+        defaultDayType:
+          type: string
+          enum:
+            - calendar
+            - business
+        hotspotCommitWeight:
+          type: number
+          format: double
+          minimum: 0
+        hotspotAdditionsWeight:
+          type: number
+          format: double
+          minimum: 0
+        hotspotDeletionsWeight:
+          type: number
+          format: double
+          minimum: 0
+
+    OrganizationRuleSettingsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/OrganizationRuleSettings"
+
+    UpdateOrganizationRuleSettingsRequest:
+      type: object
+      description: >-
+        Every field at every level is optional. Only sections/fields
+        present in the request are changed; everything else keeps its
+        previous value (or the platform default if never overridden).
+      properties:
+        largePR:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            filesThreshold:
+              type: integer
+              minimum: 1
+            totalChangesThreshold:
+              type: integer
+              minimum: 1
+        slowReview:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            waitHoursThreshold:
+              type: number
+              format: double
+              minimum: 0
+              exclusiveMinimum: true
+        hotspot:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            scoreThreshold:
+              type: integer
+              minimum: 1
+        deploymentFailure:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            minimumDeployments:
+              type: integer
+              minimum: 1
+            failureRateThreshold:
+              type: number
+              format: double
+              minimum: 0
+              exclusiveMinimum: true
+              maximum: 1
+        reviewConcentration:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            minimumReviewCount:
+              type: integer
+              minimum: 1
+            shareThreshold:
+              type: number
+              format: double
+              minimum: 0
+              exclusiveMinimum: true
+              maximum: 1
+        bottleneck:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            minimumMergedCount:
+              type: integer
+              minimum: 1
+            averageCycleHoursThreshold:
+              type: number
+              format: double
+              minimum: 0
+              exclusiveMinimum: true
+            staleOpenCountThreshold:
+              type: integer
+              minimum: 1
+            staleOpenAgeDays:
+              type: integer
+              minimum: 1
+        metrics:
+          type: object
+          properties:
+            defaultDayType:
+              type: string
+              enum:
+                - calendar
+                - business
+            hotspotCommitWeight:
+              type: number
+              format: double
+              minimum: 0
+            hotspotAdditionsWeight:
+              type: number
+              format: double
+              minimum: 0
+            hotspotDeletionsWeight:
+              type: number
+              format: double
+              minimum: 0
+
+    OrganizationRetentionSettings:
+      type: object
+      required:
+        - analyticsRawRetentionDays
+        - enforced
+      properties:
+        analyticsRawRetentionDays:
+          type: integer
+          description: Effective raw analytics data retention window in days.
+        enforced:
+          type: boolean
+          description: >-
+            Always false today. The value is stored and reported here, but
+            data deletion still runs on a single global ClickHouse TTL
+            shared by all organizations; per-organization enforcement is a
+            follow-up.
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrganizationRetentionSettingsResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/OrganizationRetentionSettings"
+
+    UpdateOrganizationRetentionSettingsRequest:
+      type: object
+      properties:
+        analyticsRawRetentionDays:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: >-
+            Set to null to clear the override and fall back to the
+            platform-wide default.
+
     StartGitHubInstallationRequest:
       type: object
       properties:
@@ -2463,6 +2911,21 @@ components:
             $ref: "#/components/schemas/PullRequestTimelineEvent"
         riskIndicator:
           $ref: "#/components/schemas/PullRequestRiskIndicator"
+        cycleTimeMinutes:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            Minutes from createdAt to mergedAt. Null if the PR has not been
+            merged.
+        reviewWaitMinutes:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            Minutes from the PR's first review request to the first non-bot
+            reviewer's response. Null if no non-bot reviewer has responded
+            yet.
 
     PullRequestResponse:
       type: object

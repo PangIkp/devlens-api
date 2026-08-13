@@ -2,6 +2,7 @@ package githubconnection
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ type stubStore struct {
 	listFn            func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error)
 	getReposFn        func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error)
 	linkFn            func(context.Context, string, int64, bool) (string, error)
+	listLinkedFn      func(context.Context, string) ([]string, error)
 }
 
 func (s stubStore) EnsureOrganizationExists(ctx context.Context, organizationID string) error {
@@ -50,6 +52,12 @@ func (s stubStore) GetAccessibleRepositoriesByGitHubIDs(ctx context.Context, org
 func (s stubStore) LinkRepositoryAndMarkSelected(ctx context.Context, organizationID string, githubRepositoryID int64, autoSync bool) (string, error) {
 	return s.linkFn(ctx, organizationID, githubRepositoryID, autoSync)
 }
+func (s stubStore) ListLinkedRepositoryIDs(ctx context.Context, organizationID string) ([]string, error) {
+	if s.listLinkedFn == nil {
+		return nil, nil
+	}
+	return s.listLinkedFn(ctx, organizationID)
+}
 
 type stubApp struct {
 	enabled      bool
@@ -74,11 +82,25 @@ func (s stubApp) ListInstallationRepositories(ctx context.Context, installationI
 }
 
 type stubSyncCreator struct {
-	enqueueFn func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	enqueueFn          func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	listByRepositoryFn func(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
+	cancelFn           func(context.Context, string) (syncjob.SyncJobResponse, error)
 }
 
 func (s stubSyncCreator) Enqueue(ctx context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 	return s.enqueueFn(ctx, repositoryID, req)
+}
+func (s stubSyncCreator) ListByRepository(ctx context.Context, params syncjob.ListParams) (syncjob.ListResult, error) {
+	if s.listByRepositoryFn == nil {
+		return syncjob.ListResult{}, nil
+	}
+	return s.listByRepositoryFn(ctx, params)
+}
+func (s stubSyncCreator) Cancel(ctx context.Context, id string) (syncjob.SyncJobResponse, error) {
+	if s.cancelFn == nil {
+		return syncjob.SyncJobResponse{}, nil
+	}
+	return s.cancelFn(ctx, id)
 }
 
 func TestGetConnectionReturnsNotConnectedWithoutInstallation(t *testing.T) {
@@ -344,6 +366,98 @@ func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testi
 	}
 	if clearedRepositoryCount != 0 {
 		t.Fatalf("expected repositories to be cleared, got %d items", clearedRepositoryCount)
+	}
+}
+
+func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
+	t.Parallel()
+
+	var gotStatus string
+	var gotDisconnectedAt *time.Time
+	var clearedRepositoryCount int
+	var canceledJobIDs []string
+
+	service := NewService(stubStore{
+		ensureFn: func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) {
+			return &installationRecord{ID: "inst-1", InstallationID: 42, Status: StateConnected}, nil
+		},
+		findOrgFn: func(context.Context, int64) (*string, error) {
+			organizationID := "org-1"
+			return &organizationID, nil
+		},
+		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			return nil, nil
+		},
+		updateLifeFn: func(_ context.Context, _ int64, status string, _ *time.Time, disconnectedAt *time.Time) error {
+			gotStatus = status
+			gotDisconnectedAt = disconnectedAt
+			return nil
+		},
+		replaceFn: func(_ context.Context, _ string, items []accessibleRepositoryRecord) error {
+			clearedRepositoryCount = len(items)
+			return nil
+		},
+		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
+			return ListAccessibleRepositoriesResult{}, nil
+		},
+		getReposFn: func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error) { return nil, nil },
+		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
+		listLinkedFn: func(context.Context, string) ([]string, error) {
+			return []string{"repo-1", "repo-2"}, nil
+		},
+	}, nil, stubSyncCreator{
+		listByRepositoryFn: func(_ context.Context, params syncjob.ListParams) (syncjob.ListResult, error) {
+			if params.RepositoryID == "repo-1" {
+				return syncjob.ListResult{Items: []syncjob.SyncJobResponse{{ID: "job-1", Status: syncjob.StatusRunning}}}, nil
+			}
+			return syncjob.ListResult{Items: []syncjob.SyncJobResponse{{ID: "job-2", Status: syncjob.StatusCompleted}}}, nil
+		},
+		cancelFn: func(_ context.Context, id string) (syncjob.SyncJobResponse, error) {
+			canceledJobIDs = append(canceledJobIDs, id)
+			return syncjob.SyncJobResponse{ID: id, Status: syncjob.StatusCanceled}, nil
+		},
+	})
+
+	if err := service.Disconnect(context.Background(), "org-1"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(canceledJobIDs) != 1 || canceledJobIDs[0] != "job-1" {
+		t.Fatalf("expected only job-1 to be canceled, got %v", canceledJobIDs)
+	}
+	if gotStatus != StateInstallationRequired {
+		t.Fatalf("expected lifecycle status %q, got %q", StateInstallationRequired, gotStatus)
+	}
+	if gotDisconnectedAt == nil {
+		t.Fatal("expected disconnected_at to be set")
+	}
+	if clearedRepositoryCount != 0 {
+		t.Fatalf("expected repositories to be cleared, got %d items", clearedRepositoryCount)
+	}
+}
+
+func TestDisconnectReturnsNotFoundWithoutInstallation(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
+		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			return nil, nil
+		},
+		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
+		replaceFn:    func(context.Context, string, []accessibleRepositoryRecord) error { return nil },
+		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
+			return ListAccessibleRepositoriesResult{}, nil
+		},
+		getReposFn: func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error) { return nil, nil },
+		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
+	}, nil, nil)
+
+	err := service.Disconnect(context.Background(), "org-1")
+	if !errors.Is(err, ErrInstallationNotFound) {
+		t.Fatalf("expected ErrInstallationNotFound, got %v", err)
 	}
 }
 
