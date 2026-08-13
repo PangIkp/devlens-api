@@ -655,7 +655,7 @@ Metric นี้ถูกระบุใน Backend Roadmap
 
 ### Status
 
-Planned — Formula TBD
+Future Scope — ยังไม่อยู่ใน public API contract ปัจจุบัน
 
 ### Formula
 
@@ -667,7 +667,7 @@ TBD
 
 ### Related API
 
-ยังไม่มี Contract เฉพาะใน OpenAPI ปัจจุบัน
+ยังไม่มี Contract เฉพาะใน OpenAPI ปัจจุบัน และยังไม่ใช่ backend blocker สำหรับ frontend รอบนี้
 
 ### Notes
 
@@ -683,7 +683,7 @@ Metric นี้ถูกระบุใน Backend Roadmap และถูก�
 
 ### Status
 
-Planned — Formula TBD
+Future Scope — ยังไม่อยู่ใน public API contract ปัจจุบัน
 
 ### Formula
 
@@ -700,7 +700,7 @@ Planned — Formula TBD
 
 ### Related API
 
-ยังไม่มี Contract เฉพาะใน OpenAPI ปัจจุบัน
+ยังไม่มี Contract เฉพาะใน OpenAPI ปัจจุบัน และยังไม่ใช่ backend blocker สำหรับ frontend รอบนี้
 
 ### Notes
 
@@ -716,7 +716,7 @@ Planned — Formula TBD
 
 ### Status
 
-Planned
+Implemented ใน backend ปัจจุบัน และมี public API contract แล้ว
 
 ### Principle
 
@@ -724,7 +724,18 @@ Planned
 
 ### Formula
 
-ยังไม่ได้กำหนดสูตรตายตัวในเอกสารปัจจุบัน
+รอบปัจจุบันใช้การคำนวณดังนี้:
+
+- Contributor Distribution: นับจำนวน PR ต่อ author ภายในช่วงเวลา
+- Reviewer Distribution: นับจำนวน reviews ต่อ reviewer ภายในช่วงเวลา
+- Share: คำนวณเป็น `count / total_count` ภายในชุดข้อมูลเดียวกัน
+- Top Contributor Share / Top Reviewer Share: ค่าสัดส่วนสูงสุดของ contributor/reviewer ในช่วงเวลานั้น
+
+ข้อกำหนดปัจจุบัน:
+
+- ตัด draft PR ออกจากการคำนวณ
+- ตัด bot account ออกจากการคำนวณ
+- ใช้ repository scope และ date range ตาม query
 
 ### Required Data
 
@@ -745,11 +756,13 @@ Planned
 
 ### Related API
 
-ยังไม่มี Contract เฉพาะใน OpenAPI ปัจจุบัน
+- `GET /repositories/{repositoryId}/metrics/workload-distribution`
 
 ### Notes
 
-ก่อน implement ต้องกำหนดว่าจะใช้ Count, Share/Percentage, concentration ratio หรือวิธีอื่น และต้องระวังไม่ให้ UI กลายเป็น Developer Ranking
+รอบปัจจุบันเลือก expose เฉพาะ count/share summary ที่จำเป็นสำหรับ UI โดยยังไม่เพิ่ม concentration ratio เชิง advanced
+
+ต้องระวังไม่ให้ UI กลายเป็น Developer Ranking
 
 ---
 
@@ -988,7 +1001,6 @@ Metric ที่มีใน Product/Backend Roadmap แต่ยังต้อ
 
 - Merge Time
 - Code Churn
-- Workload Distribution
 
 ---
 

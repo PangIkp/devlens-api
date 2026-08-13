@@ -1,5 +1,12 @@
 # Backend Roadmap
 
+> สถานะเอกสาร ณ วันที่ `2026-08-13`
+>
+> เอกสารนี้ใช้เก็บ roadmap และ planning history ของ backend
+> สำหรับ current backend contract ให้ยึด `docs/openapi.yaml`
+> สำหรับ current implementation / operations status ให้ยึด `docs/07-backend-operations.md`
+> รายการที่ยังไม่ถูก mark เป็น done ด้านล่างจึงไม่ได้แปลว่า backend ปัจจุบันใช้งานไม่ได้เสมอไป หาก item นั้นถูกเลื่อนเป็น future scope หรือถูก covered ด้วย contract ปัจจุบันแล้ว
+
 ## Tech Stack
 
 | ส่วน | เทคโนโลยี |
@@ -24,6 +31,14 @@
 ---
 
 ## Phase 0: Project Foundation
+
+### Current Status Snapshot
+
+- [x] API รันใน local environment ได้
+- [x] เชื่อมต่อ PostgreSQL, ClickHouse และ NATS ได้
+- [x] Migration ทำงานได้
+- [x] Health / readiness checks ทำงานได้
+- [x] OpenAPI, unit tests, integration tests, และ CI foundation มีอยู่แล้วใน repo
 
 - [ ] สร้าง Go Workspace
 - [ ] กำหนด Project Structure
@@ -109,6 +124,14 @@
 - [ ] สร้าง `GET /organizations/{organizationId}/github/repositories`
 - [ ] สร้าง `POST /organizations/{organizationId}/github/repositories/select`
 - [ ] นิยาม frontend state `not_connected`, `installation_required`, `connected`, `syncing`, `sync_failed`
+
+### Current Status Snapshot
+
+- [x] รองรับ GitHub App installation start / callback flow
+- [x] บันทึก installation lifecycle และ permissions/state
+- [x] ดึง accessible repositories ได้
+- [x] เลือก repositories เพื่อเชื่อมต่อและ trigger sync ได้
+- [x] รองรับ frontend state หลัก `not_connected`, `installation_required`, `connected`, `syncing`, `sync_failed`
 
 ### Permission ขั้นต้น
 
@@ -274,19 +297,28 @@ insights.generate.dlq
 
 ## Phase 6: Metric Engine
 
+### Current Status Snapshot
+
+- [x] Core metrics สำหรับ MVP ถูก implement แล้ว
+- [x] รองรับ business day / calendar day behavior
+- [x] รองรับ draft PR, bot filtering, reopened PR handling ตามกติกาปัจจุบัน
+- [x] รองรับ date-range rebuild และ metric versioning
+- [x] มี workload distribution endpoint แล้ว
+- [ ] metric richness เพิ่มเติมบางส่วน เช่น `median`, `merge time`, `code churn` ยังเป็น future scope จนกว่าจะมี definition และ contract ชัด
+
 ### Metric Definitions
 
-- [ ] PR Cycle Time
-- [ ] Review Wait Time
-- [ ] Review Time
+- [x] PR Cycle Time
+- [x] Review Wait Time
+- [x] Review Time
 - [ ] Merge Time
-- [ ] PR Size
-- [ ] Review Coverage
-- [ ] Deployment Frequency
-- [ ] Change Failure Rate
+- [x] PR Size
+- [x] Review Coverage
+- [x] Deployment Frequency
+- [x] Change Failure Rate
 - [ ] Code Churn
-- [ ] Hotspot Score
-- [ ] Workload Distribution
+- [x] Hotspot Score
+- [x] Workload Distribution
 
 ### Calculation
 
@@ -318,18 +350,24 @@ insights.generate.dlq
 
 ### Endpoints
 
-- [ ] `GET /dashboard/summary`
-- [ ] `GET /dashboard/pr-cycle-time`
-- [ ] `GET /dashboard/review-wait-time`
-- [ ] `GET /dashboard/deployments`
-- [ ] `GET /dashboard/review-coverage`
-- [ ] `GET /dashboard/hotspots`
-- [ ] `GET /dashboard/review-queue`
-- [ ] `GET /pull-requests`
-- [ ] `GET /pull-requests/{id}`
-- [ ] `GET /repositories/{id}/metrics`
-- [ ] `GET /repositories/{id}/hotspots`
-- [ ] `GET /insights`
+- [x] `GET /repositories/{repositoryId}/dashboard/summary`
+- [x] `GET /repositories/{repositoryId}/dashboard/pr-cycle-time`
+- [x] `GET /repositories/{repositoryId}/dashboard/review-wait-time`
+- [x] `GET /repositories/{repositoryId}/dashboard/review-queue`
+- [x] `GET /pull-requests`
+- [x] `GET /pull-requests/{id}`
+- [x] `GET /repositories/{repositoryId}/metrics`
+- [x] `GET /repositories/{repositoryId}/metrics/pull-requests`
+- [x] `GET /repositories/{repositoryId}/metrics/reviews`
+- [x] `GET /repositories/{repositoryId}/metrics/deployments`
+- [x] `GET /repositories/{repositoryId}/metrics/workload-distribution`
+- [x] `GET /repositories/{repositoryId}/metrics/hotspots`
+- [x] `GET /organizations/{organizationId}/insights`
+
+หมายเหตุ:
+
+- endpoint naming ที่ใช้งานจริงให้ยึด `openapi.yaml`
+- รายการเก่าเช่น `/dashboard/deployments`, `/dashboard/review-coverage`, `/repositories/{id}/hotspots`, `/insights` แบบไม่ผูก organization ให้ถือว่าเป็น planning wording เดิม ไม่ใช่ requirement ค้าง
 
 ### API Concern
 
@@ -349,18 +387,18 @@ insights.generate.dlq
 
 ## Phase 8: Insight Engine
 
-- [ ] Slow Review Rule
-- [ ] Large PR Rule
-- [ ] Hotspot Rule
-- [ ] Review Concentration Rule
-- [ ] Deployment Failure Rule
-- [ ] Rule Configuration
-- [ ] Insight Severity
-- [ ] Insight Evidence
-- [ ] Deduplicate Insight
-- [ ] Mark as Reviewed
-- [ ] Dismiss Insight
-- [ ] Reopen Insight เมื่อปัญหาเกิดซ้ำ
+- [x] Slow Review Rule
+- [x] Large PR Rule
+- [x] Hotspot Rule
+- [x] Review Concentration Rule
+- [x] Deployment Failure Rule
+- [x] Insight Severity
+- [x] Insight Evidence
+- [x] Deduplicate Insight
+- [x] Mark as Reviewed
+- [x] Dismiss Insight
+- [x] Reopen Insight เมื่อปัญหาเกิดซ้ำ
+- [ ] Rule Configuration เป็น public CRUD API ยังเป็น future scope
 
 ---
 

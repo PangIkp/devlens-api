@@ -111,6 +111,12 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 
 ## 4. Feature หลัก
 
+หมายเหตุสถานะปัจจุบัน ณ `2026-08-13`
+
+- รายการด้านล่างเป็น product capability map
+- Public API ที่ frontend ควรยึดใช้งานจริงให้ดูจาก `docs/openapi.yaml`
+- สิ่งที่ยังไม่ได้ถูก promote เข้า `openapi.yaml` ให้ถือเป็น `future scope` ไม่ใช่ missing backend implementation
+
 ### Dashboard
 
 - Team Health Summary
@@ -123,6 +129,11 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 - Workload Distribution
 - Trend Comparison ตามช่วงเวลา
 
+สถานะ:
+
+- `Team Health Summary`, `PR Cycle Time`, `Review Wait Time`, `Deployment Frequency`, `Change Failure Rate`, `Open PR / Review Queue`, `Hotspot Files`, `Workload Distribution` มี backend implementation และ API contract แล้ว
+- `Trend Comparison` ถือว่ารองรับผ่าน trend series และ `from` / `to` / `interval` ใน metrics endpoints ปัจจุบัน
+
 ### Repository
 
 - รายการ Repository
@@ -131,6 +142,11 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 - Workflow และ Deployment
 - Hotspot Files
 - Contributor และ Reviewer Distribution
+
+สถานะ:
+
+- รายการ repository, detail, metrics, hotspots และ distribution มี backend implementation แล้ว
+- `Repository Health` ใน milestone ปัจจุบันไม่ได้แยกเป็น endpoint ใหม่ และให้ derive จาก repository metrics / dashboard summary
 
 ### Pull Request
 
@@ -142,6 +158,11 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 - Review Wait Time
 - PR Size
 - Risk Indicator
+
+สถานะ:
+
+- `รายละเอียด PR`, `Timeline`, `Review History`, `Changed Files`, `PR Size`, และ `Risk Indicator` มี backend implementation แล้วใน `GET /pull-requests/{id}`
+- ค่า cycle/review wait ที่ระดับ PR detail หากต้องการเพิ่มเป็น field แยก ให้ถือเป็น future enrichment ไม่ใช่ gap ของ contract ปัจจุบัน
 
 ### Insights
 
@@ -162,6 +183,11 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 - Metric Configuration
 - Data Retention
 - Disconnect GitHub
+
+สถานะ:
+
+- `GitHub Connection`, `Repository Selection`, `Installation Status`, `Accessible Repositories`, และ `Sync Status` มี backend implementation แล้ว
+- `Metric Configuration`, `Data Retention`, และ `Disconnect GitHub` ใน milestone ปัจจุบันถือเป็น internal / operations scope และยังไม่ถูก expose เป็น public frontend API
 
 ---
 
