@@ -33,7 +33,10 @@ This repository currently contains the initial backend foundation in [`backend`]
 - transactional webhook delivery persistence and sync job enqueue
 - ClickHouse-backed daily metrics storage for dashboard queries
 - NATS JetStream trigger for repository metric recalculation after sync completion
-- planned GitHub App connection contract for frontend-driven installation, repository access, and initial sync state
+- GitHub App connection flow for installation start, callback, repository discovery, and selection
+- bearer-token session auth with login, refresh, logout, and `/api/v1/me`
+- organization and repository authorization enforcement
+- audit logging, trace IDs, rate limiting, and no-store cache headers
 - PostgreSQL pool initialization with `pgxpool`
 - SQL migrations and `sqlc` foundation
 - environment-based configuration
@@ -93,7 +96,6 @@ Behavior notes:
 - `slug` must be lowercase and may contain letters, numbers, and hyphens
 - `GET` queries exclude soft-deleted organizations (`deleted_at IS NOT NULL`)
 - `updatedAt` is nullable until update behavior is implemented
-- authentication is still deferred, so member write endpoints currently accept `userId` in request body
 - organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
 - repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
 - repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
@@ -105,13 +107,13 @@ Behavior notes:
 - `deployments` and `file_changes` raw schema exist in PostgreSQL for analytics completeness, but ingestion for those sources is intentionally deferred
 - hotspot ranking reads raw `file_changes` from ClickHouse
 - deployment filtering by `environment` reads raw deployment analytics data from ClickHouse when available
-- current sync still uses a server-side `GITHUB_TOKEN`; GitHub App installation flow is planned but not implemented yet
+- GitHub sync can resolve installation access through the backend GitHub App flow without exposing installation tokens to the frontend
 
-## Planned GitHub App Connection Contract
+## GitHub App Connection Flow
 
-The next backend milestone will move GitHub connectivity from a static server token to a GitHub App installation flow. The frontend should treat this as the long-term integration path for both public and private repositories.
+The backend supports GitHub App installation as the primary integration path for both public and private repositories.
 
-Planned frontend-visible states:
+Frontend-visible states:
 
 - `not_connected`
 - `installation_required`
@@ -119,7 +121,7 @@ Planned frontend-visible states:
 - `syncing`
 - `sync_failed`
 
-Planned backend responsibilities:
+Backend responsibilities:
 
 - provide installation start and callback endpoints for GitHub App setup
 - expose connection status per organization so the frontend can decide whether to show connect, install, repo selection, or sync UI
@@ -127,7 +129,7 @@ Planned backend responsibilities:
 - persist installation and repository access metadata in PostgreSQL
 - trigger initial sync after the user selects repositories to connect
 
-Planned endpoints are documented in [`docs/openapi.yaml`](./docs/openapi.yaml) and described as upcoming contract work, not current production behavior.
+The endpoint contract is documented in [`docs/openapi.yaml`](./docs/openapi.yaml).
 
 Example requests:
 
@@ -218,7 +220,7 @@ Implementation notes:
 - parses `Link` headers to expose the next page number
 - tracks rate limit headers from GitHub responses
 - retries temporary failures such as `429`, `500`, `502`, `503`, `504`, and secondary rate limit responses
-- accepts a `TokenProvider` so future GitHub App installation tokens can be introduced without changing sync orchestration code
+- accepts a `TokenProvider` so app installation tokens and fallback token strategies can be swapped without changing sync orchestration code
 
 New environment variables:
 
@@ -253,7 +255,7 @@ NATS_URL=nats://nats:4222
 Notes:
 
 - `ListPullRequests` accepts caller-provided `state`; the Step 2 sync flow will use `state=all` by default
-- GitHub App installation token support is intentionally deferred in this phase
+- GitHub App installation token support is available through the backend integration flow
 - sync jobs now persist `status`, `progress`, `startedAt`, `finishedAt`, and `errorMessage` in PostgreSQL
 - manual sync execution is currently inline for the current milestone
 - webhook events are accepted asynchronously: the handler stores the delivery and enqueues a pending sync job, then an in-process worker processes that job
