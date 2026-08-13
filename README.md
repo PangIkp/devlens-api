@@ -113,6 +113,7 @@ docker compose up -d prometheus grafana
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`
 - default Grafana credentials come from `.env` via `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`
+- Prometheus loads baseline alert rules from `deploy/observability/prometheus/rules/devlens-alerts.yml`
 
 ## Organization API
 
