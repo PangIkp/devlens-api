@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/organization"
@@ -23,14 +24,12 @@ type OrganizationService interface {
 type OrganizationHandler struct {
 	service    OrganizationService
 	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewOrganizationHandler(service OrganizationService, authorizer ...AuthorizationService) *OrganizationHandler {
-	var authz AuthorizationService
-	if len(authorizer) > 0 {
-		authz = authorizer[0]
-	}
-	return &OrganizationHandler{service: service, authorizer: authz}
+func NewOrganizationHandler(service OrganizationService, deps ...any) *OrganizationHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &OrganizationHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *OrganizationHandler) RegisterRoutes(r chi.Router) {
@@ -74,6 +73,18 @@ func (h *OrganizationHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(org.ID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.create",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(org.ID),
+		Metadata: map[string]any{
+			"githubId": org.GithubID,
+			"slug":     org.Slug,
+			"name":     org.Name,
+		},
+	})
 	WriteData(w, http.StatusCreated, org)
 }
 
@@ -139,6 +150,18 @@ func (h *OrganizationHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(id),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.update",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(id),
+		Metadata: map[string]any{
+			"slug": org.Slug,
+			"name": org.Name,
+		},
+	})
 	WriteData(w, http.StatusOK, org)
 }
 
@@ -154,6 +177,14 @@ func (h *OrganizationHandler) softDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(id),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.delete",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(id),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

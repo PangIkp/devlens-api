@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/githubconnection"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
@@ -23,14 +24,12 @@ type GitHubConnectionService interface {
 type GitHubConnectionHandler struct {
 	service    GitHubConnectionService
 	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewGitHubConnectionHandler(service GitHubConnectionService, authorizer ...AuthorizationService) *GitHubConnectionHandler {
-	var authz AuthorizationService
-	if len(authorizer) > 0 {
-		authz = authorizer[0]
-	}
-	return &GitHubConnectionHandler{service: service, authorizer: authz}
+func NewGitHubConnectionHandler(service GitHubConnectionService, deps ...any) *GitHubConnectionHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &GitHubConnectionHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *GitHubConnectionHandler) RegisterRoutes(r chi.Router) {
@@ -89,6 +88,17 @@ func (h *GitHubConnectionHandler) startInstallation(w http.ResponseWriter, r *ht
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "github_connection.installation_start",
+		ResourceType:   "github_installation",
+		Metadata: map[string]any{
+			"installUrl": item.InstallURL,
+			"state":      item.State,
+		},
+	})
 
 	WriteData(w, http.StatusOK, item)
 }
@@ -111,6 +121,19 @@ func (h *GitHubConnectionHandler) completeInstallation(w http.ResponseWriter, r 
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "github_connection.installation_complete",
+		ResourceType:   "github_installation",
+		ResourceID:     stringRef(organizationID),
+		Metadata: map[string]any{
+			"installationId": installationID,
+			"state":          item.State,
+			"accountLogin":   item.AccountLogin,
+		},
+	})
 
 	WriteData(w, http.StatusOK, item)
 }
@@ -159,6 +182,20 @@ func (h *GitHubConnectionHandler) selectRepositories(w http.ResponseWriter, r *h
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "github_connection.repositories_select",
+		ResourceType:   "github_installation",
+		ResourceID:     stringRef(organizationID),
+		Metadata: map[string]any{
+			"selectedRepositoryIds": item.SelectedRepositoryIDs,
+			"createdRepositoryIds":  item.CreatedRepositoryIDs,
+			"syncJobIds":            item.SyncJobIDs,
+			"state":                 item.State,
+		},
+	})
 
 	WriteData(w, http.StatusAccepted, item)
 }

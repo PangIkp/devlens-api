@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
@@ -21,14 +22,12 @@ type OrganizationMemberService interface {
 type OrganizationMemberHandler struct {
 	service    OrganizationMemberService
 	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewOrganizationMemberHandler(service OrganizationMemberService, authorizer ...AuthorizationService) *OrganizationMemberHandler {
-	var authz AuthorizationService
-	if len(authorizer) > 0 {
-		authz = authorizer[0]
-	}
-	return &OrganizationMemberHandler{service: service, authorizer: authz}
+func NewOrganizationMemberHandler(service OrganizationMemberService, deps ...any) *OrganizationMemberHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &OrganizationMemberHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *OrganizationMemberHandler) RegisterRoutes(r chi.Router) {
@@ -85,6 +84,18 @@ func (h *OrganizationMemberHandler) create(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.create",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"userId": item.UserID,
+			"role":   item.Role,
+		},
+	})
 	WriteData(w, http.StatusCreated, item)
 }
 
@@ -111,6 +122,18 @@ func (h *OrganizationMemberHandler) update(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.update",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"userId": item.UserID,
+			"role":   item.Role,
+		},
+	})
 	WriteData(w, http.StatusOK, item)
 }
 
@@ -130,6 +153,14 @@ func (h *OrganizationMemberHandler) delete(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.delete",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(memberID),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

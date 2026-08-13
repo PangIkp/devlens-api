@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
@@ -71,27 +72,28 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	organizationService := organization.NewService(organizationRepository)
 	authRepository := auth.NewRepository(postgresDB)
 	authService := auth.NewService(authRepository, 15*time.Minute, 30*24*time.Hour)
-	authHandler := httpapi.NewAuthHandler(authService)
+	auditService := auditlog.NewService(postgresDB)
+	authHandler := httpapi.NewAuthHandler(authService, auditService)
 	authorizationRepository := authorization.NewRepository(postgresDB)
 	authorizationService := authorization.NewService(authorizationRepository)
-	organizationHandler := httpapi.NewOrganizationHandler(organizationService, authorizationService)
+	organizationHandler := httpapi.NewOrganizationHandler(organizationService, authorizationService, auditService)
 	userRepository := userprofile.NewRepository(postgresDB)
 	userService := userprofile.NewService(userRepository)
 	meHandler := httpapi.NewMeHandler(userService)
 	organizationMemberRepository := organizationmember.NewRepository(postgresDB)
 	organizationMemberService := organizationmember.NewService(organizationMemberRepository)
-	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService, authorizationService)
+	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService, authorizationService, auditService)
 	pullRequestRepository := pullrequest.NewRepository(postgresDB)
 	pullRequestService := pullrequest.NewService(pullRequestRepository)
 	pullRequestHandler := httpapi.NewPullRequestHandler(pullRequestService, authorizationService)
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
-	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService, authorizationService)
+	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService, authorizationService, auditService)
 	metricsService := metrics.NewService(postgresDB, clickhouseDB)
 	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
 	insightRepository := insights.NewRepository(postgresDB)
 	insightService := insights.NewService(insightRepository)
-	insightHandler := httpapi.NewInsightHandler(insightService, authorizationService)
+	insightHandler := httpapi.NewInsightHandler(insightService, authorizationService, auditService)
 	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
 		UserAgent:      cfg.GitHub.UserAgent,
@@ -111,13 +113,13 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
 	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient)
-	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService)
+	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
 	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval)
 	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
-	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService)
+	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService)
-	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
+	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)
 	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval)
 
 	var metricsBusClient *metricsbus.Client

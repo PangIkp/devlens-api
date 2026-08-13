@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -19,10 +20,12 @@ type GitHubWebhookService interface {
 
 type GitHubWebhookHandler struct {
 	service GitHubWebhookService
+	audit   AuditLogger
 }
 
-func NewGitHubWebhookHandler(service GitHubWebhookService) *GitHubWebhookHandler {
-	return &GitHubWebhookHandler{service: service}
+func NewGitHubWebhookHandler(service GitHubWebhookService, deps ...any) *GitHubWebhookHandler {
+	_, auditLogger := resolveHandlerDeps(deps)
+	return &GitHubWebhookHandler{service: service, audit: auditLogger}
 }
 
 func (h *GitHubWebhookHandler) RegisterRoutes(r chi.Router) {
@@ -67,6 +70,16 @@ func (h *GitHubWebhookHandler) retry(w http.ResponseWriter, r *http.Request) {
 		writeGitHubWebhookError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		ActorUserID:  stringRef(userID),
+		Action:       "github_webhook.retry",
+		ResourceType: "webhook_delivery",
+		Metadata: map[string]any{
+			"deliveryId": deliveryID,
+			"eventType":  result.EventType,
+		},
+	})
 
 	WriteData(w, http.StatusAccepted, result)
 }

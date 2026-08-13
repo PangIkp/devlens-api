@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/insights"
@@ -22,14 +23,12 @@ type InsightService interface {
 type InsightHandler struct {
 	service    InsightService
 	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewInsightHandler(service InsightService, authorizer ...AuthorizationService) *InsightHandler {
-	var authz AuthorizationService
-	if len(authorizer) > 0 {
-		authz = authorizer[0]
-	}
-	return &InsightHandler{service: service, authorizer: authz}
+func NewInsightHandler(service InsightService, deps ...any) *InsightHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &InsightHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *InsightHandler) RegisterRoutes(r chi.Router) {
@@ -107,6 +106,17 @@ func (h *InsightHandler) review(w http.ResponseWriter, r *http.Request) {
 		writeInsightError(w, r, err)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "insight.review",
+		ResourceType:   "insight_status",
+		Metadata: map[string]any{
+			"insightKey": insightKey,
+			"status":     item.Status,
+		},
+	})
 	WriteData(w, http.StatusOK, item)
 }
 
@@ -121,6 +131,17 @@ func (h *InsightHandler) dismiss(w http.ResponseWriter, r *http.Request) {
 		writeInsightError(w, r, err)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "insight.dismiss",
+		ResourceType:   "insight_status",
+		Metadata: map[string]any{
+			"insightKey": insightKey,
+			"status":     item.Status,
+		},
+	})
 	WriteData(w, http.StatusOK, item)
 }
 
@@ -135,6 +156,17 @@ func (h *InsightHandler) reopen(w http.ResponseWriter, r *http.Request) {
 		writeInsightError(w, r, err)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "insight.reopen",
+		ResourceType:   "insight_status",
+		Metadata: map[string]any{
+			"insightKey": insightKey,
+			"status":     item.Status,
+		},
+	})
 	WriteData(w, http.StatusOK, item)
 }
 

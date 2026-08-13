@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
@@ -23,14 +24,12 @@ type SyncJobService interface {
 type SyncJobHandler struct {
 	service    SyncJobService
 	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewSyncJobHandler(service SyncJobService, authorizer ...AuthorizationService) *SyncJobHandler {
-	var authz AuthorizationService
-	if len(authorizer) > 0 {
-		authz = authorizer[0]
-	}
-	return &SyncJobHandler{service: service, authorizer: authz}
+func NewSyncJobHandler(service SyncJobService, deps ...any) *SyncJobHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &SyncJobHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *SyncJobHandler) RegisterRoutes(r chi.Router) {
@@ -74,6 +73,18 @@ func (h *SyncJobHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeSyncJobError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		ActorUserID:  stringRef(userID),
+		Action:       "sync_job.create",
+		ResourceType: "sync_job",
+		ResourceID:   stringRef(item.ID),
+		Metadata: map[string]any{
+			"repositoryId":   item.RepositoryID,
+			"status":         item.Status,
+			"idempotencyKey": req.IdempotencyKey,
+		},
+	})
 
 	WriteData(w, http.StatusAccepted, item)
 }
@@ -90,6 +101,17 @@ func (h *SyncJobHandler) retry(w http.ResponseWriter, r *http.Request) {
 		writeSyncJobError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		ActorUserID:  stringRef(userID),
+		Action:       "sync_job.retry",
+		ResourceType: "sync_job",
+		ResourceID:   stringRef(item.ID),
+		Metadata: map[string]any{
+			"repositoryId": item.RepositoryID,
+			"status":       item.Status,
+		},
+	})
 
 	WriteData(w, http.StatusAccepted, item)
 }
@@ -106,6 +128,17 @@ func (h *SyncJobHandler) cancel(w http.ResponseWriter, r *http.Request) {
 		writeSyncJobError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		ActorUserID:  stringRef(userID),
+		Action:       "sync_job.cancel",
+		ResourceType: "sync_job",
+		ResourceID:   stringRef(item.ID),
+		Metadata: map[string]any{
+			"repositoryId": item.RepositoryID,
+			"status":       item.Status,
+		},
+	})
 
 	WriteData(w, http.StatusAccepted, item)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -18,10 +19,12 @@ type AuthService interface {
 
 type AuthHandler struct {
 	service AuthService
+	audit   AuditLogger
 }
 
-func NewAuthHandler(service AuthService) *AuthHandler {
-	return &AuthHandler{service: service}
+func NewAuthHandler(service AuthService, deps ...any) *AuthHandler {
+	_, auditLogger := resolveHandlerDeps(deps)
+	return &AuthHandler{service: service, audit: auditLogger}
 }
 
 func (h *AuthHandler) RegisterRoutes(r chi.Router) {
@@ -73,6 +76,12 @@ func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, r, err)
 		return
 	}
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		ActorUserID:  stringRef(principal.User.ID),
+		Action:       "auth.logout",
+		ResourceType: "user_session",
+		ResourceID:   stringRef(principal.SessionID),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
