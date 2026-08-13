@@ -6,6 +6,10 @@ info:
   description: |
     API contract สำหรับ DevLens Engineering Intelligence Platform
 
+    Runtime behavior:
+    - Responses include `X-Trace-Id` for request tracing.
+    - The API may return `429 Too Many Requests` when server-side rate limits are exceeded.
+
     Related documents:
     - 01-business-logic-architecture.md
     - 03-backend-roadmap.md
@@ -1525,6 +1529,9 @@ components:
   responses:
     Unauthorized:
       description: Authentication is required or token is invalid
+      headers:
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
       content:
         application/json:
           schema:
@@ -1532,6 +1539,9 @@ components:
 
     Forbidden:
       description: User does not have permission to access the resource
+      headers:
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
       content:
         application/json:
           schema:
@@ -1539,6 +1549,9 @@ components:
 
     NotFound:
       description: Requested resource was not found
+      headers:
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
       content:
         application/json:
           schema:
@@ -1546,6 +1559,9 @@ components:
 
     Conflict:
       description: Request conflicts with current resource state
+      headers:
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
       content:
         application/json:
           schema:
@@ -1553,10 +1569,34 @@ components:
 
     ValidationError:
       description: Request validation failed
+      headers:
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ValidationErrorResponse"
+
+    TooManyRequests:
+      description: Request rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Number of seconds to wait before retrying the request.
+        X-Trace-Id:
+          $ref: "#/components/headers/TraceID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  headers:
+    TraceID:
+      description: Request trace identifier for correlating logs and responses.
+      schema:
+        type: string
+        example: 7b0ce8d6611b40e5b32ea3cbe3d98d0a
 
   schemas:
     HealthResponse:

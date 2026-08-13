@@ -51,6 +51,8 @@ If any conflict exists, **openapi.yaml wins**.
 - UTC timestamps (ISO-8601)
 - Stable pagination
 - Idempotent operations where applicable
+- Responses include `X-Trace-Id` for request tracing
+- APIs may return `429 Too Many Requests` when rate limits are exceeded
 
 ---
 
