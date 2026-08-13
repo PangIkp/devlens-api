@@ -115,6 +115,8 @@ docker compose up -d prometheus grafana
 - default Grafana credentials come from `.env` via `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`
 - Prometheus loads baseline alert rules from `deploy/observability/prometheus/rules/devlens-alerts.yml`
 - OTLP tracing can be enabled with `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT=<host:port>`
+- provisioned Grafana dashboards now cover backend overview, workers, GitHub API usage, and sync/webhook operations
+- worker, queue lag, sync duration, webhook delay, PostgreSQL, ClickHouse, and GitHub API metrics are exposed through `/metrics`
 
 ## Organization API
 

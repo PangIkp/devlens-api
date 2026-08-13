@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 )
 
 type store interface {
@@ -38,6 +39,7 @@ type Service struct {
 	githubClient githubclient.Client
 	publisher    completionPublisher
 	now          func() time.Time
+	metrics      *observability.Metrics
 }
 
 var errSyncCanceled = errors.New("sync job canceled")
@@ -53,11 +55,12 @@ type completionPublisher interface {
 	PublishRepositorySyncCompleted(context.Context, SyncCompletedEvent) error
 }
 
-func NewService(store store, githubClient githubclient.Client) *Service {
+func NewService(store store, githubClient githubclient.Client, metrics *observability.Metrics) *Service {
 	return &Service{
 		store:        store,
 		githubClient: githubClient,
 		now:          time.Now,
+		metrics:      metrics,
 	}
 }
 
@@ -249,7 +252,9 @@ func validateListParams(params ListParams) error {
 }
 
 func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOptions) (SyncJobResponse, error) {
+	runStarted := time.Now()
 	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		s.recordSyncDuration(options.mode, "canceled", time.Since(runStarted))
 		return s.canceledJobResult(ctx, job.ID, err)
 	}
 
@@ -261,22 +266,23 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 
 	target, err := s.store.GetRepositoryTarget(ctx, job.RepositoryID)
 	if err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	owner, repoName, err := splitFullName(target.FullName)
 	if err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	cutoff := resolveSyncCutoff(target, options)
 
 	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		s.recordSyncDuration(options.mode, "canceled", time.Since(runStarted))
 		return s.canceledJobResult(ctx, job.ID, err)
 	}
 	repo, err := s.githubClient.GetRepository(ctx, owner, repoName)
 	if err != nil {
-		return s.failJob(ctx, job, fmt.Errorf("sync repository metadata: %w", err))
+		return s.failJob(ctx, job, options.mode, runStarted, fmt.Errorf("sync repository metadata: %w", err))
 	}
 
 	if err := s.store.SyncRepositoryMetadata(ctx, job.RepositoryID, repositoryMetadata{
@@ -286,7 +292,7 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		IsActive:      !repo.Archived,
 		ArchivedAt:    archivedAt(repo.Archived, startedAt),
 	}, startedAt); err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	job, err = s.store.UpdateProgress(ctx, job.ID, 25, s.now().UTC())
@@ -295,11 +301,12 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		s.recordSyncDuration(options.mode, "canceled", time.Since(runStarted))
 		return s.canceledJobResult(ctx, job.ID, err)
 	}
 	pullRequests, err := s.syncPullRequests(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff)
 	if err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	if pullRequests > 0 {
@@ -312,10 +319,11 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	if err := s.ensureNotCanceled(ctx, job.ID); err != nil {
+		s.recordSyncDuration(options.mode, "canceled", time.Since(runStarted))
 		return s.canceledJobResult(ctx, job.ID, err)
 	}
 	if _, err := s.syncCommits(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	job, err = s.store.UpdateProgress(ctx, job.ID, 85, s.now().UTC())
@@ -324,7 +332,7 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	if _, err := s.syncWorkflowRuns(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	job, err = s.store.UpdateProgress(ctx, job.ID, 92, s.now().UTC())
@@ -333,7 +341,7 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 	}
 
 	if _, err := s.syncDeployments(ctx, job.ID, job.RepositoryID, owner, repoName, cutoff); err != nil {
-		return s.failJob(ctx, job, err)
+		return s.failJob(ctx, job, options.mode, runStarted, err)
 	}
 
 	completedAt := s.now().UTC()
@@ -344,20 +352,32 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 			SyncJobID:    job.ID,
 			OccurredAt:   completedAt,
 		}); err != nil {
-			return s.failJob(ctx, job, fmt.Errorf("trigger metrics calculation: %w", err))
+			return s.failJob(ctx, job, options.mode, runStarted, fmt.Errorf("trigger metrics calculation: %w", err))
 		}
 	}
 
-	return s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
+	completedJob, err := s.store.Complete(ctx, job.ID, job.RepositoryID, completedAt)
+	if err == nil {
+		s.recordSyncDuration(options.mode, "completed", time.Since(runStarted))
+	}
+	return completedJob, err
 }
 
-func (s *Service) failJob(ctx context.Context, job SyncJobResponse, err error) (SyncJobResponse, error) {
+func (s *Service) failJob(ctx context.Context, job SyncJobResponse, mode string, runStarted time.Time, err error) (SyncJobResponse, error) {
 	failedAt := s.now().UTC()
+	s.recordSyncDuration(mode, "failed", time.Since(runStarted))
 	failedJob, markErr := s.store.MarkFailed(ctx, job.ID, err.Error(), failedAt)
 	if markErr != nil {
 		return SyncJobResponse{}, markErr
 	}
 	return failedJob, nil
+}
+
+func (s *Service) recordSyncDuration(mode, result string, duration time.Duration) {
+	if s == nil || s.metrics == nil {
+		return
+	}
+	s.metrics.RecordSyncDuration(mode, result, duration)
 }
 
 func (s *Service) syncPullRequests(ctx context.Context, jobID string, repositoryID string, owner string, repoName string, cutoff *time.Time) (int, error) {

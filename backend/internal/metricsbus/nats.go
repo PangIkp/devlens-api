@@ -193,6 +193,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 	c.sub = sub
 	defer c.sub.Unsubscribe()
 
+	c.recordLag()
+
 	<-ctx.Done()
 
 	if err := c.sub.Drain(); err != nil && !errors.Is(err, nats.ErrConnectionClosed) {
@@ -212,6 +214,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 		if c.metrics != nil {
 			c.metrics.RecordQueueConsume("metricsbus", subjectName, "decode_error", time.Since(started))
 		}
+		c.recordLag()
 		span.SetStatus(codes.Error, err.Error())
 		_ = msg.Ack()
 		return
@@ -231,6 +234,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 		if c.metrics != nil {
 			c.metrics.RecordQueueConsume("metricsbus", subjectName, "error", time.Since(started))
 		}
+		c.recordLag()
 		span.SetStatus(codes.Error, err.Error())
 		_ = msg.Nak()
 		return
@@ -238,6 +242,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 	if c.metrics != nil {
 		c.metrics.RecordQueueConsume("metricsbus", subjectName, "ok", time.Since(started))
 	}
+	c.recordLag()
 	span.SetAttributes(
 		attribute.String("messaging.system", "nats"),
 		attribute.String("messaging.destination.name", subjectName),
@@ -248,6 +253,17 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 	span.SetStatus(codes.Ok, "")
 
 	_ = msg.Ack()
+}
+
+func (c *Consumer) recordLag() {
+	if c == nil || c.metrics == nil || c.js == nil {
+		return
+	}
+	info, err := c.js.ConsumerInfo(streamName, durableName)
+	if err != nil || info == nil {
+		return
+	}
+	c.metrics.RecordQueueLag("metricsbus", subjectName, int64(info.NumPending))
 }
 
 func (c *Client) ensureStream() error {

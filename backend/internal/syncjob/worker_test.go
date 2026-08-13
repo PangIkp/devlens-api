@@ -66,7 +66,7 @@ func TestWorkerProcessesPendingJobsImmediatelyAndOnInterval(t *testing.T) {
 		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 			return githubclient.Page[githubclient.Commit]{}, nil
 		},
-	})
+	}, nil)
 
 	worker := NewWorker(slog.New(slog.NewTextHandler(io.Discard, nil)), store, service, 10*time.Millisecond, nil)
 

@@ -86,7 +86,7 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 			}
 			return enqueueResult{deliveryID: deliveryID, syncJobID: stringPtr("job-1"), receivedAt: now, processingStatus: "enqueued"}, nil
 		},
-	}, "top-secret", nil)
+	}, "top-secret", nil, nil)
 
 	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -137,7 +137,7 @@ func TestRetryReprocessesFailedInstallationDelivery(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 
 	result, err := service.Retry(context.Background(), "delivery-5")
 	if err != nil {
@@ -180,7 +180,7 @@ func TestRetryFailedPendingProcessesQueuedDeliveries(t *testing.T) {
 			called++
 			return nil
 		},
-	})
+	}, nil)
 
 	if err := service.RetryFailedPending(context.Background(), 10); err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -224,7 +224,7 @@ func TestHandleSchedulesRetryWhenInstallationProcessingFails(t *testing.T) {
 		handleFn: func(context.Context, string, int64, string) error {
 			return errors.New("temporary github app failure")
 		},
-	})
+	}, nil)
 	service.now = func() time.Time { return now }
 
 	body := []byte(`{"action":"created","installation":{"id":99}}`)
@@ -256,7 +256,7 @@ func TestHandleTreatsDuplicateAsIdempotent(t *testing.T) {
 		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 			return enqueueResult{deliveryID: deliveryID, duplicate: true, receivedAt: time.Now().UTC(), processingStatus: "processed"}, nil
 		},
-	}, "top-secret", nil)
+	}, "top-secret", nil, nil)
 
 	body := []byte(`{"repository":{"id":42}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -296,7 +296,7 @@ func TestHandleUnsupportedEventStoresWithoutEnqueue(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 
 	body := []byte(`{"action":"created","installation":{"id":99},"repository":{"id":42}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -352,7 +352,7 @@ func TestHandleProcessesOutOfOrderInstallationDeletedEventIdempotently(t *testin
 			}
 			return nil
 		},
-	})
+	}, nil)
 
 	body := []byte(`{"action":"deleted","installation":{"id":99}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -383,7 +383,7 @@ func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 			}
 			return enqueueResult{deliveryID: deliveryID, receivedAt: time.Now().UTC(), processingStatus: "enqueued"}, nil
 		},
-	}, "top-secret", nil)
+	}, "top-secret", nil, nil)
 
 	body := []byte(`{"action":"completed","repository":{"id":42}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
@@ -438,7 +438,7 @@ func TestRetrySchedulesNextAttemptWhenReprocessingFails(t *testing.T) {
 		handleFn: func(context.Context, string, int64, string) error {
 			return errors.New("temporary retry failure")
 		},
-	})
+	}, nil)
 	service.now = func() time.Time { return now }
 
 	_, err := service.Retry(context.Background(), "delivery-7")
@@ -497,7 +497,7 @@ func TestRetryFailedPendingContinuesAfterSingleDeliveryFailure(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}, nil)
 
 	if err := service.RetryFailedPending(context.Background(), 10); err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -523,7 +523,7 @@ func TestHandleRejectsInvalidSignature(t *testing.T) {
 			t.Fatal("enqueue should not be called")
 			return enqueueResult{}, nil
 		},
-	}, "top-secret", nil)
+	}, "top-secret", nil, nil)
 
 	_, err := service.Handle(context.Background(), HandleRequest{
 		DeliveryID: "delivery-3",

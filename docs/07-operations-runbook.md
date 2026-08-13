@@ -79,6 +79,23 @@ Verified tables:
 - `webhook_deliveries`
 - `insight_statuses`
 
+## Observability
+
+The local observability stack includes:
+
+- Prometheus scraping `http://host.docker.internal:8080/metrics`
+- Grafana with provisioned dashboards for backend overview, workers, GitHub API, and sync/webhook operations
+- baseline alert rules for HTTP 5xx ratio, latency, queue lag, GitHub rate limit budget, sync failures, and webhook delay
+
+Tracing support:
+
+- enable OTLP export with `OTEL_ENABLED=true`
+- set `OTEL_EXPORTER_OTLP_ENDPOINT=<host:port>`
+- optional controls:
+  - `OTEL_SERVICE_NAME`
+  - `OTEL_EXPORTER_OTLP_INSECURE`
+  - `OTEL_TRACE_SAMPLE_RATIO`
+
 ## Current Gaps
 
 This runbook does not yet automate:

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/observability"
 )
 
 type store interface {
@@ -29,14 +31,16 @@ type Service struct {
 	webhookSecret string
 	installations installationEventHandler
 	now           func() time.Time
+	metrics       *observability.Metrics
 }
 
-func NewService(store store, webhookSecret string, installations installationEventHandler) *Service {
+func NewService(store store, webhookSecret string, installations installationEventHandler, metrics *observability.Metrics) *Service {
 	return &Service{
 		store:         store,
 		webhookSecret: webhookSecret,
 		installations: installations,
 		now:           time.Now,
+		metrics:       metrics,
 	}
 }
 
@@ -78,9 +82,12 @@ func (s *Service) Handle(ctx context.Context, req HandleRequest) (HandleResult, 
 	if !result.duplicate {
 		if err := s.processPersistedDelivery(ctx, req.DeliveryID, req.EventType, payload.Action, installationID); err != nil {
 			_ = s.scheduleRetryFailure(ctx, req.DeliveryID, 0, err)
+			s.recordWebhookDelay(req.EventType, "failed", result.receivedAt)
 			return HandleResult{}, err
 		}
 	}
+
+	s.recordWebhookDelay(req.EventType, result.processingStatus, result.receivedAt)
 
 	return HandleResult{
 		DeliveryID:       result.deliveryID,
@@ -108,6 +115,7 @@ func (s *Service) Retry(ctx context.Context, deliveryID string) (HandleResult, e
 
 	if err := s.processPersistedDelivery(ctx, stored.DeliveryID, stored.EventType, valueOrEmpty(stored.Action), stored.InstallationID); err != nil {
 		_ = s.scheduleRetryFailure(ctx, stored.DeliveryID, stored.RetryCount, err)
+		s.recordWebhookDelay(stored.EventType, "failed", stored.ReceivedAt)
 		return HandleResult{}, err
 	}
 
@@ -115,6 +123,7 @@ func (s *Service) Retry(ctx context.Context, deliveryID string) (HandleResult, e
 	if err := s.store.MarkDeliveryStatus(ctx, stored.DeliveryID, deriveProcessedStatus(stored.EventType, stored.SyncJobID != nil), nil, &processedAt); err != nil {
 		return HandleResult{}, err
 	}
+	s.recordWebhookDelay(stored.EventType, deriveProcessedStatus(stored.EventType, stored.SyncJobID != nil), stored.ReceivedAt)
 
 	return HandleResult{
 		DeliveryID:       stored.DeliveryID,
@@ -256,4 +265,15 @@ func retryDelayForAttempt(attempt int) time.Duration {
 		return 15 * time.Minute
 	}
 	return delay
+}
+
+func (s *Service) recordWebhookDelay(eventType, status string, receivedAt time.Time) {
+	if s == nil || s.metrics == nil || receivedAt.IsZero() {
+		return
+	}
+	delay := s.now().UTC().Sub(receivedAt.UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	s.metrics.RecordWebhookProcessingDelay(eventType, status, delay)
 }

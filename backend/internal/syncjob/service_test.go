@@ -326,7 +326,7 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 				Items: []githubclient.Commit{{SHA: "abc", Commit: githubclient.CommitDetail{Author: githubclient.CommitAuthor{Date: now}}}},
 			}, nil
 		},
-	})
+	}, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Create(context.Background(), "repo-1", CreateSyncRequest{})
@@ -367,7 +367,7 @@ func TestServiceCreateConflictWhenActiveJobExists(t *testing.T) {
 		completeFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
-	}, stubGitHubClient{})
+	}, stubGitHubClient{}, nil)
 
 	_, err := svc.Create(context.Background(), "repo-1", CreateSyncRequest{})
 	if !errors.Is(err, ErrSyncJobConflict) {
@@ -427,7 +427,7 @@ func TestProcessPendingUsesStoredFullSyncOptions(t *testing.T) {
 		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 			return githubclient.Page[githubclient.Commit]{}, nil
 		},
-	})
+	}, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.ProcessPending(context.Background(), "job-1")
@@ -511,7 +511,7 @@ func TestProcessPendingResumesPullRequestCheckpointPage(t *testing.T) {
 		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 			return githubclient.Page[githubclient.Commit]{}, nil
 		},
-	})
+	}, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.ProcessPending(context.Background(), "job-2")
@@ -536,7 +536,7 @@ func TestRetryOnlyAllowsFailedJobs(t *testing.T) {
 		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
 			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusCompleted, CreatedAt: time.Now().UTC()}, nil
 		},
-	}, stubGitHubClient{})
+	}, stubGitHubClient{}, nil)
 
 	_, err := svc.Retry(context.Background(), "job-1")
 	if !errors.Is(err, ErrSyncJobRetryState) {
@@ -590,7 +590,7 @@ func TestServiceCreateMarksFailedWhenGitHubErrors(t *testing.T) {
 		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
 			return githubclient.Page[githubclient.Commit]{}, nil
 		},
-	})
+	}, nil)
 	svc.now = func() time.Time { return now }
 
 	result, err := svc.Create(context.Background(), "repo-1", CreateSyncRequest{})
@@ -628,7 +628,7 @@ func TestServiceListValidation(t *testing.T) {
 		completeFn: func(context.Context, string, string, time.Time) (SyncJobResponse, error) {
 			return SyncJobResponse{}, nil
 		},
-	}, stubGitHubClient{})
+	}, stubGitHubClient{}, nil)
 
 	_, err := svc.ListByRepository(context.Background(), ListParams{
 		RepositoryID: "repo-1",

@@ -76,7 +76,7 @@ func openIntegrationDB(t *testing.T) *DB {
 		t.Fatalf("load config: %v", err)
 	}
 
-	db, err := Open(cfg.ClickHouse)
+	db, err := Open(cfg.ClickHouse, nil)
 	if err != nil {
 		t.Skipf("skip clickhouse integration test: clickhouse unavailable: %v", err)
 	}

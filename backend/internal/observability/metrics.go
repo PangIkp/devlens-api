@@ -18,11 +18,18 @@ type Metrics struct {
 	queueConsumes        map[queueKey]uint64
 	queueProcessingCount map[queueKey]uint64
 	queueProcessingSumMS map[queueKey]int64
+	queueLag             map[queueLagKey]int64
 	githubRequests       map[githubKey]uint64
 	githubRequestSumMS   map[githubKey]int64
 	githubRateLimit      map[string]int
 	postgresQueries      map[postgresKey]uint64
 	postgresQuerySumMS   map[postgresKey]int64
+	clickhouseQueries    map[clickhouseKey]uint64
+	clickhouseQuerySumMS map[clickhouseKey]int64
+	syncDurations        map[syncKey]int64
+	syncCounts           map[syncKey]uint64
+	webhookDelayMS       map[webhookKey]int64
+	webhookDelayCount    map[webhookKey]uint64
 }
 
 type workerKey struct {
@@ -41,6 +48,11 @@ type queueKey struct {
 	Result    string
 }
 
+type queueLagKey struct {
+	Component string
+	Subject   string
+}
+
 type githubKey struct {
 	Method string
 	Route  string
@@ -53,6 +65,21 @@ type postgresKey struct {
 	Result    string
 }
 
+type clickhouseKey struct {
+	Operation string
+	Result    string
+}
+
+type syncKey struct {
+	Mode   string
+	Result string
+}
+
+type webhookKey struct {
+	EventType string
+	Status    string
+}
+
 func NewMetrics() *Metrics {
 	return &Metrics{
 		workerIterations:     make(map[workerKey]uint64),
@@ -62,11 +89,18 @@ func NewMetrics() *Metrics {
 		queueConsumes:        make(map[queueKey]uint64),
 		queueProcessingCount: make(map[queueKey]uint64),
 		queueProcessingSumMS: make(map[queueKey]int64),
+		queueLag:             make(map[queueLagKey]int64),
 		githubRequests:       make(map[githubKey]uint64),
 		githubRequestSumMS:   make(map[githubKey]int64),
 		githubRateLimit:      make(map[string]int),
 		postgresQueries:      make(map[postgresKey]uint64),
 		postgresQuerySumMS:   make(map[postgresKey]int64),
+		clickhouseQueries:    make(map[clickhouseKey]uint64),
+		clickhouseQuerySumMS: make(map[clickhouseKey]int64),
+		syncDurations:        make(map[syncKey]int64),
+		syncCounts:           make(map[syncKey]uint64),
+		webhookDelayMS:       make(map[webhookKey]int64),
+		webhookDelayCount:    make(map[webhookKey]uint64),
 	}
 }
 
@@ -111,6 +145,15 @@ func (m *Metrics) RecordQueueConsume(component, subject, result string, duration
 	m.queueProcessingSumMS[key] += duration.Milliseconds()
 }
 
+func (m *Metrics) RecordQueueLag(component, subject string, lag int64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queueLag[queueLagKey{Component: normalize(component), Subject: normalize(subject)}] = lag
+}
+
 func (m *Metrics) RecordGitHubRequest(method, route string, statusCode int, result string, duration time.Duration, remaining int) {
 	if m == nil {
 		return
@@ -139,6 +182,39 @@ func (m *Metrics) RecordPostgresQuery(operation, result string, duration time.Du
 	defer m.mu.Unlock()
 	m.postgresQueries[key]++
 	m.postgresQuerySumMS[key] += duration.Milliseconds()
+}
+
+func (m *Metrics) RecordClickHouseQuery(operation, result string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	key := clickhouseKey{Operation: normalize(operation), Result: normalize(result)}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clickhouseQueries[key]++
+	m.clickhouseQuerySumMS[key] += duration.Milliseconds()
+}
+
+func (m *Metrics) RecordSyncDuration(mode, result string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	key := syncKey{Mode: normalize(mode), Result: normalize(result)}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncCounts[key]++
+	m.syncDurations[key] += duration.Milliseconds()
+}
+
+func (m *Metrics) RecordWebhookProcessingDelay(eventType, status string, delay time.Duration) {
+	if m == nil {
+		return
+	}
+	key := webhookKey{EventType: normalize(eventType), Status: normalize(status)}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.webhookDelayCount[key]++
+	m.webhookDelayMS[key] += delay.Milliseconds()
 }
 
 func (m *Metrics) Render() string {
@@ -200,6 +276,13 @@ func (m *Metrics) Render() string {
 		mapToOrderedSeries(m.queueProcessingCount, func(key queueKey) []string { return []string{key.Component, key.Subject, key.Result} }),
 	)
 
+	renderGaugeMap(&builder,
+		"devlens_queue_lag",
+		"Latest observed queue lag by component and subject.",
+		[]string{"component", "subject"},
+		mapToOrderedSeries64(m.queueLag, func(key queueLagKey) []string { return []string{key.Component, key.Subject} }),
+	)
+
 	renderCounterMap(&builder,
 		"devlens_github_requests_total",
 		"Total GitHub API requests.",
@@ -233,6 +316,48 @@ func (m *Metrics) Render() string {
 		"Total PostgreSQL query duration in milliseconds.",
 		[]string{"operation", "result"},
 		mapToOrderedSeries64(m.postgresQuerySumMS, func(key postgresKey) []string { return []string{key.Operation, key.Result} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_clickhouse_queries_total",
+		"Total ClickHouse queries executed.",
+		[]string{"operation", "result"},
+		mapToOrderedSeries(m.clickhouseQueries, func(key clickhouseKey) []string { return []string{key.Operation, key.Result} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_clickhouse_query_duration_ms_sum",
+		"Total ClickHouse query duration in milliseconds.",
+		[]string{"operation", "result"},
+		mapToOrderedSeries64(m.clickhouseQuerySumMS, func(key clickhouseKey) []string { return []string{key.Operation, key.Result} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_sync_duration_ms_sum",
+		"Total sync duration in milliseconds by mode and result.",
+		[]string{"mode", "result"},
+		mapToOrderedSeries64(m.syncDurations, func(key syncKey) []string { return []string{key.Mode, key.Result} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_sync_duration_ms_count",
+		"Count of sync durations recorded by mode and result.",
+		[]string{"mode", "result"},
+		mapToOrderedSeries(m.syncCounts, func(key syncKey) []string { return []string{key.Mode, key.Result} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_webhook_processing_delay_ms_sum",
+		"Total webhook processing delay in milliseconds by event type and resulting status.",
+		[]string{"event_type", "status"},
+		mapToOrderedSeries64(m.webhookDelayMS, func(key webhookKey) []string { return []string{key.EventType, key.Status} }),
+	)
+
+	renderCounterMap(&builder,
+		"devlens_webhook_processing_delay_ms_count",
+		"Count of webhook processing delay samples by event type and resulting status.",
+		[]string{"event_type", "status"},
+		mapToOrderedSeries(m.webhookDelayCount, func(key webhookKey) []string { return []string{key.EventType, key.Status} }),
 	)
 
 	return builder.String()

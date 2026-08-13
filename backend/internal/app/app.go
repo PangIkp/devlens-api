@@ -72,7 +72,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	var clickhouseDB *clickhouse.DB
-	if db, err := clickhouse.Open(cfg.ClickHouse); err != nil {
+	if db, err := clickhouse.Open(cfg.ClickHouse, appMetrics); err != nil {
 		logger.Warn("clickhouse unavailable during startup", "error", err)
 	} else {
 		if err := clickhouse.EnsureSchema(ctx, db); err != nil {
@@ -128,13 +128,13 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	githubConnectionRepository := githubconnection.NewRepository(postgresDB)
 	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient, appMetrics)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
-	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient)
+	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient, appMetrics)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
 	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, appMetrics)
 	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
 	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
-	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService)
+	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService, appMetrics)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)
 	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, appMetrics)
 
