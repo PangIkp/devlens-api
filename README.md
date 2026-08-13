@@ -92,12 +92,17 @@ GITHUB_WEBHOOK_SECRET=<your-webhook-secret> make load-webhook
 ```sh
 make backup-postgres
 BACKUP_FILE=/absolute/path/to/backup.dump make restore-postgres
+BACKUP_FILE=/absolute/path/to/backup.dump make verify-postgres-restore
 ```
 
 9. Build metadata:
 
 - backend binaries and Docker images embed `version`, `commit`, and `build_time`
 - CI tags Docker builds with branch and commit-sha metadata for rollback-friendly traceability
+
+10. Operations runbook:
+
+- rollback, backup configuration, and restore verification are documented in [`docs/07-operations-runbook.md`](./docs/07-operations-runbook.md)
 
 ## Organization API
 

@@ -9,7 +9,7 @@ POSTGRES_DSN ?= postgres://devlens:devlens@localhost:5432/devlens?sslmode=disabl
 ENV_FILE := $(PWD)/.env
 LOAD_ENV = if [ -f "$(ENV_FILE)" ]; then set -a; source "$(ENV_FILE)"; set +a; fi;
 
-.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook backup-postgres restore-postgres
+.PHONY: fmt vet test tidy compose-config run migrate-up migrate-status sqlc-generate load-dashboard load-webhook backup-postgres restore-postgres verify-postgres-restore
 
 fmt:
 	$(GO_RUN) gofmt -w .
@@ -56,3 +56,7 @@ backup-postgres:
 restore-postgres:
 	@if [ -z "$${BACKUP_FILE:-}" ]; then echo "BACKUP_FILE is required"; exit 2; fi
 	@bash "$(PWD)/scripts/restore-postgres.sh" "$${BACKUP_FILE}"
+
+verify-postgres-restore:
+	@if [ -z "$${BACKUP_FILE:-}" ]; then echo "BACKUP_FILE is required"; exit 2; fi
+	@bash "$(PWD)/scripts/test-restore-postgres.sh" "$${BACKUP_FILE}"
