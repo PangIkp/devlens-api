@@ -59,6 +59,9 @@ func TestHealthHandlerSuccess(t *testing.T) {
 	if body.Dependencies.Postgres.Status != "ok" {
 		t.Fatalf("expected postgres status ok, got %q", body.Dependencies.Postgres.Status)
 	}
+	if body.Dependencies.NATS.Status != "ok" {
+		t.Fatalf("expected nats status ok, got %q", body.Dependencies.NATS.Status)
+	}
 
 	if time.Since(body.Timestamp) > time.Minute {
 		t.Fatalf("expected recent timestamp, got %s", body.Timestamp)
@@ -173,6 +176,33 @@ func TestReadinessHandlerUnavailableClickHouse(t *testing.T) {
 
 	if body.Status != "degraded" {
 		t.Fatalf("expected degraded status, got %q", body.Status)
+	}
+}
+
+func TestReadinessHandlerUnavailableNATS(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{},
+		NATS:       stubHealthChecker{err: errors.New("nats unavailable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Dependencies.NATS.Status != "unavailable" {
+		t.Fatalf("expected unavailable nats status, got %q", body.Dependencies.NATS.Status)
 	}
 }
 

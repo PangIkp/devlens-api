@@ -7,19 +7,15 @@ import (
 	"time"
 )
 
-type PostgresDependencyStatus struct {
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
-}
-
-type ClickHouseDependencyStatus struct {
+type DependencyStatus struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 }
 
 type HealthDependencies struct {
-	Postgres   PostgresDependencyStatus   `json:"postgres"`
-	ClickHouse ClickHouseDependencyStatus `json:"clickhouse"`
+	Postgres   DependencyStatus `json:"postgres"`
+	ClickHouse DependencyStatus `json:"clickhouse"`
+	NATS       DependencyStatus `json:"nats"`
 }
 
 type HealthResponse struct {
@@ -28,17 +24,36 @@ type HealthResponse struct {
 	Dependencies HealthDependencies `json:"dependencies"`
 }
 
+type healthMode string
+
+const (
+	healthModeLiveness  healthMode = "liveness"
+	healthModeReadiness healthMode = "readiness"
+)
+
 type HealthHandler struct {
+	mode       healthMode
 	postgres   PostgresHealthChecker
 	clickhouse ClickHouseHealthChecker
+	nats       NATSHealthChecker
 }
 
-func NewHealthHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker) HealthHandler {
-	return HealthHandler{postgres: postgres, clickhouse: clickhouse}
+func NewHealthHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker, nats NATSHealthChecker) HealthHandler {
+	return HealthHandler{
+		mode:       healthModeLiveness,
+		postgres:   postgres,
+		clickhouse: clickhouse,
+		nats:       nats,
+	}
 }
 
-func NewReadinessHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker) HealthHandler {
-	return HealthHandler{postgres: postgres, clickhouse: clickhouse}
+func NewReadinessHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHealthChecker, nats NATSHealthChecker) HealthHandler {
+	return HealthHandler{
+		mode:       healthModeReadiness,
+		postgres:   postgres,
+		clickhouse: clickhouse,
+		nats:       nats,
+	}
 }
 
 func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,8 +61,9 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Status:    "ok",
 		Timestamp: time.Now().UTC(),
 		Dependencies: HealthDependencies{
-			Postgres:   PostgresDependencyStatus{Status: "ok"},
-			ClickHouse: ClickHouseDependencyStatus{Status: "ok"},
+			Postgres:   DependencyStatus{Status: "ok"},
+			ClickHouse: DependencyStatus{Status: "ok"},
+			NATS:       DependencyStatus{Status: "ok"},
 		},
 	}
 
@@ -56,7 +72,7 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.checkPostgres(r.Context()); err != nil {
 		statusCode = http.StatusServiceUnavailable
 		response.Status = "degraded"
-		response.Dependencies.Postgres = PostgresDependencyStatus{
+		response.Dependencies.Postgres = DependencyStatus{
 			Status:  "unavailable",
 			Message: "PostgreSQL unavailable",
 		}
@@ -65,9 +81,20 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.checkClickHouse(r.Context()); err != nil {
 		statusCode = http.StatusServiceUnavailable
 		response.Status = "degraded"
-		response.Dependencies.ClickHouse = ClickHouseDependencyStatus{
+		response.Dependencies.ClickHouse = DependencyStatus{
 			Status:  "unavailable",
 			Message: "ClickHouse unavailable",
+		}
+	}
+
+	if h.mode == healthModeReadiness {
+		if err := h.checkNATS(r.Context()); err != nil {
+			statusCode = http.StatusServiceUnavailable
+			response.Status = "degraded"
+			response.Dependencies.NATS = DependencyStatus{
+				Status:  "unavailable",
+				Message: "NATS unavailable",
+			}
 		}
 	}
 
@@ -88,6 +115,14 @@ func (h HealthHandler) checkClickHouse(ctx context.Context) error {
 	}
 
 	return h.clickhouse.Check(ctx)
+}
+
+func (h HealthHandler) checkNATS(ctx context.Context) error {
+	if isNilChecker(h.nats) {
+		return nil
+	}
+
+	return h.nats.Check(ctx)
 }
 
 func isNilChecker(checker any) bool {

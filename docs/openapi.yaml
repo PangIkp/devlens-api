@@ -1644,10 +1644,13 @@ components:
           required:
             - postgres
             - clickhouse
+            - nats
           properties:
             postgres:
               $ref: "#/components/schemas/DependencyStatus"
             clickhouse:
+              $ref: "#/components/schemas/DependencyStatus"
+            nats:
               $ref: "#/components/schemas/DependencyStatus"
 
     DependencyStatus:

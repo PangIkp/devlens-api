@@ -308,7 +308,9 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 		createFn: func(_ context.Context, params createParams) (SyncJobResponse, error) {
 			return SyncJobResponse{ID: "job-1", RepositoryID: params.RepositoryID, Status: StatusPending, Progress: 0, CreatedAt: now}, nil
 		},
-		getByIDFn:          func(context.Context, string) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusPending, Progress: 0, CreatedAt: now}, nil
+		},
 		listByRepositoryFn: func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
 			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
@@ -622,7 +624,9 @@ func TestServiceCreateMarksFailedWhenGitHubErrors(t *testing.T) {
 		createFn: func(context.Context, createParams) (SyncJobResponse, error) {
 			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", CreatedAt: now}, nil
 		},
-		getByIDFn:          func(context.Context, string) (SyncJobResponse, error) { return SyncJobResponse{}, nil },
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-1", RepositoryID: "repo-1", Status: StatusPending, CreatedAt: now}, nil
+		},
 		listByRepositoryFn: func(context.Context, ListParams) (ListResult, error) { return ListResult{}, nil },
 		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
 			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil

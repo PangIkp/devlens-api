@@ -90,6 +90,8 @@ func writeGitHubWebhookError(w http.ResponseWriter, r *http.Request, err error) 
 		switch {
 		case errors.Is(err, githubwebhook.ErrInvalidSignature):
 			WriteError(w, r, http.StatusUnauthorized, Error{Code: "INVALID_WEBHOOK_SIGNATURE", Message: "Invalid webhook signature"})
+		case errors.Is(err, githubwebhook.ErrInvalidPayload):
+			WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("body", "must be valid JSON")))
 		case errors.Is(err, githubwebhook.ErrMissingDelivery):
 			WriteError(w, r, http.StatusBadRequest, Error{Code: "MISSING_WEBHOOK_DELIVERY_ID", Message: "Missing GitHub delivery ID"})
 		case errors.Is(err, githubwebhook.ErrMissingEvent):

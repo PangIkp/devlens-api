@@ -112,12 +112,11 @@ func (s *Service) SetCompletionPublisher(publisher completionPublisher) {
 }
 
 func (s *Service) Create(ctx context.Context, repositoryID string, req CreateSyncRequest) (SyncJobResponse, error) {
-	options, err := validateCreateRequest(req)
+	job, err := s.Enqueue(ctx, repositoryID, req)
 	if err != nil {
 		return SyncJobResponse{}, err
 	}
-
-	return s.createAndRun(ctx, repositoryID, options)
+	return s.ProcessPending(ctx, job.ID)
 }
 
 func (s *Service) Enqueue(ctx context.Context, repositoryID string, req CreateSyncRequest) (SyncJobResponse, error) {
@@ -126,32 +125,6 @@ func (s *Service) Enqueue(ctx context.Context, repositoryID string, req CreateSy
 		return SyncJobResponse{}, err
 	}
 
-	_ = options
-
-	if err := s.store.EnsureRepositoryExists(ctx, repositoryID); err != nil {
-		return SyncJobResponse{}, err
-	}
-
-	active, err := s.store.HasActiveJob(ctx, repositoryID)
-	if err != nil {
-		return SyncJobResponse{}, err
-	}
-	if active {
-		return SyncJobResponse{}, ErrSyncJobConflict
-	}
-
-	job, err := s.store.Create(ctx, createParams{RepositoryID: repositoryID, IdempotencyKey: stringPtr(req.IdempotencyKey)})
-	if err != nil {
-		return SyncJobResponse{}, err
-	}
-	if err := s.persistSyncOptions(ctx, job.ID, repositoryID, options); err != nil {
-		return SyncJobResponse{}, err
-	}
-
-	return job, nil
-}
-
-func (s *Service) createAndRun(ctx context.Context, repositoryID string, options syncOptions) (SyncJobResponse, error) {
 	if err := s.store.EnsureRepositoryExists(ctx, repositoryID); err != nil {
 		return SyncJobResponse{}, err
 	}
@@ -172,7 +145,7 @@ func (s *Service) createAndRun(ctx context.Context, repositoryID string, options
 		return SyncJobResponse{}, err
 	}
 
-	return s.run(ctx, job, options)
+	return job, nil
 }
 
 func (s *Service) ProcessPending(ctx context.Context, id string) (SyncJobResponse, error) {

@@ -220,9 +220,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		clickhouseHealthChecker = clickhouseDB
 	}
 
+	natsHealthChecker := buildNATSHealthChecker(clickhouseDB != nil, metricsBusClient, insightBusClient)
+
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
+		NATS:                natsHealthChecker,
 		AppMetrics:          appMetrics,
 		AllowedOrigins:      cfg.HTTP.AllowedOrigins,
 		RateLimitRequests:   cfg.HTTP.RateLimit.Requests,
@@ -264,6 +267,50 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		tracing:         tracing,
 		appMetrics:      appMetrics,
 	}, nil
+}
+
+type natsChecker interface {
+	Check(context.Context) error
+}
+
+type compositeNATSHealthChecker struct {
+	checkers []natsChecker
+}
+
+func (c compositeNATSHealthChecker) Check(ctx context.Context) error {
+	for _, checker := range c.checkers {
+		if checker == nil {
+			continue
+		}
+		if err := checker.Check(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type staticNATSHealthChecker struct {
+	err error
+}
+
+func (c staticNATSHealthChecker) Check(context.Context) error {
+	return c.err
+}
+
+func buildNATSHealthChecker(requireNATS bool, checkers ...natsChecker) httpapi.NATSHealthChecker {
+	items := make([]natsChecker, 0, len(checkers))
+	for _, checker := range checkers {
+		if checker != nil {
+			items = append(items, checker)
+		}
+	}
+	if len(items) == 0 {
+		if requireNATS {
+			return staticNATSHealthChecker{err: fmt.Errorf("nats connection unavailable")}
+		}
+		return nil
+	}
+	return compositeNATSHealthChecker{checkers: items}
 }
 
 func (a *App) Run(ctx context.Context) error {

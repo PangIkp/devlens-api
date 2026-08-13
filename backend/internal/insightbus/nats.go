@@ -66,6 +66,13 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
+func (c *Client) Check(context.Context) error {
+	if c == nil || c.conn == nil || !c.conn.IsConnected() {
+		return fmt.Errorf("nats connection unavailable")
+	}
+	return nil
+}
+
 func (c *Client) PublishRepositorySyncCompleted(ctx context.Context, event syncjob.SyncCompletedEvent) error {
 	if c == nil {
 		return fmt.Errorf("insight bus is not configured")

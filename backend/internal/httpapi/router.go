@@ -20,9 +20,14 @@ type ClickHouseHealthChecker interface {
 	Check(context.Context) error
 }
 
+type NATSHealthChecker interface {
+	Check(context.Context) error
+}
+
 type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	ClickHouse          ClickHouseHealthChecker
+	NATS                NATSHealthChecker
 	AppMetrics          *observability.Metrics
 	AllowedOrigins      []string
 	RateLimitRequests   int
@@ -73,8 +78,8 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	})
 
 	router.Route("/api/v1", func(r chi.Router) {
-		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
-		r.Get("/readiness", NewReadinessHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
+		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse, deps.NATS).ServeHTTP)
+		r.Get("/readiness", NewReadinessHandler(deps.Postgres, deps.ClickHouse, deps.NATS).ServeHTTP)
 		if deps.Auth != nil {
 			deps.Auth.RegisterRoutes(r)
 		}

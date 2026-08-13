@@ -31,22 +31,22 @@ type installationEventHandler interface {
 }
 
 type Service struct {
-	store         store
-	webhookSecret string
-	installations installationEventHandler
-	now           func() time.Time
-	metrics       *observability.Metrics
+	store            store
+	webhookSecret    string
+	installations    installationEventHandler
+	now              func() time.Time
+	metrics          *observability.Metrics
 	retryConcurrency int
 	retryTimeout     time.Duration
 }
 
 func NewService(store store, webhookSecret string, installations installationEventHandler, metrics *observability.Metrics) *Service {
 	return &Service{
-		store:         store,
-		webhookSecret: webhookSecret,
-		installations: installations,
-		now:           time.Now,
-		metrics:       metrics,
+		store:            store,
+		webhookSecret:    webhookSecret,
+		installations:    installations,
+		now:              time.Now,
+		metrics:          metrics,
 		retryConcurrency: 1,
 		retryTimeout:     30 * time.Second,
 	}
@@ -230,12 +230,12 @@ func (s *Service) processPersistedDelivery(ctx context.Context, deliveryID strin
 
 func parsePayload(body []byte) (payloadEnvelope, error) {
 	if len(body) == 0 {
-		return payloadEnvelope{}, fmt.Errorf("decode webhook payload: empty body")
+		return payloadEnvelope{}, fmt.Errorf("%w: empty body", ErrInvalidPayload)
 	}
 
 	var payload payloadEnvelope
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return payloadEnvelope{}, fmt.Errorf("decode webhook payload: %w", err)
+		return payloadEnvelope{}, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
 	}
 	return payload, nil
 }
