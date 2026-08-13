@@ -439,6 +439,96 @@ func TestProcessPendingUsesStoredFullSyncOptions(t *testing.T) {
 	}
 }
 
+func TestProcessPendingResumesPullRequestCheckpointPage(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	var seenPullRequestPage int
+	var completedPullCheckpoint bool
+
+	svc := NewService(stubStore{
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-2", RepositoryID: "repo-1", Status: StatusPending, CreatedAt: now}, nil
+		},
+		getCheckpointFn: func(_ context.Context, jobID string, resourceType string, key string) (*checkpointRecord, error) {
+			if jobID != "job-2" {
+				t.Fatalf("unexpected job id %q", jobID)
+			}
+			switch {
+			case resourceType == "job" && key == "mode":
+				value := ModeFull
+				return &checkpointRecord{Value: &value, Status: "pending"}, nil
+			case resourceType == "pull_requests" && key == "page":
+				value := "3"
+				return &checkpointRecord{Value: &value, Status: "running"}, nil
+			default:
+				return nil, nil
+			}
+		},
+		upsertCheckpointFn: func(_ context.Context, jobID string, repositoryID string, resourceType string, key string, value *string, status string, lastProcessedAt *time.Time) error {
+			if jobID != "job-2" {
+				t.Fatalf("unexpected checkpoint job id %q", jobID)
+			}
+			if resourceType == "pull_requests" && key == "page" && status == "completed" {
+				completedPullCheckpoint = true
+				if value != nil {
+					t.Fatalf("expected completed checkpoint value nil, got %v", *value)
+				}
+			}
+			return nil
+		},
+		markRunningFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+		},
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
+		updateProgressFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		completeFn: func(_ context.Context, id string, repositoryID string, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: repositoryID, Status: StatusCompleted, Progress: 100, CreatedAt: now}, nil
+		},
+	}, stubGitHubClient{
+		getRepositoryFn: func(context.Context, string, string) (githubclient.Repository, error) {
+			return githubclient.Repository{Name: "devlens-api", FullName: "devlens-labs/devlens-api", DefaultBranch: "main"}, nil
+		},
+		listPullsFn: func(_ context.Context, _ string, _ string, options githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error) {
+			seenPullRequestPage = options.Page
+			if options.State != "all" {
+				t.Fatalf("expected full sync state=all, got %q", options.State)
+			}
+			return githubclient.Page[githubclient.PullRequest]{Items: nil, NextPage: 0}, nil
+		},
+		getPullRequestFn: func(context.Context, string, string, int) (githubclient.PullRequest, error) {
+			return githubclient.PullRequest{}, nil
+		},
+		listReviewsFn: func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error) {
+			return githubclient.Page[githubclient.Review]{}, nil
+		},
+		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
+			return githubclient.Page[githubclient.Commit]{}, nil
+		},
+	})
+	svc.now = func() time.Time { return now }
+
+	result, err := svc.ProcessPending(context.Background(), "job-2")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("unexpected result %+v", result)
+	}
+	if seenPullRequestPage != 3 {
+		t.Fatalf("expected resumed pull request page 3, got %d", seenPullRequestPage)
+	}
+	if !completedPullCheckpoint {
+		t.Fatal("expected pull request checkpoint to be marked completed")
+	}
+}
+
 func TestRetryOnlyAllowsFailedJobs(t *testing.T) {
 	t.Parallel()
 
