@@ -21,6 +21,7 @@ type ClickHouseHealthChecker interface {
 type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	ClickHouse          ClickHouseHealthChecker
+	AllowedOrigins      []string
 	Auth                *AuthHandler
 	Authenticator       middleware.Authenticator
 	Organizations       *OrganizationHandler
@@ -39,6 +40,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router := chi.NewRouter()
 
 	router.Use(chimiddleware.RequestID)
+	router.Use(middleware.CORS(deps.AllowedOrigins))
 	router.Use(middleware.Recoverer(logger))
 	router.Use(middleware.RequestLogger(logger))
 	router.Use(middleware.OptionalAuth(deps.Authenticator))

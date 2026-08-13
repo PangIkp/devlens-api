@@ -142,6 +142,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
+		AllowedOrigins:      cfg.HTTP.AllowedOrigins,
 		Auth:                authHandler,
 		Authenticator:       authService,
 		Me:                  meHandler,

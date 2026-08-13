@@ -27,6 +27,7 @@ type HTTPConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	AllowedOrigins  []string
 }
 
 type PostgresConfig struct {
@@ -178,6 +179,7 @@ func Load() (Config, error) {
 		WriteTimeout:    writeTimeout,
 		IdleTimeout:     idleTimeout,
 		ShutdownTimeout: shutdownTimeout,
+		AllowedOrigins:  splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")),
 	}
 
 	cfg := Config{
@@ -347,6 +349,21 @@ func getDuration(key string, fallback time.Duration) (time.Duration, error) {
 	}
 
 	return value, nil
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }
 
 func getInt32(key string, fallback int32) (int32, error) {

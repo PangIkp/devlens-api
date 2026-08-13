@@ -89,3 +89,22 @@ func TestLoadClickHouseTimeoutFromEnv(t *testing.T) {
 		t.Fatalf("unexpected clickhouse timeout %s", cfg.ClickHouse.Timeout)
 	}
 }
+
+func TestLoadCORSAllowedOriginsFromEnv(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000, https://app.devlens.dev")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(cfg.HTTP.AllowedOrigins) != 2 {
+		t.Fatalf("expected 2 origins, got %d", len(cfg.HTTP.AllowedOrigins))
+	}
+	if cfg.HTTP.AllowedOrigins[0] != "http://localhost:3000" {
+		t.Fatalf("unexpected first origin %q", cfg.HTTP.AllowedOrigins[0])
+	}
+	if cfg.HTTP.AllowedOrigins[1] != "https://app.devlens.dev" {
+		t.Fatalf("unexpected second origin %q", cfg.HTTP.AllowedOrigins[1])
+	}
+}

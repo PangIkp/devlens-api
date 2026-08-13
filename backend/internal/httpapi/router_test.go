@@ -255,3 +255,43 @@ func TestNotFoundReturnsJSONError(t *testing.T) {
 		t.Fatalf("expected NOT_FOUND, got %q", body.Error.Code)
 	}
 }
+
+func TestCORSPreflightAllowedOrigin(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:       stubHealthChecker{},
+		AllowedOrigins: []string{"http://localhost:5173"},
+	})
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("unexpected allow origin %q", got)
+	}
+}
+
+func TestCORSOmitsHeadersForDisallowedOrigin(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:       stubHealthChecker{},
+		AllowedOrigins: []string{"http://localhost:5173"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected empty allow origin, got %q", got)
+	}
+}
