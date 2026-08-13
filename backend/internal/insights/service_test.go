@@ -157,3 +157,130 @@ func TestReviewParsesInsightKey(t *testing.T) {
 		t.Fatalf("review insight: %v", err)
 	}
 }
+
+func TestListDeduplicatesByFingerprint(t *testing.T) {
+	t.Parallel()
+
+	detectedAt := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	service := NewService(stubStore{
+		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
+			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
+		},
+		listLargePRsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+			return []Insight{
+				{
+					InsightKey:   buildInsightKey(TypeLargePRDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12-a"),
+					InsightType:  TypeLargePRDetection,
+					Severity:     SeverityMedium,
+					DetectedAt:   detectedAt.Add(-time.Hour),
+					RepositoryID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+					Evidence:     map[string]any{"entityKey": "pr-12"},
+				},
+				{
+					InsightKey:   buildInsightKey(TypeLargePRDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12-b"),
+					InsightType:  TypeLargePRDetection,
+					Severity:     SeverityHigh,
+					DetectedAt:   detectedAt,
+					RepositoryID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+					Evidence:     map[string]any{"entityKey": "pr-12"},
+				},
+			}, nil
+		},
+	})
+
+	result, err := service.List(context.Background(), ListParams{
+		OrganizationID: "bd546e60-e65d-b1fd-3713-6f56aa60f149",
+		From:           time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		To:             time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC),
+		Page:           1,
+		PageSize:       20,
+	})
+	if err != nil {
+		t.Fatalf("list insights: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 insight after dedupe, got %d", len(result.Items))
+	}
+	if result.Items[0].Severity != SeverityHigh {
+		t.Fatalf("expected highest severity insight to remain, got %s", result.Items[0].Severity)
+	}
+	if result.Items[0].Evidence["fingerprint"] == nil {
+		t.Fatal("expected fingerprint evidence")
+	}
+}
+
+func TestListAutoReopensDismissedInsightWhenDetectedAgain(t *testing.T) {
+	t.Parallel()
+
+	dismissedAt := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	detectedAt := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	var reopened bool
+
+	service := NewService(stubStore{
+		listRepositoriesFn: func(context.Context, string, string) ([]repositoryRecord, error) {
+			return []repositoryRecord{{ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", FullName: "acme/api"}}, nil
+		},
+		listSlowReviewsFn: func(context.Context, string, time.Time, time.Time) ([]Insight, error) {
+			return []Insight{{
+				InsightKey:   buildInsightKey(TypeSlowReviewDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12"),
+				InsightType:  TypeSlowReviewDetection,
+				Severity:     SeverityHigh,
+				DetectedAt:   detectedAt,
+				RepositoryID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+				Evidence:     map[string]any{"entityKey": "pr-12"},
+			}}, nil
+		},
+		listStatusesFn: func(context.Context, string, []string) (map[string]statusRecord, error) {
+			return map[string]statusRecord{
+				buildInsightKey(TypeSlowReviewDetection, "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", "pr-12"): {
+					Status:      StatusDismissed,
+					DismissedAt: &dismissedAt,
+				},
+			}, nil
+		},
+		upsertStatusFn: func(_ context.Context, params upsertStatusParams) (StatusResult, error) {
+			reopened = true
+			if params.Status != StatusOpen {
+				t.Fatalf("expected reopen to set status open, got %s", params.Status)
+			}
+			if params.ReopenedAt == nil {
+				t.Fatal("expected reopened timestamp")
+			}
+			return StatusResult{
+				InsightKey:  params.InsightKey,
+				InsightType: params.InsightType,
+				Status:      params.Status,
+				ReopenedAt:  params.ReopenedAt,
+				UpdatedAt:   params.UpdatedAt,
+			}, nil
+		},
+	}, RuleConfig{
+		AutoReopen: AutoReopenRuleConfig{
+			OnReviewed:      true,
+			OnDismissed:     true,
+			MinimumSeverity: SeverityMedium,
+		},
+		Deduplicate: DeduplicateRuleConfig{
+			Enabled: true,
+			Version: 1,
+		},
+	})
+	service.now = func() time.Time { return detectedAt.Add(time.Hour) }
+
+	result, err := service.List(context.Background(), ListParams{
+		OrganizationID: "bd546e60-e65d-b1fd-3713-6f56aa60f149",
+		From:           time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		To:             time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC),
+		Page:           1,
+		PageSize:       20,
+	})
+	if err != nil {
+		t.Fatalf("list insights: %v", err)
+	}
+	if !reopened {
+		t.Fatal("expected insight to be reopened")
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != StatusOpen {
+		t.Fatalf("expected open insight after reopen, got %+v", result.Items)
+	}
+}

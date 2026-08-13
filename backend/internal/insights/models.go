@@ -83,3 +83,64 @@ func (e *ValidationError) Error() string {
 	}
 	return e.Message
 }
+
+type RuleConfig struct {
+	LargePR             LargePRRuleConfig
+	SlowReview          SlowReviewRuleConfig
+	Hotspot             HotspotRuleConfig
+	DeploymentFailure   DeploymentFailureRuleConfig
+	ReviewConcentration ReviewConcentrationRuleConfig
+	Bottleneck          BottleneckRuleConfig
+	AutoReopen          AutoReopenRuleConfig
+	Deduplicate         DeduplicateRuleConfig
+}
+
+type LargePRRuleConfig struct {
+	FilesThreshold              int
+	TotalChangesThreshold       int
+	HighSeverityFilesThreshold  int
+	HighSeverityChangeThreshold int
+}
+
+type SlowReviewRuleConfig struct {
+	WaitHoursThreshold             float64
+	HighSeverityWaitHoursThreshold float64
+}
+
+type HotspotRuleConfig struct {
+	ScoreThreshold             int
+	HighSeverityScoreThreshold int
+	TopFilesLimit              int
+}
+
+type DeploymentFailureRuleConfig struct {
+	MinimumDeployments      int
+	FailureRateThreshold    float64
+	HighSeverityFailureRate float64
+}
+
+type ReviewConcentrationRuleConfig struct {
+	MinimumReviewCount         int
+	ShareThreshold             float64
+	HighSeverityShareThreshold float64
+}
+
+type BottleneckRuleConfig struct {
+	MinimumMergedCount              int
+	AverageCycleHoursThreshold      float64
+	HighSeverityCycleHoursThreshold float64
+	StaleOpenCountThreshold         int
+	HighSeverityStaleOpenThreshold  int
+	StaleOpenAgeDays                int
+}
+
+type AutoReopenRuleConfig struct {
+	OnReviewed      bool
+	OnDismissed     bool
+	MinimumSeverity string
+}
+
+type DeduplicateRuleConfig struct {
+	Enabled bool
+	Version int
+}

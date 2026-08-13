@@ -111,8 +111,52 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		HotspotDeletionsWeight: cfg.Metrics.HotspotDeletionsWeight,
 	})
 	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
-	insightRepository := insights.NewRepository(postgresDB)
-	insightService := insights.NewService(insightRepository)
+	insightRules := insights.RuleConfig{
+		LargePR: insights.LargePRRuleConfig{
+			FilesThreshold:              cfg.Insights.LargePRFilesThreshold,
+			TotalChangesThreshold:       cfg.Insights.LargePRTotalChangesThreshold,
+			HighSeverityFilesThreshold:  cfg.Insights.LargePRHighSeverityFilesThreshold,
+			HighSeverityChangeThreshold: cfg.Insights.LargePRHighSeverityChangesThreshold,
+		},
+		SlowReview: insights.SlowReviewRuleConfig{
+			WaitHoursThreshold:             cfg.Insights.SlowReviewWaitHoursThreshold,
+			HighSeverityWaitHoursThreshold: cfg.Insights.SlowReviewHighSeverityWaitHours,
+		},
+		Hotspot: insights.HotspotRuleConfig{
+			ScoreThreshold:             cfg.Insights.HotspotScoreThreshold,
+			HighSeverityScoreThreshold: cfg.Insights.HotspotHighSeverityScoreThreshold,
+			TopFilesLimit:              cfg.Insights.HotspotTopFilesLimit,
+		},
+		DeploymentFailure: insights.DeploymentFailureRuleConfig{
+			MinimumDeployments:      cfg.Insights.DeploymentMinimumCount,
+			FailureRateThreshold:    cfg.Insights.DeploymentFailureRateThreshold,
+			HighSeverityFailureRate: cfg.Insights.DeploymentHighSeverityFailureRate,
+		},
+		ReviewConcentration: insights.ReviewConcentrationRuleConfig{
+			MinimumReviewCount:         cfg.Insights.ReviewConcentrationMinimumCount,
+			ShareThreshold:             cfg.Insights.ReviewConcentrationShareThreshold,
+			HighSeverityShareThreshold: cfg.Insights.ReviewConcentrationHighSeverityShare,
+		},
+		Bottleneck: insights.BottleneckRuleConfig{
+			MinimumMergedCount:              cfg.Insights.BottleneckMinimumMergedCount,
+			AverageCycleHoursThreshold:      cfg.Insights.BottleneckAverageCycleHoursThreshold,
+			HighSeverityCycleHoursThreshold: cfg.Insights.BottleneckHighSeverityCycleHours,
+			StaleOpenCountThreshold:         cfg.Insights.BottleneckStaleOpenCountThreshold,
+			HighSeverityStaleOpenThreshold:  cfg.Insights.BottleneckHighSeverityStaleOpenCount,
+			StaleOpenAgeDays:                cfg.Insights.BottleneckStaleOpenAgeDays,
+		},
+		AutoReopen: insights.AutoReopenRuleConfig{
+			OnReviewed:      cfg.Insights.AutoReopenOnReviewed,
+			OnDismissed:     cfg.Insights.AutoReopenOnDismissed,
+			MinimumSeverity: cfg.Insights.AutoReopenMinimumSeverity,
+		},
+		Deduplicate: insights.DeduplicateRuleConfig{
+			Enabled: cfg.Insights.DeduplicateEnabled,
+			Version: cfg.Insights.DeduplicateVersion,
+		},
+	}
+	insightRepository := insights.NewRepository(postgresDB, insightRules)
+	insightService := insights.NewService(insightRepository, insightRules)
 	insightHandler := httpapi.NewInsightHandler(insightService, authorizationService, auditService)
 	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,

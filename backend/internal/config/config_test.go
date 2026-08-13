@@ -28,6 +28,11 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_COMMITS", "2")
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_ADDITIONS", "0.5")
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_DELETIONS", "1.5")
+	t.Setenv("INSIGHTS_LARGE_PR_FILES_THRESHOLD", "30")
+	t.Setenv("INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD", "36")
+	t.Setenv("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD", "0.4")
+	t.Setenv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "medium")
+	t.Setenv("INSIGHTS_DEDUPLICATE_VERSION", "2")
 
 	cfg, err := Load()
 	if err != nil {
@@ -100,6 +105,21 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	if cfg.Metrics.HotspotDeletionsWeight != 1.5 {
 		t.Fatalf("unexpected hotspot deletions weight %v", cfg.Metrics.HotspotDeletionsWeight)
 	}
+	if cfg.Insights.LargePRFilesThreshold != 30 {
+		t.Fatalf("unexpected large pr files threshold %d", cfg.Insights.LargePRFilesThreshold)
+	}
+	if cfg.Insights.SlowReviewWaitHoursThreshold != 36 {
+		t.Fatalf("unexpected slow review wait hours threshold %v", cfg.Insights.SlowReviewWaitHoursThreshold)
+	}
+	if cfg.Insights.DeploymentFailureRateThreshold != 0.4 {
+		t.Fatalf("unexpected deployment failure rate threshold %v", cfg.Insights.DeploymentFailureRateThreshold)
+	}
+	if cfg.Insights.AutoReopenMinimumSeverity != "medium" {
+		t.Fatalf("unexpected auto reopen minimum severity %q", cfg.Insights.AutoReopenMinimumSeverity)
+	}
+	if cfg.Insights.DeduplicateVersion != 2 {
+		t.Fatalf("unexpected deduplicate version %d", cfg.Insights.DeduplicateVersion)
+	}
 }
 
 func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
@@ -143,6 +163,15 @@ func TestLoadRejectsAllZeroHotspotWeights(t *testing.T) {
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_COMMITS", "0")
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_ADDITIONS", "0")
 	t.Setenv("METRICS_HOTSPOT_WEIGHT_DELETIONS", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsInvalidInsightAutoReopenSeverity(t *testing.T) {
+	t.Setenv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "urgent")
 
 	_, err := Load()
 	if err == nil {

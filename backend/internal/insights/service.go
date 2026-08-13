@@ -27,12 +27,18 @@ type store interface {
 
 type Service struct {
 	repository store
+	rules      RuleConfig
 	now        func() time.Time
 }
 
-func NewService(repository store) *Service {
+func NewService(repository store, rules ...RuleConfig) *Service {
+	cfg := DefaultRuleConfig()
+	if len(rules) > 0 {
+		cfg = normalizeRuleConfig(rules[0])
+	}
 	return &Service{
 		repository: repository,
+		rules:      cfg,
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -68,6 +74,7 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 		}
 		allInsights = append(allInsights, items...)
 	}
+	allInsights = s.deduplicateInsights(allInsights)
 
 	if len(allInsights) == 0 {
 		return ListResult{Items: []Insight{}, TotalItems: 0}, nil
@@ -81,7 +88,7 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 	for i := range allInsights {
 		if status, ok := statuses[allInsights[i].InsightKey]; ok {
 			applyStatus(&allInsights[i], status)
-			if shouldReopen(status, allInsights[i].DetectedAt) {
+			if s.shouldReopen(status, allInsights[i]) {
 				result, reopenErr := s.repository.UpsertStatus(ctx, upsertStatusParams{
 					OrganizationID: params.OrganizationID,
 					RepositoryID:   optionalString(allInsights[i].RepositoryID),
@@ -207,7 +214,119 @@ func (s *Service) generateRepositoryInsights(ctx context.Context, repo repositor
 		}
 		items = append(items, result...)
 	}
+	for i := range items {
+		items[i].Evidence = s.enrichEvidence(items[i], from, to)
+	}
 	return items, nil
+}
+
+func (s *Service) deduplicateInsights(items []Insight) []Insight {
+	if !s.rules.Deduplicate.Enabled || len(items) < 2 {
+		return items
+	}
+
+	seen := make(map[string]Insight, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		fingerprint := insightFingerprint(item, s.rules.Deduplicate.Version)
+		if existing, ok := seen[fingerprint]; ok {
+			if shouldReplaceInsight(existing, item) {
+				seen[fingerprint] = item
+			}
+			continue
+		}
+		seen[fingerprint] = item
+		order = append(order, fingerprint)
+	}
+
+	deduped := make([]Insight, 0, len(order))
+	for _, fingerprint := range order {
+		deduped = append(deduped, seen[fingerprint])
+	}
+	return deduped
+}
+
+func (s *Service) shouldReopen(status statusRecord, item Insight) bool {
+	if status.Status == StatusOpen {
+		return false
+	}
+	if severityRank(item.Severity) < severityRank(s.rules.AutoReopen.MinimumSeverity) {
+		return false
+	}
+	switch status.Status {
+	case StatusReviewed:
+		if !s.rules.AutoReopen.OnReviewed {
+			return false
+		}
+	case StatusDismissed:
+		if !s.rules.AutoReopen.OnDismissed {
+			return false
+		}
+	}
+	cutoff := latestTime(status.ReviewedAt, status.DismissedAt, status.ReopenedAt)
+	if cutoff == nil {
+		return true
+	}
+	return item.DetectedAt.After(*cutoff)
+}
+
+func (s *Service) enrichEvidence(item Insight, from time.Time, to time.Time) map[string]any {
+	evidence := make(map[string]any, len(item.Evidence)+6)
+	for key, value := range item.Evidence {
+		evidence[key] = value
+	}
+	evidence["fingerprint"] = insightFingerprint(item, s.rules.Deduplicate.Version)
+	evidence["dedupeVersion"] = s.rules.Deduplicate.Version
+	evidence["windowFrom"] = from.UTC()
+	evidence["windowTo"] = to.UTC()
+	evidence["ruleConfig"] = s.ruleEvidence(item.InsightType)
+	return evidence
+}
+
+func (s *Service) ruleEvidence(insightType string) map[string]any {
+	switch insightType {
+	case TypeLargePRDetection:
+		return map[string]any{
+			"filesThreshold":              s.rules.LargePR.FilesThreshold,
+			"totalChangesThreshold":       s.rules.LargePR.TotalChangesThreshold,
+			"highSeverityFilesThreshold":  s.rules.LargePR.HighSeverityFilesThreshold,
+			"highSeverityChangeThreshold": s.rules.LargePR.HighSeverityChangeThreshold,
+		}
+	case TypeSlowReviewDetection:
+		return map[string]any{
+			"waitHoursThreshold":             s.rules.SlowReview.WaitHoursThreshold,
+			"highSeverityWaitHoursThreshold": s.rules.SlowReview.HighSeverityWaitHoursThreshold,
+		}
+	case TypeHotspotDetection:
+		return map[string]any{
+			"scoreThreshold":             s.rules.Hotspot.ScoreThreshold,
+			"highSeverityScoreThreshold": s.rules.Hotspot.HighSeverityScoreThreshold,
+			"topFilesLimit":              s.rules.Hotspot.TopFilesLimit,
+		}
+	case TypeDeploymentFailureTrend:
+		return map[string]any{
+			"minimumDeployments":      s.rules.DeploymentFailure.MinimumDeployments,
+			"failureRateThreshold":    s.rules.DeploymentFailure.FailureRateThreshold,
+			"highSeverityFailureRate": s.rules.DeploymentFailure.HighSeverityFailureRate,
+		}
+	case TypeReviewConcentration:
+		return map[string]any{
+			"minimumReviewCount":         s.rules.ReviewConcentration.MinimumReviewCount,
+			"shareThreshold":             s.rules.ReviewConcentration.ShareThreshold,
+			"highSeverityShareThreshold": s.rules.ReviewConcentration.HighSeverityShareThreshold,
+		}
+	case TypeBottleneckDetection:
+		return map[string]any{
+			"minimumMergedCount":              s.rules.Bottleneck.MinimumMergedCount,
+			"averageCycleHoursThreshold":      s.rules.Bottleneck.AverageCycleHoursThreshold,
+			"highSeverityCycleHoursThreshold": s.rules.Bottleneck.HighSeverityCycleHoursThreshold,
+			"staleOpenCountThreshold":         s.rules.Bottleneck.StaleOpenCountThreshold,
+			"highSeverityStaleOpenThreshold":  s.rules.Bottleneck.HighSeverityStaleOpenThreshold,
+			"staleOpenAgeDays":                s.rules.Bottleneck.StaleOpenAgeDays,
+		}
+	default:
+		return map[string]any{}
+	}
 }
 
 func validateListParams(params ListParams) error {
@@ -265,17 +384,6 @@ func applyStatus(item *Insight, status statusRecord) {
 	item.ReviewedAt = status.ReviewedAt
 	item.DismissedAt = status.DismissedAt
 	item.ReopenedAt = status.ReopenedAt
-}
-
-func shouldReopen(status statusRecord, detectedAt time.Time) bool {
-	if status.Status == StatusOpen {
-		return false
-	}
-	cutoff := latestTime(status.ReviewedAt, status.DismissedAt, status.ReopenedAt)
-	if cutoff == nil {
-		return true
-	}
-	return detectedAt.After(*cutoff)
 }
 
 func latestTime(values ...*time.Time) *time.Time {
@@ -371,6 +479,20 @@ func insightKeys(items []Insight) []string {
 func hashKeyPart(value string) string {
 	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(value))))
 	return hex.EncodeToString(sum[:8])
+}
+
+func insightFingerprint(item Insight, version int) string {
+	entityKey, _ := item.Evidence["entityKey"].(string)
+	return fmt.Sprintf("v%d:%s:%s:%s", version, item.InsightType, item.RepositoryID, entityKey)
+}
+
+func shouldReplaceInsight(existing Insight, candidate Insight) bool {
+	existingRank := severityRank(existing.Severity)
+	candidateRank := severityRank(candidate.Severity)
+	if candidateRank != existingRank {
+		return candidateRank > existingRank
+	}
+	return candidate.DetectedAt.After(existing.DetectedAt)
 }
 
 func optionalString(value string) *string {

@@ -20,6 +20,7 @@ type Config struct {
 	NATS       NATSConfig
 	Sync       SyncConfig
 	Metrics    MetricsConfig
+	Insights   InsightsConfig
 	Tracing    TracingConfig
 }
 
@@ -111,6 +112,35 @@ type MetricsConfig struct {
 	HotspotCommitWeight    float64
 	HotspotAdditionsWeight float64
 	HotspotDeletionsWeight float64
+}
+
+type InsightsConfig struct {
+	LargePRFilesThreshold                int
+	LargePRTotalChangesThreshold         int
+	LargePRHighSeverityFilesThreshold    int
+	LargePRHighSeverityChangesThreshold  int
+	SlowReviewWaitHoursThreshold         float64
+	SlowReviewHighSeverityWaitHours      float64
+	HotspotScoreThreshold                int
+	HotspotHighSeverityScoreThreshold    int
+	HotspotTopFilesLimit                 int
+	DeploymentMinimumCount               int
+	DeploymentFailureRateThreshold       float64
+	DeploymentHighSeverityFailureRate    float64
+	ReviewConcentrationMinimumCount      int
+	ReviewConcentrationShareThreshold    float64
+	ReviewConcentrationHighSeverityShare float64
+	BottleneckMinimumMergedCount         int
+	BottleneckAverageCycleHoursThreshold float64
+	BottleneckHighSeverityCycleHours     float64
+	BottleneckStaleOpenCountThreshold    int
+	BottleneckHighSeverityStaleOpenCount int
+	BottleneckStaleOpenAgeDays           int
+	AutoReopenOnReviewed                 bool
+	AutoReopenOnDismissed                bool
+	AutoReopenMinimumSeverity            string
+	DeduplicateEnabled                   bool
+	DeduplicateVersion                   int
 }
 
 func Load() (Config, error) {
@@ -254,6 +284,94 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	insightLargePRFilesThreshold, err := getInt("INSIGHTS_LARGE_PR_FILES_THRESHOLD", 25)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRTotalChangesThreshold, err := getInt("INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD", 800)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRHighSeverityFilesThreshold, err := getInt("INSIGHTS_LARGE_PR_HIGH_SEVERITY_FILES_THRESHOLD", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRHighSeverityChangesThreshold, err := getInt("INSIGHTS_LARGE_PR_HIGH_SEVERITY_TOTAL_CHANGES_THRESHOLD", 1600)
+	if err != nil {
+		return Config{}, err
+	}
+	insightSlowReviewWaitHoursThreshold, err := getFloat64("INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD", 24)
+	if err != nil {
+		return Config{}, err
+	}
+	insightSlowReviewHighSeverityWaitHours, err := getFloat64("INSIGHTS_SLOW_REVIEW_HIGH_SEVERITY_WAIT_HOURS", 72)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotScoreThreshold, err := getInt("INSIGHTS_HOTSPOT_SCORE_THRESHOLD", 150)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotHighSeverityScoreThreshold, err := getInt("INSIGHTS_HOTSPOT_HIGH_SEVERITY_SCORE_THRESHOLD", 300)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotTopFilesLimit, err := getInt("INSIGHTS_HOTSPOT_TOP_FILES_LIMIT", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentMinimumCount, err := getInt("INSIGHTS_DEPLOYMENT_MINIMUM_COUNT", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentFailureRateThreshold, err := getFloat64("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD", 0.30)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentHighSeverityFailureRate, err := getFloat64("INSIGHTS_DEPLOYMENT_HIGH_SEVERITY_FAILURE_RATE", 0.50)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationMinimumCount, err := getInt("INSIGHTS_REVIEW_CONCENTRATION_MINIMUM_COUNT", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationShareThreshold, err := getFloat64("INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD", 0.60)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationHighSeverityShare, err := getFloat64("INSIGHTS_REVIEW_CONCENTRATION_HIGH_SEVERITY_SHARE", 0.75)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckMinimumMergedCount, err := getInt("INSIGHTS_BOTTLENECK_MINIMUM_MERGED_COUNT", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckAverageCycleHoursThreshold, err := getFloat64("INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD", 72)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckHighSeverityCycleHours, err := getFloat64("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_CYCLE_HOURS", 120)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckStaleOpenCountThreshold, err := getInt("INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckHighSeverityStaleOpenCount, err := getInt("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_STALE_OPEN_COUNT", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckStaleOpenAgeDays, err := getInt("INSIGHTS_BOTTLENECK_STALE_OPEN_AGE_DAYS", 7)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeduplicateVersion, err := getInt("INSIGHTS_DEDUPLICATE_VERSION", 1)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -330,6 +448,34 @@ func Load() (Config, error) {
 			HotspotCommitWeight:    metricsHotspotCommitWeight,
 			HotspotAdditionsWeight: metricsHotspotAdditionsWeight,
 			HotspotDeletionsWeight: metricsHotspotDeletionsWeight,
+		},
+		Insights: InsightsConfig{
+			LargePRFilesThreshold:                insightLargePRFilesThreshold,
+			LargePRTotalChangesThreshold:         insightLargePRTotalChangesThreshold,
+			LargePRHighSeverityFilesThreshold:    insightLargePRHighSeverityFilesThreshold,
+			LargePRHighSeverityChangesThreshold:  insightLargePRHighSeverityChangesThreshold,
+			SlowReviewWaitHoursThreshold:         insightSlowReviewWaitHoursThreshold,
+			SlowReviewHighSeverityWaitHours:      insightSlowReviewHighSeverityWaitHours,
+			HotspotScoreThreshold:                insightHotspotScoreThreshold,
+			HotspotHighSeverityScoreThreshold:    insightHotspotHighSeverityScoreThreshold,
+			HotspotTopFilesLimit:                 insightHotspotTopFilesLimit,
+			DeploymentMinimumCount:               insightDeploymentMinimumCount,
+			DeploymentFailureRateThreshold:       insightDeploymentFailureRateThreshold,
+			DeploymentHighSeverityFailureRate:    insightDeploymentHighSeverityFailureRate,
+			ReviewConcentrationMinimumCount:      insightReviewConcentrationMinimumCount,
+			ReviewConcentrationShareThreshold:    insightReviewConcentrationShareThreshold,
+			ReviewConcentrationHighSeverityShare: insightReviewConcentrationHighSeverityShare,
+			BottleneckMinimumMergedCount:         insightBottleneckMinimumMergedCount,
+			BottleneckAverageCycleHoursThreshold: insightBottleneckAverageCycleHoursThreshold,
+			BottleneckHighSeverityCycleHours:     insightBottleneckHighSeverityCycleHours,
+			BottleneckStaleOpenCountThreshold:    insightBottleneckStaleOpenCountThreshold,
+			BottleneckHighSeverityStaleOpenCount: insightBottleneckHighSeverityStaleOpenCount,
+			BottleneckStaleOpenAgeDays:           insightBottleneckStaleOpenAgeDays,
+			AutoReopenOnReviewed:                 getBool("INSIGHTS_AUTO_REOPEN_ON_REVIEWED", true),
+			AutoReopenOnDismissed:                getBool("INSIGHTS_AUTO_REOPEN_ON_DISMISSED", true),
+			AutoReopenMinimumSeverity:            strings.TrimSpace(strings.ToLower(getEnv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "low"))),
+			DeduplicateEnabled:                   getBool("INSIGHTS_DEDUPLICATE_ENABLED", true),
+			DeduplicateVersion:                   insightDeduplicateVersion,
 		},
 		Tracing: TracingConfig{
 			Enabled:          getBool("OTEL_ENABLED", false),
@@ -453,6 +599,77 @@ func Load() (Config, error) {
 	}
 	if cfg.Metrics.HotspotCommitWeight == 0 && cfg.Metrics.HotspotAdditionsWeight == 0 && cfg.Metrics.HotspotDeletionsWeight == 0 {
 		return Config{}, fmt.Errorf("at least one hotspot metric weight must be greater than 0")
+	}
+	if cfg.Insights.LargePRFilesThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_FILES_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.LargePRTotalChangesThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.LargePRHighSeverityFilesThreshold < cfg.Insights.LargePRFilesThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_HIGH_SEVERITY_FILES_THRESHOLD must be greater than or equal to INSIGHTS_LARGE_PR_FILES_THRESHOLD")
+	}
+	if cfg.Insights.LargePRHighSeverityChangesThreshold < cfg.Insights.LargePRTotalChangesThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_HIGH_SEVERITY_TOTAL_CHANGES_THRESHOLD must be greater than or equal to INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD")
+	}
+	if cfg.Insights.SlowReviewWaitHoursThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.SlowReviewHighSeverityWaitHours < cfg.Insights.SlowReviewWaitHoursThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_SLOW_REVIEW_HIGH_SEVERITY_WAIT_HOURS must be greater than or equal to INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD")
+	}
+	if cfg.Insights.HotspotScoreThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_SCORE_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.HotspotHighSeverityScoreThreshold < cfg.Insights.HotspotScoreThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_HIGH_SEVERITY_SCORE_THRESHOLD must be greater than or equal to INSIGHTS_HOTSPOT_SCORE_THRESHOLD")
+	}
+	if cfg.Insights.HotspotTopFilesLimit <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_TOP_FILES_LIMIT must be greater than 0")
+	}
+	if cfg.Insights.DeploymentMinimumCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_MINIMUM_COUNT must be greater than 0")
+	}
+	if cfg.Insights.DeploymentFailureRateThreshold <= 0 || cfg.Insights.DeploymentFailureRateThreshold > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD must be greater than 0 and less than or equal to 1")
+	}
+	if cfg.Insights.DeploymentHighSeverityFailureRate < cfg.Insights.DeploymentFailureRateThreshold || cfg.Insights.DeploymentHighSeverityFailureRate > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_HIGH_SEVERITY_FAILURE_RATE must be greater than or equal to INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD and less than or equal to 1")
+	}
+	if cfg.Insights.ReviewConcentrationMinimumCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_MINIMUM_COUNT must be greater than 0")
+	}
+	if cfg.Insights.ReviewConcentrationShareThreshold <= 0 || cfg.Insights.ReviewConcentrationShareThreshold > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD must be greater than 0 and less than or equal to 1")
+	}
+	if cfg.Insights.ReviewConcentrationHighSeverityShare < cfg.Insights.ReviewConcentrationShareThreshold || cfg.Insights.ReviewConcentrationHighSeverityShare > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_HIGH_SEVERITY_SHARE must be greater than or equal to INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD and less than or equal to 1")
+	}
+	if cfg.Insights.BottleneckMinimumMergedCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_MINIMUM_MERGED_COUNT must be greater than 0")
+	}
+	if cfg.Insights.BottleneckAverageCycleHoursThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.BottleneckHighSeverityCycleHours < cfg.Insights.BottleneckAverageCycleHoursThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_CYCLE_HOURS must be greater than or equal to INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD")
+	}
+	if cfg.Insights.BottleneckStaleOpenCountThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.BottleneckHighSeverityStaleOpenCount < cfg.Insights.BottleneckStaleOpenCountThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_STALE_OPEN_COUNT must be greater than or equal to INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD")
+	}
+	if cfg.Insights.BottleneckStaleOpenAgeDays <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_STALE_OPEN_AGE_DAYS must be greater than 0")
+	}
+	switch cfg.Insights.AutoReopenMinimumSeverity {
+	case "low", "medium", "high", "critical":
+	default:
+		return Config{}, fmt.Errorf("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY must be one of low, medium, high, critical")
+	}
+	if cfg.Insights.DeduplicateVersion <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEDUPLICATE_VERSION must be greater than 0")
 	}
 
 	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
