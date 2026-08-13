@@ -44,6 +44,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	rateLimiter := middleware.NewRateLimiter(deps.RateLimitRequests, deps.RateLimitWindow)
 
 	router.Use(chimiddleware.RequestID)
+	router.Use(middleware.TraceID())
 	router.Use(middleware.CORS(deps.AllowedOrigins))
 	router.Use(middleware.RateLimit(rateLimiter))
 	router.Use(middleware.Recoverer(logger))

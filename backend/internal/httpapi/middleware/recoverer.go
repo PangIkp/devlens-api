@@ -14,7 +14,7 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					logger.Error("panic recovered", "panic", fmt.Sprint(rec), "method", r.Method, "path", r.URL.Path)
+					logger.Error("panic recovered", "panic", fmt.Sprint(rec), "trace_id", TraceIDFromContext(r.Context()), "method", r.Method, "path", r.URL.Path)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
 					_ = json.NewEncoder(w).Encode(map[string]any{

@@ -297,6 +297,26 @@ func TestCORSOmitsHeadersForDisallowedOrigin(t *testing.T) {
 	}
 }
 
+func TestRouterSetsTraceIDHeader(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("X-Trace-Id", "trace-abc")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Trace-Id"); got != "trace-abc" {
+		t.Fatalf("unexpected trace id %q", got)
+	}
+}
+
 func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	t.Parallel()
 
