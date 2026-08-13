@@ -119,7 +119,37 @@ command นี้จะ:
 - ClickHouse purge ใช้ mutation แบบ asynchronous
 - ถ้า reconnect หลัง installation ถูก purge ไปแล้ว จะถือเป็น onboarding ใหม่และต้อง initial sync ใหม่
 
-## 7. Secret And Security Baseline
+### Per-organization retention override (API-only, ยังไม่ enforce)
+
+`GET/PUT /organizations/{organizationId}/settings/retention` ให้ organization ตั้งค่า
+`analyticsRawRetentionDays` ของตัวเองแยกจาก global default ได้ ค่าถูกเก็บใน table
+`organization_retention_settings` (Postgres)
+
+**ข้อจำกัดสำคัญ**: `ANALYTICS_RAW_RETENTION_DAYS` ที่ใช้ purge ข้อมูลจริงใน ClickHouse
+เป็น **table-level TTL ตัวเดียวครอบทุก organization** (ตั้งค่าตอน boot ผ่าน
+`clickhouse.EnsureSchema`, ดู §2) ไม่ใช่ per-row/per-org ดังนั้นค่าที่ตั้งผ่าน endpoint นี้
+**ยังไม่มีผลต่อการลบข้อมูลจริง** — response จะมี `enforced: false` เสมอเพื่อสื่อสารเรื่องนี้
+การทำ per-org enforcement จริงต้อง redesign เป็น per-row TTL column + ClickHouse mutation
+ซึ่งเป็นงาน infra แยกที่ยังไม่ได้ทำ (follow-up)
+
+## 7. Organization Rule Settings
+
+`GET/PUT /organizations/{organizationId}/settings/rules` ให้ organization override
+threshold หลักของ insight rule ทั้ง 6 ประเภท (เปิด/ปิดได้ทีละ rule) และ metric rule
+2 กลุ่ม (day type, hotspot weight) แยกจาก global default ต่อ organization
+
+รายละเอียด:
+
+- เก็บเป็น JSONB override ใน table `organization_rule_settings` (Postgres), 1 row ต่อ
+  organization, field ที่ไม่ได้ override จะ fallback ไปใช้ global default (จาก
+  `INSIGHTS_*` / `METRICS_*` env var เดิม)
+- resolve เป็น per-request (ไม่ใช่ boot-time singleton เหมือนก่อนหน้านี้) — ถ้า lookup
+  ค่า override ล้มเหลว (เช่น DB error ชั่วคราว) จะ fallback ไปใช้ global default โดย
+  อัตโนมัติ ไม่ทำให้ insight/metric endpoint ล่ม
+- high-severity threshold ของแต่ละ rule (เช่น `highSeverityFilesThreshold`) ยังไม่เปิดให้
+  override ในรอบนี้ ใช้ global default เสมอ
+
+## 8. Secret And Security Baseline
 
 backend ปัจจุบันใช้หลักการดังนี้:
 
@@ -148,7 +178,7 @@ GitHub App permission baseline ปัจจุบัน:
 - connection อาจอยู่ใน state `installation_required`
 - accessible repositories อาจถูก mark เป็น `permission_missing`
 
-## 8. API Security Notes
+## 9. API Security Notes
 
 - transport ปัจจุบันใช้ bearer token
 - ยังไม่มี cookie-based browser session
@@ -161,7 +191,7 @@ backend ปัจจุบันรองรับ `ETag` / `If-None-Match` ใ�
 - `GET /api/v1/organizations/{organizationId}/github/connection`
 - `GET /api/v1/organizations/{organizationId}/github/repositories`
 
-## 9. Logging And Observability
+## 10. Logging And Observability
 
 backend ปัจจุบันมี:
 
@@ -181,7 +211,7 @@ backend ปัจจุบันมี:
 - ห้าม log token, private key, webhook secret, authorization header
 - panic recovery ต้อง redact secret-like values
 
-## 10. Backend Completion Note
+## 11. Backend Completion Note
 
 backend ถือว่า complete สำหรับ current milestone ถ้ายึด `docs/openapi.yaml` เป็น source of truth
 
