@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/PangIkp/devlens/backend/internal/app"
+	"github.com/PangIkp/devlens/backend/internal/buildinfo"
 	"github.com/PangIkp/devlens/backend/internal/config"
 )
 
@@ -16,9 +17,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger.Info("build info", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
+
 	application, err := app.New(context.Background(), cfg)
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("initialize application", "error", err)
+		logger.Error("initialize application", "error", err)
 		os.Exit(1)
 	}
 

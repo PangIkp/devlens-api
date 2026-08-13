@@ -94,6 +94,11 @@ make backup-postgres
 BACKUP_FILE=/absolute/path/to/backup.dump make restore-postgres
 ```
 
+9. Build metadata:
+
+- backend binaries and Docker images embed `version`, `commit`, and `build_time`
+- CI tags Docker builds with branch and commit-sha metadata for rollback-friendly traceability
+
 ## Organization API
 
 Current `Organization` shape:

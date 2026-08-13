@@ -4,12 +4,18 @@ WORKDIR /src
 
 RUN apk add --no-cache ca-certificates git
 
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/devlens-api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags="-s -w -X github.com/PangIkp/devlens/backend/internal/buildinfo.Version=${VERSION} -X github.com/PangIkp/devlens/backend/internal/buildinfo.Commit=${COMMIT} -X github.com/PangIkp/devlens/backend/internal/buildinfo.BuildTime=${BUILD_TIME}" \
+  -o /out/devlens-api ./cmd/api
 
 FROM alpine:3.22
 
