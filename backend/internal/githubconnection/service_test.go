@@ -200,6 +200,67 @@ func TestHandleInstallationEventIgnoresUnknownInstallationForOutOfOrderCallback(
 	}
 }
 
+func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
+	t.Parallel()
+
+	var storedStatus string
+	var repositoryStatus string
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
+		upsertFn: func(_ context.Context, _ string, _ int64, _ string, _ string, _ string, status string, _ map[string]string, _ int64, _ *time.Time) (*installationRecord, error) {
+			storedStatus = status
+			return &installationRecord{InstallationID: 42, Status: status}, nil
+		},
+		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
+		replaceFn: func(_ context.Context, _ string, items []accessibleRepositoryRecord) error {
+			if len(items) != 1 {
+				t.Fatalf("expected one repository, got %d", len(items))
+			}
+			repositoryStatus = items[0].InstallationStatus
+			return nil
+		},
+		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
+			return ListAccessibleRepositoriesResult{}, nil
+		},
+		getReposFn: func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error) { return nil, nil },
+		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
+	}, stubApp{
+		enabled: true,
+		getFn: func(context.Context, int64) (githubapp.Installation, error) {
+			return githubapp.Installation{
+				ID:           42,
+				AccountLogin: "devlens",
+				AccountType:  "User",
+				TargetType:   "all",
+				Permissions: map[string]string{
+					"metadata": "read",
+				},
+			}, nil
+		},
+		listFn: func(context.Context, int64, int, int) (githubapp.RepositoryPage, error) {
+			return githubapp.RepositoryPage{
+				Items: []githubapp.AccessibleRepository{
+					{GithubRepositoryID: 1, Name: "repo", OwnerLogin: "devlens", FullName: "devlens/repo"},
+				},
+			}, nil
+		},
+	}, nil)
+
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if storedStatus != StateInstallationRequired {
+		t.Fatalf("expected stored status %q, got %q", StateInstallationRequired, storedStatus)
+	}
+	if repositoryStatus != InstallationStatusPermissionMissing {
+		t.Fatalf("expected repository status %q, got %q", InstallationStatusPermissionMissing, repositoryStatus)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

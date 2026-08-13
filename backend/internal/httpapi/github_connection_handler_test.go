@@ -82,6 +82,9 @@ func TestGetGitHubConnectionHandler(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
+	if rec.Header().Get("ETag") == "" {
+		t.Fatal("expected ETag header")
+	}
 }
 
 func TestSelectGitHubRepositoriesHandler(t *testing.T) {
@@ -134,5 +137,49 @@ func TestSelectGitHubRepositoriesHandler(t *testing.T) {
 
 	if body.Data.State != githubconnection.StateSyncing {
 		t.Fatalf("expected syncing state, got %q", body.Data.State)
+	}
+}
+
+func TestGetGitHubConnectionHandlerReturnsNotModifiedWhenETagMatches(t *testing.T) {
+	t.Parallel()
+
+	service := stubGitHubConnectionService{
+		getFn: func(_ context.Context, organizationID string) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{
+				OrganizationID: organizationID,
+				Provider:       "github",
+				State:          githubconnection.StateConnected,
+			}, nil
+		},
+		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+			return githubconnection.StartInstallationResponse{}, nil
+		},
+		completeFn: func(context.Context, string, int64) (githubconnection.ConnectionResponse, error) {
+			return githubconnection.ConnectionResponse{}, nil
+		},
+		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
+			return githubconnection.ListAccessibleRepositoriesResult{}, nil
+		},
+		selectFn: func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
+			return githubconnection.SelectRepositoriesResponse{}, nil
+		},
+	}
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		GitHubConnections: NewGitHubConnectionHandler(service),
+	})
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/v1/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/github/connection", nil)
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, firstReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/organizations/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/github/connection", nil)
+	req.Header.Set("If-None-Match", firstRec.Header().Get("ETag"))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("expected status 304, got %d", rec.Code)
 	}
 }

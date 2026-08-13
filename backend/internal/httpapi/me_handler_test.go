@@ -53,6 +53,9 @@ func TestMeHandlerGet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if rec.Header().Get("ETag") == "" {
+		t.Fatal("expected ETag header")
+	}
 }
 
 func TestMeHandlerGetUnauthorizedWithoutPrincipal(t *testing.T) {
@@ -83,5 +86,42 @@ func TestMeHandlerGetUnauthorizedWithoutPrincipal(t *testing.T) {
 
 	if body.Error.Code != ErrorCodeUnauthorized {
 		t.Fatalf("expected %s, got %s", ErrorCodeUnauthorized, body.Error.Code)
+	}
+}
+
+func TestMeHandlerGetReturnsNotModifiedWhenETagMatches(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMeHandler(stubMeService{
+		getFn: func(_ context.Context, userID string) (userprofile.Response, error) {
+			return userprofile.Response{
+				ID:        userID,
+				Email:     "devlens@example.com",
+				CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+			}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	ctx := auth.WithPrincipal(context.Background(), auth.SessionPrincipal{
+		SessionID: "5b92a80c-ef85-4f3f-90bd-d506e9ab7a9d",
+		User: auth.User{
+			ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+		},
+	})
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/me", nil).WithContext(ctx)
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, firstReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil).WithContext(ctx)
+	req.Header.Set("If-None-Match", firstRec.Header().Get("ETag"))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("expected 304, got %d", rec.Code)
 	}
 }

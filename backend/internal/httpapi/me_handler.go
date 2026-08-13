@@ -43,7 +43,7 @@ func (h *MeHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeMeError(w, r, err)
 		return
 	}
-	WriteData(w, http.StatusOK, item)
+	WriteDataConditional(w, r, http.StatusOK, item)
 }
 
 func writeMeError(w http.ResponseWriter, r *http.Request, err error) {

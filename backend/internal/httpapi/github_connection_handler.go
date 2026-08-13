@@ -65,7 +65,7 @@ func (h *GitHubConnectionHandler) getConnection(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	WriteData(w, http.StatusOK, item)
+	WriteDataConditional(w, r, http.StatusOK, item)
 }
 
 func (h *GitHubConnectionHandler) startInstallation(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +161,7 @@ func (h *GitHubConnectionHandler) listAccessibleRepositories(w http.ResponseWrit
 		return
 	}
 
-	WritePage(w, http.StatusOK, result.Items, NewPaginationMeta(page.Page, page.PageSize, result.TotalItems))
+	WritePageConditional(w, r, http.StatusOK, result.Items, NewPaginationMeta(page.Page, page.PageSize, result.TotalItems))
 }
 
 func (h *GitHubConnectionHandler) selectRepositories(w http.ResponseWriter, r *http.Request) {

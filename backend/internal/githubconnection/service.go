@@ -33,6 +33,14 @@ type Service struct {
 	now      func() time.Time
 }
 
+var requiredGitHubPermissions = map[string]string{
+	"actions":       "read",
+	"contents":      "read",
+	"deployments":   "read",
+	"metadata":      "read",
+	"pull_requests": "read",
+}
+
 func NewService(store store, app githubapp.Client, syncJobs syncCreator) *Service {
 	return &Service{
 		store:    store,
@@ -105,10 +113,7 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 		return ConnectionResponse{}, err
 	}
 
-	status := StateConnected
-	if installation.SuspendedAt != nil {
-		status = StateInstallationRequired
-	}
+	status := deriveInstallationLifecycleStatus(installation)
 
 	targetType := installation.TargetType
 	if targetType == "all" {
@@ -121,7 +126,7 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 		return ConnectionResponse{}, err
 	}
 
-	if err := s.refreshAccessibleRepositories(ctx, organizationID, installation.ID); err != nil {
+	if err := s.refreshAccessibleRepositories(ctx, organizationID, installation.ID, installation.Permissions); err != nil {
 		return ConnectionResponse{}, err
 	}
 
@@ -223,8 +228,9 @@ func (s *Service) SelectRepositories(ctx context.Context, organizationID string,
 	return result, nil
 }
 
-func (s *Service) refreshAccessibleRepositories(ctx context.Context, organizationID string, installationID int64) error {
+func (s *Service) refreshAccessibleRepositories(ctx context.Context, organizationID string, installationID int64, permissions map[string]string) error {
 	items := make([]accessibleRepositoryRecord, 0)
+	installationStatus := deriveRepositoryInstallationStatus(permissions)
 	page := 1
 	for {
 		result, err := s.app.ListInstallationRepositories(ctx, installationID, page, 100)
@@ -239,7 +245,7 @@ func (s *Service) refreshAccessibleRepositories(ctx context.Context, organizatio
 				FullName:           item.FullName,
 				Private:            item.Private,
 				DefaultBranch:      item.DefaultBranch,
-				InstallationStatus: InstallationStatusAccessible,
+				InstallationStatus: installationStatus,
 			})
 		}
 		if result.NextPage == 0 {
@@ -287,10 +293,7 @@ func (s *Service) refreshInstallationByInstallationID(ctx context.Context, insta
 		return err
 	}
 
-	status := StateConnected
-	if installation.SuspendedAt != nil {
-		status = StateInstallationRequired
-	}
+	status := deriveInstallationLifecycleStatus(installation)
 
 	targetType := installation.TargetType
 	if targetType == "all" {
@@ -303,7 +306,7 @@ func (s *Service) refreshInstallationByInstallationID(ctx context.Context, insta
 		return err
 	}
 
-	return s.refreshAccessibleRepositories(ctx, *organizationID, installation.ID)
+	return s.refreshAccessibleRepositories(ctx, *organizationID, installation.ID, installation.Permissions)
 }
 
 func (s *Service) disconnectInstallation(ctx context.Context, installationID int64, disconnectedAt *time.Time) error {
@@ -363,4 +366,40 @@ func int64Ptr(value int64) *int64 {
 	}
 	copy := value
 	return &copy
+}
+
+func deriveInstallationLifecycleStatus(installation githubapp.Installation) string {
+	if installation.SuspendedAt != nil || !hasRequiredPermissions(installation.Permissions) {
+		return StateInstallationRequired
+	}
+	return StateConnected
+}
+
+func deriveRepositoryInstallationStatus(permissions map[string]string) string {
+	if !hasRequiredPermissions(permissions) {
+		return InstallationStatusPermissionMissing
+	}
+	return InstallationStatusAccessible
+}
+
+func hasRequiredPermissions(permissions map[string]string) bool {
+	for name, level := range requiredGitHubPermissions {
+		if !permissionSatisfies(permissions[name], level) {
+			return false
+		}
+	}
+	return true
+}
+
+func permissionSatisfies(actual string, required string) bool {
+	actual = strings.TrimSpace(strings.ToLower(actual))
+	required = strings.TrimSpace(strings.ToLower(required))
+	switch required {
+	case "read":
+		return actual == "read" || actual == "write"
+	case "write":
+		return actual == "write"
+	default:
+		return actual == required
+	}
 }
