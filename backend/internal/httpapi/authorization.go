@@ -17,6 +17,7 @@ type AuthorizationService interface {
 	AuthorizeRepository(context.Context, string, string, ...string) error
 	AuthorizePullRequest(context.Context, string, string, ...string) error
 	AuthorizeSyncJob(context.Context, string, string, ...string) error
+	AuthorizeWebhookDelivery(context.Context, string, string, ...string) error
 }
 
 type resourceExtractor func(*http.Request) (string, *Error)
@@ -114,6 +115,24 @@ func requireSyncJobRoles(authorizer AuthorizationService, roles ...string) func(
 	)
 }
 
+func requireWebhookDeliveryRoles(authorizer AuthorizationService, roles ...string) func(http.Handler) http.Handler {
+	return requireResourceRoles(
+		authorizer,
+		func(r *http.Request) (string, *Error) {
+			value := strings.TrimSpace(chi.URLParam(r, "deliveryId"))
+			if value == "" {
+				err := NewValidationError("request validation failed", ValidationIssue{Field: "deliveryId", Message: "is required"})
+				return "", &err
+			}
+			return value, nil
+		},
+		func(ctx context.Context, userID string, resourceID string, roles ...string) error {
+			return authorizer.AuthorizeWebhookDelivery(ctx, userID, resourceID, roles...)
+		},
+		roles...,
+	)
+}
+
 func requireResourceRoles(authorizer AuthorizationService, extract resourceExtractor, authorize authorizeFunc, roles ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		next = requireAuthenticated(next)
@@ -159,6 +178,8 @@ func writeAuthorizationError(w http.ResponseWriter, r *http.Request, err error) 
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Pull request not found"))
 	case errors.Is(err, authorization.ErrSyncJobNotFound):
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Sync job not found"))
+	case errors.Is(err, authorization.ErrWebhookDeliveryNotFound):
+		WriteError(w, r, http.StatusNotFound, NewNotFoundError("GitHub webhook delivery not found"))
 	default:
 		WriteError(w, r, http.StatusInternalServerError, NewInternalError())
 	}

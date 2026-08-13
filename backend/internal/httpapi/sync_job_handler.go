@@ -15,6 +15,7 @@ import (
 
 type SyncJobService interface {
 	Create(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	Enqueue(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
 	GetByID(context.Context, string) (syncjob.SyncJobResponse, error)
 	ListByRepository(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
 	Retry(context.Context, string) (syncjob.SyncJobResponse, error)
@@ -68,7 +69,7 @@ func (h *SyncJobHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 
-	item, svcErr := h.service.Create(r.Context(), repositoryID, req)
+	item, svcErr := h.service.Enqueue(r.Context(), repositoryID, req)
 	if svcErr != nil {
 		writeSyncJobError(w, r, svcErr)
 		return

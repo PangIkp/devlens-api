@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	ErrForbidden            = errors.New("forbidden")
-	ErrOrganizationNotFound = errors.New("organization not found")
-	ErrRepositoryNotFound   = errors.New("repository not found")
-	ErrPullRequestNotFound  = errors.New("pull request not found")
-	ErrSyncJobNotFound      = errors.New("sync job not found")
+	ErrForbidden               = errors.New("forbidden")
+	ErrOrganizationNotFound    = errors.New("organization not found")
+	ErrRepositoryNotFound      = errors.New("repository not found")
+	ErrPullRequestNotFound     = errors.New("pull request not found")
+	ErrSyncJobNotFound         = errors.New("sync job not found")
+	ErrWebhookDeliveryNotFound = errors.New("webhook delivery not found")
 )
 
 type Repository struct {
@@ -95,6 +96,26 @@ WHERE id = $1
 )`,
 		ErrSyncJobNotFound,
 		syncJobID,
+		userID,
+	)
+}
+
+func (r *Repository) GetWebhookDeliveryRole(ctx context.Context, userID string, deliveryID string) (string, error) {
+	return r.getRole(
+		ctx,
+		`SELECT om.role
+FROM webhook_deliveries wd
+LEFT JOIN repositories repo ON repo.id = wd.repository_id
+LEFT JOIN github_installations gi ON gi.id = wd.installation_id
+INNER JOIN organization_members om ON om.organization_id = COALESCE(repo.organization_id, gi.organization_id)
+WHERE wd.id = $1 AND om.user_id = $2`,
+		`SELECT EXISTS(
+SELECT 1
+FROM webhook_deliveries
+WHERE id = $1
+)`,
+		ErrWebhookDeliveryNotFound,
+		deliveryID,
 		userID,
 	)
 }

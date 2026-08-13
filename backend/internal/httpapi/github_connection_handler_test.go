@@ -16,7 +16,7 @@ import (
 type stubGitHubConnectionService struct {
 	getFn      func(context.Context, string) (githubconnection.ConnectionResponse, error)
 	startFn    func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
-	completeFn func(context.Context, string, int64) (githubconnection.ConnectionResponse, error)
+	completeFn func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
 	listFn     func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
 	selectFn   func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
 }
@@ -29,8 +29,8 @@ func (s stubGitHubConnectionService) StartInstallation(ctx context.Context, orga
 	return s.startFn(ctx, organizationID, req)
 }
 
-func (s stubGitHubConnectionService) CompleteInstallation(ctx context.Context, organizationID string, installationID int64) (githubconnection.ConnectionResponse, error) {
-	return s.completeFn(ctx, organizationID, installationID)
+func (s stubGitHubConnectionService) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string) (githubconnection.ConnectionResponse, error) {
+	return s.completeFn(ctx, organizationID, installationID, state)
 }
 
 func (s stubGitHubConnectionService) ListAccessibleRepositories(ctx context.Context, params githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -59,7 +59,7 @@ func TestGetGitHubConnectionHandler(t *testing.T) {
 		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -97,7 +97,7 @@ func TestSelectGitHubRepositoriesHandler(t *testing.T) {
 		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -154,7 +154,7 @@ func TestGetGitHubConnectionHandlerReturnsNotModifiedWhenETagMatches(t *testing.
 		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {

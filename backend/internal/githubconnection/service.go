@@ -2,6 +2,7 @@ package githubconnection
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type Service struct {
 	syncJobs syncCreator
 	now      func() time.Time
 }
+
+const installationStateTTL = 30 * time.Minute
 
 var requiredGitHubPermissions = map[string]string{
 	"actions":       "read",
@@ -100,12 +103,15 @@ func (s *Service) StartInstallation(ctx context.Context, organizationID string, 
 	return StartInstallationResponse{InstallURL: installURL, State: state}, nil
 }
 
-func (s *Service) CompleteInstallation(ctx context.Context, organizationID string, installationID int64) (ConnectionResponse, error) {
+func (s *Service) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string) (ConnectionResponse, error) {
 	if err := s.store.EnsureOrganizationExists(ctx, organizationID); err != nil {
 		return ConnectionResponse{}, err
 	}
 	if s.app == nil || !s.app.Enabled() {
 		return ConnectionResponse{}, ErrConnectionNotConfigured
+	}
+	if err := validateInstallationState(organizationID, state, s.now().UTC()); err != nil {
+		return ConnectionResponse{}, err
 	}
 
 	installation, err := s.app.GetInstallation(ctx, installationID)
@@ -131,6 +137,28 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 	}
 
 	return s.GetConnection(ctx, organizationID)
+}
+
+func validateInstallationState(organizationID string, state string, now time.Time) error {
+	parts := strings.Split(strings.TrimSpace(state), ":")
+	if len(parts) != 2 {
+		return ErrInvalidInstallationState
+	}
+	if parts[0] != strings.TrimSpace(organizationID) {
+		return ErrInvalidInstallationState
+	}
+	issuedAtUnix, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return ErrInvalidInstallationState
+	}
+	issuedAt := time.Unix(issuedAtUnix, 0).UTC()
+	if issuedAt.After(now.Add(5 * time.Minute)) {
+		return ErrInvalidInstallationState
+	}
+	if now.Sub(issuedAt) > installationStateTTL {
+		return fmt.Errorf("%w: expired", ErrInvalidInstallationState)
+	}
+	return nil
 }
 
 func (s *Service) ListAccessibleRepositories(ctx context.Context, params ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {

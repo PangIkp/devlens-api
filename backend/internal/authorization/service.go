@@ -13,6 +13,7 @@ type store interface {
 	GetRepositoryRole(context.Context, string, string) (string, error)
 	GetPullRequestRole(context.Context, string, string) (string, error)
 	GetSyncJobRole(context.Context, string, string) (string, error)
+	GetWebhookDeliveryRole(context.Context, string, string) (string, error)
 }
 
 type Service struct {
@@ -37,6 +38,10 @@ func (s *Service) AuthorizePullRequest(ctx context.Context, userID string, pullR
 
 func (s *Service) AuthorizeSyncJob(ctx context.Context, userID string, syncJobID string, roles ...string) error {
 	return authorize(ctx, s.repository.GetSyncJobRole, userID, syncJobID, roles...)
+}
+
+func (s *Service) AuthorizeWebhookDelivery(ctx context.Context, userID string, deliveryID string, roles ...string) error {
+	return authorize(ctx, s.repository.GetWebhookDeliveryRole, userID, deliveryID, roles...)
 }
 
 func authorize(ctx context.Context, loadRole func(context.Context, string, string) (string, error), userID string, resourceID string, roles ...string) error {

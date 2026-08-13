@@ -2,6 +2,8 @@ package githubconnection
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,7 +251,8 @@ func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
 		},
 	}, nil)
 
-	_, err := service.CompleteInstallation(context.Background(), "org-1", 42)
+	validState := "org-1:" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -258,6 +261,42 @@ func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
 	}
 	if repositoryStatus != InstallationStatusPermissionMissing {
 		t.Fatalf("expected repository status %q, got %q", InstallationStatusPermissionMissing, repositoryStatus)
+	}
+}
+
+func TestCompleteInstallationRejectsExpiredState(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
+		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			t.Fatal("upsert should not run for expired state")
+			return nil, nil
+		},
+		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
+		replaceFn:    func(context.Context, string, []accessibleRepositoryRecord) error { return nil },
+		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
+			return ListAccessibleRepositoriesResult{}, nil
+		},
+		getReposFn: func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error) { return nil, nil },
+		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
+	}, stubApp{
+		enabled: true,
+		getFn: func(context.Context, int64) (githubapp.Installation, error) {
+			t.Fatal("github app fetch should not run for expired state")
+			return githubapp.Installation{}, nil
+		},
+	}, nil)
+	service.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, "org-1:1699990000")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err != ErrInvalidInstallationState && !strings.Contains(err.Error(), ErrInvalidInstallationState.Error()) {
+		t.Fatalf("expected invalid state error, got %v", err)
 	}
 }
 

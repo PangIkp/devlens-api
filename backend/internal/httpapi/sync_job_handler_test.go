@@ -14,15 +14,20 @@ import (
 )
 
 type stubSyncJobService struct {
-	createFn func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
-	getFn    func(context.Context, string) (syncjob.SyncJobResponse, error)
-	listFn   func(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
-	retryFn  func(context.Context, string) (syncjob.SyncJobResponse, error)
-	cancelFn func(context.Context, string) (syncjob.SyncJobResponse, error)
+	createFn  func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	enqueueFn func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error)
+	getFn     func(context.Context, string) (syncjob.SyncJobResponse, error)
+	listFn    func(context.Context, syncjob.ListParams) (syncjob.ListResult, error)
+	retryFn   func(context.Context, string) (syncjob.SyncJobResponse, error)
+	cancelFn  func(context.Context, string) (syncjob.SyncJobResponse, error)
 }
 
 func (s stubSyncJobService) Create(ctx context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 	return s.createFn(ctx, repositoryID, req)
+}
+
+func (s stubSyncJobService) Enqueue(ctx context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+	return s.enqueueFn(ctx, repositoryID, req)
 }
 
 func (s stubSyncJobService) GetByID(ctx context.Context, id string) (syncjob.SyncJobResponse, error) {
@@ -46,7 +51,11 @@ func TestCreateSyncJobHandlerSuccess(t *testing.T) {
 
 	router := chi.NewRouter()
 	NewSyncJobHandler(stubSyncJobService{
-		createFn: func(_ context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			t.Fatal("create should not be called")
+			return syncjob.SyncJobResponse{}, nil
+		},
+		enqueueFn: func(_ context.Context, repositoryID string, req syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 			if repositoryID != "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d" || req.Mode != "full" {
 				t.Fatalf("unexpected request %q %+v", repositoryID, req)
 			}
@@ -89,6 +98,9 @@ func TestListSyncJobsHandlerUsesMetaShape(t *testing.T) {
 	router := chi.NewRouter()
 	NewSyncJobHandler(stubSyncJobService{
 		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		enqueueFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 			return syncjob.SyncJobResponse{}, nil
 		},
 		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) { return syncjob.SyncJobResponse{}, nil },
@@ -142,6 +154,9 @@ func TestGetSyncJobHandlerNotFound(t *testing.T) {
 		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 			return syncjob.SyncJobResponse{}, nil
 		},
+		enqueueFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
 		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) {
 			return syncjob.SyncJobResponse{}, syncjob.ErrSyncJobNotFound
 		},
@@ -170,6 +185,9 @@ func TestRetrySyncJobHandlerSuccess(t *testing.T) {
 	router := chi.NewRouter()
 	NewSyncJobHandler(stubSyncJobService{
 		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		enqueueFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 			return syncjob.SyncJobResponse{}, nil
 		},
 		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) { return syncjob.SyncJobResponse{}, nil },
@@ -207,6 +225,9 @@ func TestCancelSyncJobHandlerSuccess(t *testing.T) {
 	router := chi.NewRouter()
 	NewSyncJobHandler(stubSyncJobService{
 		createFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+			return syncjob.SyncJobResponse{}, nil
+		},
+		enqueueFn: func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
 			return syncjob.SyncJobResponse{}, nil
 		},
 		getFn: func(context.Context, string) (syncjob.SyncJobResponse, error) { return syncjob.SyncJobResponse{}, nil },

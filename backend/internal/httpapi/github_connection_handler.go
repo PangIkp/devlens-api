@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/PangIkp/devlens/backend/internal/auditlog"
 	"github.com/PangIkp/devlens/backend/internal/authorization"
@@ -16,7 +17,7 @@ import (
 type GitHubConnectionService interface {
 	GetConnection(context.Context, string) (githubconnection.ConnectionResponse, error)
 	StartInstallation(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
-	CompleteInstallation(context.Context, string, int64) (githubconnection.ConnectionResponse, error)
+	CompleteInstallation(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
 	ListAccessibleRepositories(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
 	SelectRepositories(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
 }
@@ -115,8 +116,13 @@ func (h *GitHubConnectionHandler) completeInstallation(w http.ResponseWriter, r 
 		WriteError(w, r, http.StatusBadRequest, *parseErr)
 		return
 	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if state == "" {
+		WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("state", "is required")))
+		return
+	}
 
-	item, svcErr := h.service.CompleteInstallation(r.Context(), organizationID, installationID)
+	item, svcErr := h.service.CompleteInstallation(r.Context(), organizationID, installationID, state)
 	if svcErr != nil {
 		writeGitHubConnectionError(w, r, svcErr)
 		return
@@ -210,6 +216,8 @@ func writeGitHubConnectionError(w http.ResponseWriter, r *http.Request, err erro
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Accessible GitHub repository not found"))
 	case errors.Is(err, githubconnection.ErrConnectionNotConfigured):
 		WriteError(w, r, http.StatusConflict, NewConflictError("GitHub App is not configured"))
+	case errors.Is(err, githubconnection.ErrInvalidInstallationState):
+		WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("state", "is invalid or expired")))
 	default:
 		var validationErr *githubconnection.ValidationError
 		if errors.As(err, &validationErr) {

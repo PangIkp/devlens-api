@@ -510,6 +510,11 @@ paths:
           schema:
             type: integer
             format: int64
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
         - name: setup_action
           in: query
           required: false
@@ -605,6 +610,33 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+    patch:
+      tags:
+        - Repositories
+      summary: Update repository state or metadata
+      operationId: updateRepository
+      description: Use this endpoint to rename, change default branch, deactivate, or archive a repository without deleting historical records.
+      parameters:
+        - $ref: "#/components/parameters/RepositoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRepositoryRequest"
+      responses:
+        "200":
+          description: Repository updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /pull-requests/{pullRequestId}:
     get:
@@ -653,33 +685,6 @@ paths:
           $ref: "#/components/responses/NotFound"
         "400":
           $ref: "#/components/responses/ValidationError"
-    patch:
-      tags:
-        - Repositories
-      summary: Update repository state or metadata
-      operationId: updateRepository
-      description: Use this endpoint to rename, change default branch, deactivate, or archive a repository without deleting historical records.
-      parameters:
-        - $ref: "#/components/parameters/RepositoryId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateRepositoryRequest"
-      responses:
-        "200":
-          description: Repository updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RepositoryResponse"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
 
   /repositories/{repositoryId}/sync:
     post:
@@ -915,6 +920,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GitHubWebhookResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":

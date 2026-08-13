@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -58,7 +59,7 @@ func TestGitHubAppInstallSelectSyncAndMetricsReadyIntegration(t *testing.T) {
 	connectionRepo := githubconnection.NewRepository(db)
 	connectionSvc := githubconnection.NewService(connectionRepo, app, nil)
 
-	connection, err := connectionSvc.CompleteInstallation(ctx, orgID, 7001)
+	connection, err := connectionSvc.CompleteInstallation(ctx, orgID, 7001, orgID+":"+strconv.FormatInt(time.Now().UTC().Unix(), 10))
 	if err != nil {
 		t.Fatalf("complete installation: %v", err)
 	}

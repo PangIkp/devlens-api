@@ -5,11 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/PangIkp/devlens/backend/internal/auditlog"
+	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
-	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -19,22 +18,25 @@ type GitHubWebhookService interface {
 }
 
 type GitHubWebhookHandler struct {
-	service GitHubWebhookService
-	audit   AuditLogger
+	service    GitHubWebhookService
+	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
 func NewGitHubWebhookHandler(service GitHubWebhookService, deps ...any) *GitHubWebhookHandler {
-	_, auditLogger := resolveHandlerDeps(deps)
-	return &GitHubWebhookHandler{service: service, audit: auditLogger}
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &GitHubWebhookHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *GitHubWebhookHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/github/webhook", h.handle)
 	r.Post("/webhooks/github", h.handle)
-	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireAuth())
+	if h.authorizer == nil {
 		r.Post("/github/webhook-deliveries/{deliveryId}/retry", h.retry)
-	})
+		return
+	}
+
+	r.With(requireWebhookDeliveryRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/github/webhook-deliveries/{deliveryId}/retry", h.retry)
 }
 
 func (h *GitHubWebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
@@ -59,11 +61,7 @@ func (h *GitHubWebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GitHubWebhookHandler) retry(w http.ResponseWriter, r *http.Request) {
-	deliveryID := strings.TrimSpace(chi.URLParam(r, "deliveryId"))
-	if deliveryID == "" {
-		WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("deliveryId", "is required")))
-		return
-	}
+	deliveryID := chi.URLParam(r, "deliveryId")
 
 	result, svcErr := h.service.Retry(r.Context(), deliveryID)
 	if svcErr != nil {
