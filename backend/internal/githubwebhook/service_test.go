@@ -316,6 +316,62 @@ func TestHandleUnsupportedEventStoresWithoutEnqueue(t *testing.T) {
 	}
 }
 
+func TestHandleProcessesOutOfOrderInstallationDeletedEventIdempotently(t *testing.T) {
+	t.Parallel()
+
+	var markedStatus string
+	service := NewService(stubStore{
+		findRepositoryByGithubIDFn: func(context.Context, int64) (*repositoryMatch, error) { return nil, nil },
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+			if enqueueJob {
+				t.Fatal("installation deletion should not enqueue a sync job")
+			}
+			if installationID == nil || *installationID != 99 {
+				t.Fatalf("expected installation id 99, got %v", installationID)
+			}
+			return enqueueResult{
+				deliveryID:       deliveryID,
+				receivedAt:       time.Now().UTC(),
+				processingStatus: "ignored",
+			}, nil
+		},
+		markStatusFn: func(_ context.Context, deliveryID string, status string, message *string, processedAt *time.Time) error {
+			if deliveryID != "delivery-deleted-1" {
+				t.Fatalf("unexpected delivery id %q", deliveryID)
+			}
+			if processedAt == nil || processedAt.IsZero() {
+				t.Fatal("expected processedAt to be recorded")
+			}
+			markedStatus = status
+			return nil
+		},
+	}, "top-secret", stubInstallationHandler{
+		handleFn: func(_ context.Context, eventType string, installationID int64, action string) error {
+			if eventType != "installation" || installationID != 99 || action != "deleted" {
+				t.Fatalf("unexpected out-of-order installation event args")
+			}
+			return nil
+		},
+	})
+
+	body := []byte(`{"action":"deleted","installation":{"id":99}}`)
+	result, err := service.Handle(context.Background(), HandleRequest{
+		DeliveryID: "delivery-deleted-1",
+		EventType:  "installation",
+		Signature:  sign("top-secret", body),
+		Body:       body,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Enqueued {
+		t.Fatalf("expected not enqueued %+v", result)
+	}
+	if markedStatus != "processed" {
+		t.Fatalf("expected processed status mark, got %q", markedStatus)
+	}
+}
+
 func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 	t.Parallel()
 
@@ -341,6 +397,120 @@ func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 	}
 	if !result.Enqueued || result.ProcessingStatus != "enqueued" {
 		t.Fatalf("unexpected result %+v", result)
+	}
+}
+
+func TestRetrySchedulesNextAttemptWhenReprocessingFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 13, 11, 0, 0, 0, time.UTC)
+	var gotRetryCount int
+	var gotFailedAt time.Time
+	var gotNextRetryAt time.Time
+
+	service := NewService(stubStore{
+		getStoredDeliveryFn: func(_ context.Context, deliveryID string) (*StoredDelivery, error) {
+			action := "created"
+			installationID := int64(77)
+			return &StoredDelivery{
+				DeliveryID:       deliveryID,
+				EventType:        "installation",
+				Action:           &action,
+				InstallationID:   &installationID,
+				ProcessingStatus: "failed",
+				RetryCount:       2,
+				ReceivedAt:       now.Add(-time.Minute),
+			}, nil
+		},
+		scheduleRetryFn: func(_ context.Context, deliveryID string, message string, retryCount int, failedAt time.Time, nextRetryAt time.Time) error {
+			if deliveryID != "delivery-7" {
+				t.Fatalf("unexpected delivery id %q", deliveryID)
+			}
+			if message == "" {
+				t.Fatal("expected retry message")
+			}
+			gotRetryCount = retryCount
+			gotFailedAt = failedAt
+			gotNextRetryAt = nextRetryAt
+			return nil
+		},
+	}, "top-secret", stubInstallationHandler{
+		handleFn: func(context.Context, string, int64, string) error {
+			return errors.New("temporary retry failure")
+		},
+	})
+	service.now = func() time.Time { return now }
+
+	_, err := service.Retry(context.Background(), "delivery-7")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if gotRetryCount != 3 {
+		t.Fatalf("expected retry count 3, got %d", gotRetryCount)
+	}
+	if !gotFailedAt.Equal(now) {
+		t.Fatalf("unexpected failed at %s", gotFailedAt)
+	}
+	if !gotNextRetryAt.Equal(now.Add(2 * time.Minute)) {
+		t.Fatalf("unexpected next retry at %s", gotNextRetryAt)
+	}
+}
+
+func TestRetryFailedPendingContinuesAfterSingleDeliveryFailure(t *testing.T) {
+	t.Parallel()
+
+	var processed []string
+	service := NewService(stubStore{
+		listRetryableFn: func(_ context.Context, limit int, _ time.Time) ([]string, error) {
+			if limit != 10 {
+				t.Fatalf("unexpected limit %d", limit)
+			}
+			return []string{"delivery-fail", "delivery-ok"}, nil
+		},
+		getStoredDeliveryFn: func(_ context.Context, deliveryID string) (*StoredDelivery, error) {
+			action := "created"
+			installationID := int64(55)
+			return &StoredDelivery{
+				DeliveryID:       deliveryID,
+				EventType:        "installation",
+				Action:           &action,
+				InstallationID:   &installationID,
+				ProcessingStatus: "failed",
+				ReceivedAt:       time.Now().UTC(),
+			}, nil
+		},
+		markStatusFn: func(_ context.Context, deliveryID string, status string, message *string, processedAt *time.Time) error {
+			processed = append(processed, deliveryID+":"+status)
+			return nil
+		},
+		scheduleRetryFn: func(_ context.Context, deliveryID string, _ string, _ int, _ time.Time, _ time.Time) error {
+			processed = append(processed, deliveryID+":rescheduled")
+			return nil
+		},
+	}, "top-secret", stubInstallationHandler{
+		handleFn: func(_ context.Context, _ string, installationID int64, _ string) error {
+			if installationID != 55 {
+				t.Fatalf("unexpected installation id %d", installationID)
+			}
+			if len(processed) == 0 {
+				return errors.New("first delivery fails")
+			}
+			return nil
+		},
+	})
+
+	if err := service.RetryFailedPending(context.Background(), 10); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if len(processed) < 2 {
+		t.Fatalf("expected both failure recovery and later processing, got %#v", processed)
+	}
+	if processed[0] != "delivery-fail:rescheduled" {
+		t.Fatalf("unexpected first processed entry %#v", processed)
+	}
+	if processed[len(processed)-1] != "delivery-ok:processed" {
+		t.Fatalf("expected second delivery to complete processing, got %#v", processed)
 	}
 }
 
