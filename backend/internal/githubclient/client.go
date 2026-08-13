@@ -13,6 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const defaultPerPage = 30
@@ -44,6 +49,7 @@ type Config struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	Metrics        *observability.Metrics
 }
 
 type HTTPClient struct {
@@ -54,6 +60,7 @@ type HTTPClient struct {
 	maxRetries     int
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	metrics        *observability.Metrics
 	sleep          func(context.Context, time.Duration) error
 }
 
@@ -113,6 +120,7 @@ func New(cfg Config, tokenProvider TokenProvider) (*HTTPClient, error) {
 		maxRetries:     cfg.MaxRetries,
 		initialBackoff: cfg.InitialBackoff,
 		maxBackoff:     cfg.MaxBackoff,
+		metrics:        cfg.Metrics,
 		sleep:          sleepWithContext,
 	}, nil
 }
@@ -214,13 +222,27 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 	var meta responseMeta
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		started := time.Now()
+		spanCtx, span := otel.Tracer("devlens/github").Start(ctx, fmt.Sprintf("github %s %s", method, path))
 		req, err := c.newRequest(ctx, method, path, query)
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
 			return responseMeta{}, err
 		}
+		span.SetAttributes(
+			attribute.String("http.method", method),
+			attribute.String("url.path", path),
+			attribute.Int("devlens.github.attempt", attempt+1),
+		)
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.httpClient.Do(req.WithContext(spanCtx))
 		if err != nil {
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, 0, "transport_error", time.Since(started), -1)
+			}
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
 			if attempt == c.maxRetries || !shouldRetryTransport(err) {
 				return responseMeta{}, fmt.Errorf("perform github request: %w", err)
 			}
@@ -238,13 +260,36 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			err = decodeJSONBody(resp.Body, target)
 			if err != nil {
+				if c.metrics != nil {
+					c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "decode_error", time.Since(started), meta.rateLimit.Remaining)
+				}
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
 				return responseMeta{}, err
 			}
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "ok", time.Since(started), meta.rateLimit.Remaining)
+			}
+			span.SetAttributes(
+				attribute.Int("http.status_code", resp.StatusCode),
+				attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+			)
+			span.SetStatus(codes.Ok, "")
+			span.End()
 			return meta, nil
 		}
 
 		apiErr := parseAPIError(resp)
 		if shouldRetryResponse(resp, apiErr) && attempt < c.maxRetries {
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "retry", time.Since(started), meta.rateLimit.Remaining)
+			}
+			span.SetAttributes(
+				attribute.Int("http.status_code", resp.StatusCode),
+				attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+			)
+			span.SetStatus(codes.Error, apiErr.Error())
+			span.End()
 			waitFor := retryDelay(resp, apiErr, c.backoffDuration(attempt))
 			if err := c.sleep(ctx, waitFor); err != nil {
 				return responseMeta{}, err
@@ -252,6 +297,15 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 			continue
 		}
 
+		if c.metrics != nil {
+			c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "error", time.Since(started), meta.rateLimit.Remaining)
+		}
+		span.SetAttributes(
+			attribute.Int("http.status_code", resp.StatusCode),
+			attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+		)
+		span.SetStatus(codes.Error, apiErr.Error())
+		span.End()
 		return responseMeta{}, apiErr
 	}
 

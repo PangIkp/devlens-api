@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -75,13 +76,15 @@ func (r *Repository) Create(ctx context.Context, params CreateParams) (Organizat
 		return OrganizationResponse{}, fmt.Errorf("create organization: %w", err)
 	}
 
-	if _, err := queries.CreateOrganizationMember(ctx, sqlcgen.CreateOrganizationMemberParams{
-		ID:             newUUID(),
-		OrganizationID: orgID,
-		UserID:         parseUUID(params.CreatorUserID),
-		Role:           "owner",
-	}); err != nil {
-		return OrganizationResponse{}, fmt.Errorf("create owner membership: %w", err)
+	if strings.TrimSpace(params.CreatorUserID) != "" {
+		if _, err := queries.CreateOrganizationMember(ctx, sqlcgen.CreateOrganizationMemberParams{
+			ID:             newUUID(),
+			OrganizationID: orgID,
+			UserID:         parseUUID(params.CreatorUserID),
+			Role:           "owner",
+		}); err != nil {
+			return OrganizationResponse{}, fmt.Errorf("create owner membership: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -136,7 +136,7 @@ func openIntegrationRepository(t *testing.T) (*Repository, *postgres.DB) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Postgres.ConnectTimeout)
 	defer cancel()
 
-	db, err := postgres.Open(ctx, cfg.Postgres)
+	db, err := postgres.Open(ctx, cfg.Postgres, nil)
 	if err != nil {
 		t.Skipf("skip integration test: postgres unavailable: %v", err)
 	}

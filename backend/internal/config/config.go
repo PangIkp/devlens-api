@@ -19,6 +19,7 @@ type Config struct {
 	GitHub     GitHubConfig
 	NATS       NATSConfig
 	Sync       SyncConfig
+	Tracing    TracingConfig
 }
 
 type HTTPConfig struct {
@@ -87,6 +88,14 @@ type NATSConfig struct {
 type SyncConfig struct {
 	WorkerPollInterval   time.Duration
 	WebhookRetryInterval time.Duration
+}
+
+type TracingConfig struct {
+	Enabled          bool
+	ServiceName      string
+	ExporterEndpoint string
+	Insecure         bool
+	SampleRatio      float64
 }
 
 func Load() (Config, error) {
@@ -186,6 +195,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	traceSampleRatio, err := getFloat64("OTEL_TRACE_SAMPLE_RATIO", 1)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -250,6 +263,13 @@ func Load() (Config, error) {
 			WorkerPollInterval:   syncWorkerPollInterval,
 			WebhookRetryInterval: webhookRetryInterval,
 		},
+		Tracing: TracingConfig{
+			Enabled:          getBool("OTEL_ENABLED", false),
+			ServiceName:      strings.TrimSpace(getEnv("OTEL_SERVICE_NAME", "devlens-api")),
+			ExporterEndpoint: strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")),
+			Insecure:         getBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+			SampleRatio:      traceSampleRatio,
+		},
 	}
 
 	if strings.TrimSpace(cfg.HTTP.Addr) == "" {
@@ -257,6 +277,9 @@ func Load() (Config, error) {
 	}
 	if cfg.HTTP.RateLimit.Requests < 0 {
 		return Config{}, fmt.Errorf("RATE_LIMIT_REQUESTS must be greater than or equal to 0")
+	}
+	if cfg.Tracing.SampleRatio <= 0 || cfg.Tracing.SampleRatio > 1 {
+		return Config{}, fmt.Errorf("OTEL_TRACE_SAMPLE_RATIO must be greater than 0 and less than or equal to 1")
 	}
 	if cfg.HTTP.RateLimit.Requests > 0 && cfg.HTTP.RateLimit.Window <= 0 {
 		return Config{}, fmt.Errorf("RATE_LIMIT_WINDOW must be greater than 0 when rate limiting is enabled")
@@ -430,6 +453,34 @@ func getInt64Value(key string) int64 {
 	}
 
 	return value
+}
+
+func getBool(key string, fallback bool) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+
+	return value
+}
+
+func getFloat64(key string, fallback float64) (float64, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid float for %s: %w", key, err)
+	}
+
+	return value, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

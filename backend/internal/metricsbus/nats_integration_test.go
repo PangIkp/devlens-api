@@ -19,7 +19,7 @@ func TestPublishRepositorySyncCompletedIntegration(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	client, err := Open(cfg.NATS.URL)
+	client, err := Open(cfg.NATS.URL, nil)
 	if err != nil {
 		t.Skipf("skip nats integration test: nats unavailable: %v", err)
 	}

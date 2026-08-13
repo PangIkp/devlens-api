@@ -68,7 +68,7 @@ func TestWorkerProcessesPendingJobsImmediatelyAndOnInterval(t *testing.T) {
 		},
 	})
 
-	worker := NewWorker(slog.New(slog.NewTextHandler(io.Discard, nil)), store, service, 10*time.Millisecond)
+	worker := NewWorker(slog.New(slog.NewTextHandler(io.Discard, nil)), store, service, 10*time.Millisecond, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -22,6 +23,7 @@ type ClickHouseHealthChecker interface {
 type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	ClickHouse          ClickHouseHealthChecker
+	AppMetrics          *observability.Metrics
 	AllowedOrigins      []string
 	RateLimitRequests   int
 	RateLimitWindow     time.Duration
@@ -54,7 +56,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router.Use(middleware.RequestLogger(logger))
 	router.Use(middleware.OptionalAuth(deps.Authenticator))
 
-	router.Get("/metrics", httpMetrics.Handler().ServeHTTP)
+	router.Get("/metrics", metricsHandler(httpMetrics, deps.AppMetrics).ServeHTTP)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, http.StatusNotFound, Error{
@@ -109,4 +111,17 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	})
 
 	return router
+}
+
+func metricsHandler(httpMetrics *middleware.HTTPMetrics, appMetrics *observability.Metrics) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		if httpMetrics != nil {
+			_, _ = w.Write([]byte(httpMetrics.Render()))
+		}
+		if appMetrics != nil {
+			_, _ = w.Write([]byte(appMetrics.Render()))
+		}
+	})
 }

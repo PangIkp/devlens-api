@@ -7,6 +7,7 @@ import (
 
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 )
 
 type InstallationLookup interface {
@@ -18,14 +19,16 @@ type SyncClient struct {
 	app      Client
 	lookup   InstallationLookup
 	fallback githubclient.Client
+	metrics  *observability.Metrics
 }
 
-func NewSyncClient(cfg config.GitHubConfig, app Client, lookup InstallationLookup, fallback githubclient.Client) *SyncClient {
+func NewSyncClient(cfg config.GitHubConfig, app Client, lookup InstallationLookup, fallback githubclient.Client, metrics *observability.Metrics) *SyncClient {
 	return &SyncClient{
 		cfg:      cfg,
 		app:      app,
 		lookup:   lookup,
 		fallback: fallback,
+		metrics:  metrics,
 	}
 }
 
@@ -120,6 +123,7 @@ func (c *SyncClient) clientForRepository(ctx context.Context, owner, repo string
 				MaxRetries:     c.cfg.MaxRetries,
 				InitialBackoff: c.cfg.InitialBackoff,
 				MaxBackoff:     c.cfg.MaxBackoff,
+				Metrics:        c.metrics,
 			}, githubclient.StaticTokenProvider{Value: token.Value})
 			if err != nil {
 				return nil, fmt.Errorf("create installation github client: %w", err)

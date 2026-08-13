@@ -24,6 +24,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/insights"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/metricsbus"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -43,15 +44,29 @@ type App struct {
 	webhookWorker   *githubwebhook.Worker
 	metricsBus      *metricsbus.Client
 	metricsConsumer *metricsbus.Consumer
+	tracing         *observability.Tracing
+	appMetrics      *observability.Metrics
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
 	logger := newLogger(cfg)
+	appMetrics := observability.NewMetrics()
+
+	tracing, err := observability.SetupTracing(ctx, observability.TracingConfig{
+		Enabled:          cfg.Tracing.Enabled,
+		ServiceName:      cfg.Tracing.ServiceName,
+		ExporterEndpoint: cfg.Tracing.ExporterEndpoint,
+		Insecure:         cfg.Tracing.Insecure,
+		SampleRatio:      cfg.Tracing.SampleRatio,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("setup tracing: %w", err)
+	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, cfg.Postgres.ConnectTimeout)
 	defer cancel()
 
-	postgresDB, err := postgres.Open(connectCtx, cfg.Postgres)
+	postgresDB, err := postgres.Open(connectCtx, cfg.Postgres, appMetrics)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
@@ -101,6 +116,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		MaxRetries:     cfg.GitHub.MaxRetries,
 		InitialBackoff: cfg.GitHub.InitialBackoff,
 		MaxBackoff:     cfg.GitHub.MaxBackoff,
+		Metrics:        appMetrics,
 	}, githubclient.StaticTokenProvider{Value: cfg.GitHub.Token})
 	if err != nil {
 		return nil, fmt.Errorf("initialize github client: %w", err)
@@ -110,22 +126,22 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("initialize github app client: %w", err)
 	}
 	githubConnectionRepository := githubconnection.NewRepository(postgresDB)
-	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient)
+	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient, appMetrics)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
 	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
-	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval)
+	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, appMetrics)
 	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
 	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)
-	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval)
+	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, appMetrics)
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer
 	if clickhouseDB != nil {
-		if client, err := metricsbus.Open(cfg.NATS.URL); err != nil {
+		if client, err := metricsbus.Open(cfg.NATS.URL, appMetrics); err != nil {
 			logger.Warn("metrics bus unavailable during startup", "error", err)
 		} else {
 			metricsBusClient = client
@@ -142,6 +158,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
+		AppMetrics:          appMetrics,
 		AllowedOrigins:      cfg.HTTP.AllowedOrigins,
 		RateLimitRequests:   cfg.HTTP.RateLimit.Requests,
 		RateLimitWindow:     cfg.HTTP.RateLimit.Window,
@@ -177,6 +194,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		webhookWorker:   webhookWorker,
 		metricsBus:      metricsBusClient,
 		metricsConsumer: metricsConsumer,
+		tracing:         tracing,
+		appMetrics:      appMetrics,
 	}, nil
 }
 
@@ -239,6 +258,9 @@ func (a *App) close() {
 	}
 	if a.metricsBus != nil {
 		a.metricsBus.Close()
+	}
+	if a.tracing != nil {
+		_ = a.tracing.Shutdown(context.Background())
 	}
 }
 

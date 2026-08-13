@@ -150,7 +150,7 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 				value := existing.SyncJobID.String()
 				result.syncJobID = &value
 			}
-			return result, tx.Commit(ctx)
+			return result, nil
 		}
 		return enqueueResult{}, fmt.Errorf("create webhook delivery: %w", err)
 	}
@@ -195,11 +195,11 @@ func (r *Repository) getWebhookDeliveryLifecycle(ctx context.Context, tx pgx.Tx,
 func (r *Repository) MarkDeliveryStatus(ctx context.Context, deliveryID string, status string, message *string, processedAt *time.Time) error {
 	commandTag, err := r.db.Pool().Exec(ctx, `
 		UPDATE webhook_deliveries
-		SET processing_status = $2,
-		    error_message = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END,
-		    next_retry_at = CASE WHEN $2 = 'failed' THEN next_retry_at ELSE NULL END,
+		SET processing_status = $2::text,
+		    error_message = CASE WHEN $2::text = 'failed' THEN $3 ELSE NULL END,
+		    next_retry_at = CASE WHEN $2::text = 'failed' THEN next_retry_at ELSE NULL END,
 		    processed_at = $4,
-		    processed = CASE WHEN $2 IN ('processed', 'ignored') THEN TRUE ELSE processed END,
+		    processed = CASE WHEN $2::text IN ('processed', 'ignored') THEN TRUE ELSE processed END,
 		    updated_at = NOW()
 		WHERE github_delivery_id = $1`,
 		deliveryID,

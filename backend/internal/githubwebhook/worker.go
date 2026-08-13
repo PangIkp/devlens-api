@@ -4,6 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 type retryProcessor interface {
@@ -14,13 +19,15 @@ type Worker struct {
 	logger   *slog.Logger
 	service  retryProcessor
 	interval time.Duration
+	metrics  *observability.Metrics
 }
 
-func NewWorker(logger *slog.Logger, service retryProcessor, interval time.Duration) *Worker {
+func NewWorker(logger *slog.Logger, service retryProcessor, interval time.Duration, metrics *observability.Metrics) *Worker {
 	return &Worker{
 		logger:   logger,
 		service:  service,
 		interval: interval,
+		metrics:  metrics,
 	}
 }
 
@@ -29,9 +36,25 @@ func (w *Worker) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		if err := w.service.RetryFailedPending(ctx, 10); err != nil {
+		started := time.Now()
+		iterationCtx, span := otel.Tracer("devlens/webhook-worker").Start(ctx, "githubwebhook.retry_failed_pending")
+		err := w.service.RetryFailedPending(iterationCtx, 10)
+		if err != nil {
 			w.logger.Error("webhook retry worker iteration failed", "error", err)
+			if w.metrics != nil {
+				w.metrics.RecordWorkerIteration("githubwebhook", "error")
+				w.metrics.RecordWorkerJob("githubwebhook", "error", time.Since(started))
+			}
+			span.SetStatus(codes.Error, err.Error())
+		} else {
+			if w.metrics != nil {
+				w.metrics.RecordWorkerIteration("githubwebhook", "ok")
+				w.metrics.RecordWorkerJob("githubwebhook", "ok", time.Since(started))
+			}
+			span.SetStatus(codes.Ok, "")
 		}
+		span.SetAttributes(attribute.Int64("devlens.webhook.retry_iteration_ms", time.Since(started).Milliseconds()))
+		span.End()
 
 		select {
 		case <-ctx.Done():

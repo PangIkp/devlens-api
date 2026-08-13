@@ -114,6 +114,7 @@ docker compose up -d prometheus grafana
 - Grafana: `http://localhost:3000`
 - default Grafana credentials come from `.env` via `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`
 - Prometheus loads baseline alert rules from `deploy/observability/prometheus/rules/devlens-alerts.yml`
+- OTLP tracing can be enabled with `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT=<host:port>`
 
 ## Organization API
 

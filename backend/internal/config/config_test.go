@@ -125,3 +125,32 @@ func TestLoadRateLimitFromEnv(t *testing.T) {
 		t.Fatalf("unexpected rate limit window %s", cfg.HTTP.RateLimit.Window)
 	}
 }
+
+func TestLoadTracingConfigFromEnv(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_SERVICE_NAME", "devlens-api-local")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "false")
+	t.Setenv("OTEL_TRACE_SAMPLE_RATIO", "0.5")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if !cfg.Tracing.Enabled {
+		t.Fatal("expected tracing to be enabled")
+	}
+	if cfg.Tracing.ServiceName != "devlens-api-local" {
+		t.Fatalf("unexpected tracing service name %q", cfg.Tracing.ServiceName)
+	}
+	if cfg.Tracing.ExporterEndpoint != "localhost:4318" {
+		t.Fatalf("unexpected tracing endpoint %q", cfg.Tracing.ExporterEndpoint)
+	}
+	if cfg.Tracing.Insecure {
+		t.Fatal("expected tracing insecure flag to be false")
+	}
+	if cfg.Tracing.SampleRatio != 0.5 {
+		t.Fatalf("unexpected tracing sample ratio %v", cfg.Tracing.SampleRatio)
+	}
+}

@@ -9,8 +9,12 @@ import (
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/metrics"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const (
@@ -23,15 +27,16 @@ const (
 )
 
 type Client struct {
-	conn *nats.Conn
-	js   nats.JetStreamContext
+	conn    *nats.Conn
+	js      nats.JetStreamContext
+	metrics *observability.Metrics
 }
 
 type fallbackCalculator interface {
 	CalculateRepositoryMetrics(context.Context, string, metrics.CalculationRequest) error
 }
 
-func Open(url string) (*Client, error) {
+func Open(url string, metrics *observability.Metrics) (*Client, error) {
 	conn, err := nats.Connect(url, nats.Name("devlens-metrics"))
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
@@ -43,7 +48,7 @@ func Open(url string) (*Client, error) {
 		return nil, fmt.Errorf("create jetstream context: %w", err)
 	}
 
-	client := &Client{conn: conn, js: js}
+	client := &Client{conn: conn, js: js, metrics: metrics}
 	if err := client.ensureStream(); err != nil {
 		conn.Close()
 		return nil, err
@@ -64,9 +69,16 @@ func (c *Client) PublishRepositorySyncCompleted(ctx context.Context, event syncj
 	if c == nil {
 		return fmt.Errorf("metrics bus is not configured")
 	}
+	started := time.Now()
+	ctx, span := otel.Tracer("devlens/nats").Start(ctx, "nats.publish.repository_sync_completed")
+	defer span.End()
 
 	payload, err := json.Marshal(event)
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.RecordQueuePublish("metricsbus", subjectName, "error")
+		}
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("marshal metrics event: %w", err)
 	}
 
@@ -76,8 +88,22 @@ func (c *Client) PublishRepositorySyncCompleted(ctx context.Context, event syncj
 		Header:  nats.Header{"Nats-Msg-Id": []string{event.SyncJobID}},
 	})
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.RecordQueuePublish("metricsbus", subjectName, "error")
+		}
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("publish metrics event: %w", err)
 	}
+	if c.metrics != nil {
+		c.metrics.RecordQueuePublish("metricsbus", subjectName, "ok")
+	}
+	span.SetAttributes(
+		attribute.String("messaging.system", "nats"),
+		attribute.String("messaging.destination.name", subjectName),
+		attribute.String("devlens.sync_job_id", event.SyncJobID),
+		attribute.Int64("devlens.nats.publish_ms", time.Since(started).Milliseconds()),
+	)
+	span.SetStatus(codes.Ok, "")
 
 	return nil
 }
@@ -134,6 +160,7 @@ type Consumer struct {
 	logger     *slog.Logger
 	js         nats.JetStreamContext
 	sub        *nats.Subscription
+	metrics    *observability.Metrics
 	calculator interface {
 		CalculateRepositoryMetrics(context.Context, string, metrics.CalculationRequest) error
 	}
@@ -149,6 +176,7 @@ func NewConsumer(logger *slog.Logger, client *Client, calculator interface {
 	return &Consumer{
 		logger:     logger,
 		js:         client.js,
+		metrics:    client.metrics,
 		calculator: calculator,
 	}
 }
@@ -174,9 +202,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) handleMessage(msg *nats.Msg) {
+	started := time.Now()
+	ctx, span := otel.Tracer("devlens/nats").Start(context.Background(), "nats.consume.repository_sync_completed")
+	defer span.End()
+
 	var event syncjob.SyncCompletedEvent
 	if err := json.Unmarshal(msg.Data, &event); err != nil {
 		c.logger.Error("decode metrics event failed", "error", err)
+		if c.metrics != nil {
+			c.metrics.RecordQueueConsume("metricsbus", subjectName, "decode_error", time.Since(started))
+		}
+		span.SetStatus(codes.Error, err.Error())
 		_ = msg.Ack()
 		return
 	}
@@ -187,14 +223,29 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 	}
 
 	from, _ := time.Parse("2006-01-02", historyStart)
-	if err := c.calculator.CalculateRepositoryMetrics(context.Background(), event.RepositoryID, metrics.CalculationRequest{
+	if err := c.calculator.CalculateRepositoryMetrics(ctx, event.RepositoryID, metrics.CalculationRequest{
 		From: from.UTC(),
 		To:   to,
 	}); err != nil {
 		c.logger.Error("calculate metrics failed", "repository_id", event.RepositoryID, "sync_job_id", event.SyncJobID, "error", err)
+		if c.metrics != nil {
+			c.metrics.RecordQueueConsume("metricsbus", subjectName, "error", time.Since(started))
+		}
+		span.SetStatus(codes.Error, err.Error())
 		_ = msg.Nak()
 		return
 	}
+	if c.metrics != nil {
+		c.metrics.RecordQueueConsume("metricsbus", subjectName, "ok", time.Since(started))
+	}
+	span.SetAttributes(
+		attribute.String("messaging.system", "nats"),
+		attribute.String("messaging.destination.name", subjectName),
+		attribute.String("devlens.repository_id", event.RepositoryID),
+		attribute.String("devlens.sync_job_id", event.SyncJobID),
+		attribute.Int64("devlens.nats.consume_ms", time.Since(started).Milliseconds()),
+	)
+	span.SetStatus(codes.Ok, "")
 
 	_ = msg.Ack()
 }
