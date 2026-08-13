@@ -62,7 +62,7 @@ func main() {
 	}
 	defer ch.Close()
 
-	if err := clickhouse.EnsureSchema(ctx, ch); err != nil {
+	if err := clickhouse.EnsureSchema(ctx, ch, cfg.DataLifecycle); err != nil {
 		fmt.Fprintf(os.Stderr, "ensure clickhouse schema: %v\n", err)
 		os.Exit(1)
 	}

@@ -17,8 +17,9 @@ import (
 )
 
 type Repository struct {
-	db      *postgres.DB
-	queries *sqlcgen.Queries
+	db                   *postgres.DB
+	queries              *sqlcgen.Queries
+	payloadRetentionDays int
 }
 
 type repositoryMatch struct {
@@ -33,8 +34,12 @@ type enqueueResult struct {
 	processingStatus string
 }
 
-func NewRepository(db *postgres.DB) *Repository {
-	return &Repository{db: db, queries: db.Queries()}
+func NewRepository(db *postgres.DB, retentionDays ...int) *Repository {
+	days := 30
+	if len(retentionDays) > 0 && retentionDays[0] > 0 {
+		days = retentionDays[0]
+	}
+	return &Repository{db: db, queries: db.Queries(), payloadRetentionDays: days}
 }
 
 func (r *Repository) FindRepositoryByGithubID(ctx context.Context, githubID int64) (*repositoryMatch, error) {
@@ -66,7 +71,7 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 	if err != nil {
 		return enqueueResult{}, err
 	}
-	retainUntil := now.Add(30 * 24 * time.Hour)
+	retainUntil := now.Add(time.Duration(r.payloadRetentionDays) * 24 * time.Hour)
 	installationUUID, err := r.findInstallationUUID(ctx, tx, installationID)
 	if err != nil {
 		return enqueueResult{}, err
@@ -365,10 +370,20 @@ func (r *Repository) projectWorkflowRun(ctx context.Context, tx pgx.Tx, reposito
 		)
 		ON CONFLICT (github_workflow_run_id) DO UPDATE SET
 			workflow_name = EXCLUDED.workflow_name,
-			status = EXCLUDED.status,
-			conclusion = EXCLUDED.conclusion,
-			started_at = EXCLUDED.started_at,
-			completed_at = EXCLUDED.completed_at,
+			status = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.status
+				ELSE EXCLUDED.status
+			END,
+			conclusion = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.conclusion
+				ELSE EXCLUDED.conclusion
+			END,
+			started_at = COALESCE(LEAST(workflow_events.started_at, EXCLUDED.started_at), workflow_events.started_at, EXCLUDED.started_at),
+			completed_at = COALESCE(GREATEST(workflow_events.completed_at, EXCLUDED.completed_at), workflow_events.completed_at, EXCLUDED.completed_at),
 			updated_at = NOW()`,
 		newUUID(),
 		repositoryID,
@@ -417,8 +432,11 @@ func (r *Repository) projectDeployment(ctx context.Context, tx pgx.Tx, repositor
 		)
 		ON CONFLICT (github_deployment_id) DO UPDATE SET
 			environment = EXCLUDED.environment,
-			status = EXCLUDED.status,
-			deployed_at = EXCLUDED.deployed_at`,
+			status = CASE
+				WHEN EXCLUDED.deployed_at >= deployments.deployed_at THEN EXCLUDED.status
+				ELSE deployments.status
+			END,
+			deployed_at = GREATEST(deployments.deployed_at, EXCLUDED.deployed_at)`,
 		newUUID(),
 		repositoryID,
 		payload.Deployment.ID,

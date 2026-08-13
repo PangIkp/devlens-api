@@ -12,6 +12,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/postgres/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository struct {
@@ -407,18 +408,20 @@ func (r *Repository) ReplacePullRequestFiles(ctx context.Context, repositoryID s
 		return fmt.Errorf("clear file changes: %w", err)
 	}
 
-	for _, file := range files {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO file_changes (id, pull_request_id, file_path, additions, deletions, commit_count)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			newUUID(),
-			pullRequestID,
-			file.FilePath,
-			file.Additions,
-			file.Deletions,
-			file.CommitCount,
-		); err != nil {
-			return fmt.Errorf("insert file change %q: %w", file.FilePath, err)
+	if len(files) > 0 {
+		rows := make([][]any, 0, len(files))
+		for _, file := range files {
+			rows = append(rows, []any{
+				newUUID(),
+				pullRequestID,
+				file.FilePath,
+				file.Additions,
+				file.Deletions,
+				file.CommitCount,
+			})
+		}
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"file_changes"}, []string{"id", "pull_request_id", "file_path", "additions", "deletions", "commit_count"}, pgx.CopyFromRows(rows)); err != nil {
+			return fmt.Errorf("copy file changes: %w", err)
 		}
 	}
 
@@ -428,8 +431,14 @@ func (r *Repository) ReplacePullRequestFiles(ctx context.Context, repositoryID s
 	return nil
 }
 
-func (r *Repository) UpsertCommitEvent(ctx context.Context, repositoryID string, commit commitEventInput) error {
-	_, err := r.db.Pool().Exec(ctx, `
+func (r *Repository) UpsertCommitEvents(ctx context.Context, repositoryID string, commits []commitEventInput) error {
+	if len(commits) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, commit := range commits {
+		batch.Queue(`
 		INSERT INTO commit_events (
 			id, repository_id, github_commit_sha, author, author_email, message, authored_at, created_at, updated_at
 		) VALUES (
@@ -441,22 +450,26 @@ func (r *Repository) UpsertCommitEvent(ctx context.Context, repositoryID string,
 			message = EXCLUDED.message,
 			authored_at = EXCLUDED.authored_at,
 			updated_at = NOW()`,
-		newUUID(),
-		parseUUID(repositoryID),
-		commit.GitHubCommitSHA,
-		commit.Author,
-		nullableString(commit.AuthorEmail),
-		commit.Message,
-		toNullableTimestamp(&commit.AuthoredAt),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert commit event: %w", err)
+			newUUID(),
+			repoUUID,
+			commit.GitHubCommitSHA,
+			commit.Author,
+			nullableString(commit.AuthorEmail),
+			commit.Message,
+			toNullableTimestamp(&commit.AuthoredAt),
+		)
 	}
-	return nil
+	return execBatch(ctx, r.db.Pool(), batch, "upsert commit events")
 }
 
-func (r *Repository) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {
-	_, err := r.db.Pool().Exec(ctx, `
+func (r *Repository) UpsertWorkflowRuns(ctx context.Context, repositoryID string, runs []workflowRunInput) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, run := range runs {
+		batch.Queue(`
 		INSERT INTO workflow_events (
 			id, repository_id, github_workflow_run_id, workflow_name, status, conclusion, started_at, completed_at, created_at, updated_at
 		) VALUES (
@@ -464,28 +477,42 @@ func (r *Repository) UpsertWorkflowRun(ctx context.Context, repositoryID string,
 		)
 		ON CONFLICT (github_workflow_run_id) DO UPDATE SET
 			workflow_name = EXCLUDED.workflow_name,
-			status = EXCLUDED.status,
-			conclusion = EXCLUDED.conclusion,
-			started_at = EXCLUDED.started_at,
-			completed_at = EXCLUDED.completed_at,
+			status = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.status
+				ELSE EXCLUDED.status
+			END,
+			conclusion = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.conclusion
+				ELSE EXCLUDED.conclusion
+			END,
+			started_at = COALESCE(LEAST(workflow_events.started_at, EXCLUDED.started_at), workflow_events.started_at, EXCLUDED.started_at),
+			completed_at = COALESCE(GREATEST(workflow_events.completed_at, EXCLUDED.completed_at), workflow_events.completed_at, EXCLUDED.completed_at),
 			updated_at = NOW()`,
-		newUUID(),
-		parseUUID(repositoryID),
-		run.GitHubWorkflowRunID,
-		run.WorkflowName,
-		run.Status,
-		nullableString(run.Conclusion),
-		toNullableTimestamp(run.StartedAt),
-		toNullableTimestamp(run.CompletedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert workflow run: %w", err)
+			newUUID(),
+			repoUUID,
+			run.GitHubWorkflowRunID,
+			run.WorkflowName,
+			run.Status,
+			nullableString(run.Conclusion),
+			toNullableTimestamp(run.StartedAt),
+			toNullableTimestamp(run.CompletedAt),
+		)
 	}
-	return nil
+	return execBatch(ctx, r.db.Pool(), batch, "upsert workflow runs")
 }
 
-func (r *Repository) UpsertDeployment(ctx context.Context, repositoryID string, deployment deploymentInput) error {
-	_, err := r.db.Pool().Exec(ctx, `
+func (r *Repository) UpsertDeployments(ctx context.Context, repositoryID string, deployments []deploymentInput) error {
+	if len(deployments) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, deployment := range deployments {
+		batch.Queue(`
 		INSERT INTO deployments (
 			id, repository_id, github_deployment_id, environment, status, deployed_at
 		) VALUES (
@@ -493,17 +520,32 @@ func (r *Repository) UpsertDeployment(ctx context.Context, repositoryID string, 
 		)
 		ON CONFLICT (github_deployment_id) DO UPDATE SET
 			environment = EXCLUDED.environment,
-			status = EXCLUDED.status,
-			deployed_at = EXCLUDED.deployed_at`,
-		newUUID(),
-		parseUUID(repositoryID),
-		deployment.GitHubDeploymentID,
-		deployment.Environment,
-		deployment.Status,
-		toNullableTimestamp(&deployment.DeployedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert deployment: %w", err)
+			status = CASE
+				WHEN EXCLUDED.deployed_at >= deployments.deployed_at THEN EXCLUDED.status
+				ELSE deployments.status
+			END,
+			deployed_at = GREATEST(deployments.deployed_at, EXCLUDED.deployed_at)`,
+			newUUID(),
+			repoUUID,
+			deployment.GitHubDeploymentID,
+			deployment.Environment,
+			deployment.Status,
+			toNullableTimestamp(&deployment.DeployedAt),
+		)
+	}
+	return execBatch(ctx, r.db.Pool(), batch, "upsert deployments")
+}
+
+func execBatch(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch, label string) error {
+	results := pool.SendBatch(ctx, batch)
+	for i := 0; i < batch.Len(); i++ {
+		if _, err := results.Exec(); err != nil {
+			_ = results.Close()
+			return fmt.Errorf("%s: %w", label, err)
+		}
+	}
+	if err := results.Close(); err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
 }

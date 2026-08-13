@@ -144,7 +144,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:     formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO pull_requests", prPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO pull_requests", prPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse pull_requests: %w", err)
 	}
 
@@ -171,7 +171,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:          formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO pull_request_reviews", reviewPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO pull_request_reviews", reviewPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse pull_request_reviews: %w", err)
 	}
 
@@ -195,7 +195,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:     formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO deployments", deploymentPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO deployments", deploymentPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse deployments: %w", err)
 	}
 
@@ -217,7 +217,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:        formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO commit_events", commitPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO commit_events", commitPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse commit_events: %w", err)
 	}
 
@@ -240,7 +240,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:          formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO workflow_events", workflowPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO workflow_events", workflowPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse workflow_events: %w", err)
 	}
 
@@ -265,7 +265,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:      formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO file_changes", filePayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO file_changes", filePayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse file_changes: %w", err)
 	}
 

@@ -33,6 +33,12 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD", "0.4")
 	t.Setenv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "medium")
 	t.Setenv("INSIGHTS_DEDUPLICATE_VERSION", "2")
+	t.Setenv("ANALYTICS_RAW_RETENTION_DAYS", "120")
+	t.Setenv("ANALYTICS_AGGREGATE_RETENTION_DAYS", "365")
+	t.Setenv("WEBHOOK_PAYLOAD_RETENTION_DAYS", "14")
+	t.Setenv("SOFT_DELETED_ORGANIZATION_RETENTION_DAYS", "21")
+	t.Setenv("DISCONNECTED_INSTALLATION_RETENTION_DAYS", "28")
+	t.Setenv("CLICKHOUSE_INSERT_BATCH_SIZE", "250")
 
 	cfg, err := Load()
 	if err != nil {
@@ -120,6 +126,15 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	if cfg.Insights.DeduplicateVersion != 2 {
 		t.Fatalf("unexpected deduplicate version %d", cfg.Insights.DeduplicateVersion)
 	}
+	if cfg.DataLifecycle.AnalyticsRawRetentionDays != 120 {
+		t.Fatalf("unexpected analytics raw retention days %d", cfg.DataLifecycle.AnalyticsRawRetentionDays)
+	}
+	if cfg.DataLifecycle.WebhookPayloadRetentionDays != 14 {
+		t.Fatalf("unexpected webhook payload retention days %d", cfg.DataLifecycle.WebhookPayloadRetentionDays)
+	}
+	if cfg.DataLifecycle.ClickHouseInsertBatchSize != 250 {
+		t.Fatalf("unexpected clickhouse insert batch size %d", cfg.DataLifecycle.ClickHouseInsertBatchSize)
+	}
 }
 
 func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
@@ -172,6 +187,16 @@ func TestLoadRejectsAllZeroHotspotWeights(t *testing.T) {
 
 func TestLoadRejectsInvalidInsightAutoReopenSeverity(t *testing.T) {
 	t.Setenv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "urgent")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsInvalidAnalyticsRetentionWindow(t *testing.T) {
+	t.Setenv("ANALYTICS_RAW_RETENTION_DAYS", "365")
+	t.Setenv("ANALYTICS_AGGREGATE_RETENTION_DAYS", "180")
 
 	_, err := Load()
 	if err == nil {

@@ -24,9 +24,9 @@ type stubStore struct {
 	syncRepositoryMetadataFn  func(context.Context, string, repositoryMetadata, time.Time) error
 	upsertPullRequestBundleFn func(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	replacePullRequestFilesFn func(context.Context, string, int64, []fileChangeInput) error
-	upsertCommitEventFn       func(context.Context, string, commitEventInput) error
-	upsertWorkflowRunFn       func(context.Context, string, workflowRunInput) error
-	upsertDeploymentFn        func(context.Context, string, deploymentInput) error
+	upsertCommitEventsFn      func(context.Context, string, []commitEventInput) error
+	upsertWorkflowRunsFn      func(context.Context, string, []workflowRunInput) error
+	upsertDeploymentsFn       func(context.Context, string, []deploymentInput) error
 	completeFn                func(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	getCheckpointFn           func(context.Context, string, string, string) (*checkpointRecord, error)
 	upsertCheckpointFn        func(context.Context, string, string, string, string, *string, string, *time.Time) error
@@ -130,25 +130,25 @@ func (s stubStore) ReplacePullRequestFiles(ctx context.Context, repositoryID str
 	return s.replacePullRequestFilesFn(ctx, repositoryID, githubPRID, files)
 }
 
-func (s stubStore) UpsertCommitEvent(ctx context.Context, repositoryID string, commit commitEventInput) error {
-	if s.upsertCommitEventFn == nil {
+func (s stubStore) UpsertCommitEvents(ctx context.Context, repositoryID string, commits []commitEventInput) error {
+	if s.upsertCommitEventsFn == nil {
 		return nil
 	}
-	return s.upsertCommitEventFn(ctx, repositoryID, commit)
+	return s.upsertCommitEventsFn(ctx, repositoryID, commits)
 }
 
-func (s stubStore) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {
-	if s.upsertWorkflowRunFn == nil {
+func (s stubStore) UpsertWorkflowRuns(ctx context.Context, repositoryID string, runs []workflowRunInput) error {
+	if s.upsertWorkflowRunsFn == nil {
 		return nil
 	}
-	return s.upsertWorkflowRunFn(ctx, repositoryID, run)
+	return s.upsertWorkflowRunsFn(ctx, repositoryID, runs)
 }
 
-func (s stubStore) UpsertDeployment(ctx context.Context, repositoryID string, deployment deploymentInput) error {
-	if s.upsertDeploymentFn == nil {
+func (s stubStore) UpsertDeployments(ctx context.Context, repositoryID string, deployments []deploymentInput) error {
+	if s.upsertDeploymentsFn == nil {
 		return nil
 	}
-	return s.upsertDeploymentFn(ctx, repositoryID, deployment)
+	return s.upsertDeploymentsFn(ctx, repositoryID, deployments)
 }
 
 func (s stubStore) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
@@ -170,6 +170,56 @@ func (s stubStore) UpsertCheckpoint(ctx context.Context, jobID string, repositor
 		return nil
 	}
 	return s.upsertCheckpointFn(ctx, jobID, repositoryID, resourceType, key, value, status, lastProcessedAt)
+}
+
+func TestSyncCommitsPersistsBatchPerPage(t *testing.T) {
+	t.Parallel()
+
+	var batches int
+	var persisted int
+	service := NewService(stubStore{
+		upsertCommitEventsFn: func(_ context.Context, repositoryID string, commits []commitEventInput) error {
+			if repositoryID != "repo-1" {
+				t.Fatalf("unexpected repository id %s", repositoryID)
+			}
+			batches++
+			persisted += len(commits)
+			return nil
+		},
+		upsertCheckpointFn: func(context.Context, string, string, string, string, *string, string, *time.Time) error {
+			return nil
+		},
+	}, stubGitHubClient{
+		listCommitsFn: func(_ context.Context, owner string, repo string, options githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
+			if owner != "pangikp" || repo != "devlens-api" {
+				t.Fatalf("unexpected target %s/%s", owner, repo)
+			}
+			if options.Page != 1 {
+				t.Fatalf("unexpected page %d", options.Page)
+			}
+			return githubclient.Page[githubclient.Commit]{
+				Items: []githubclient.Commit{
+					{SHA: "sha-1", Commit: githubclient.CommitDetail{Message: "a", Author: githubclient.CommitAuthor{Name: "dev", Date: time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)}}},
+					{SHA: "sha-2", Commit: githubclient.CommitDetail{Message: "b", Author: githubclient.CommitAuthor{Name: "dev", Date: time.Date(2026, 8, 10, 11, 0, 0, 0, time.UTC)}}},
+				},
+				NextPage: 0,
+			}, nil
+		},
+	}, nil)
+
+	total, err := service.syncCommits(context.Background(), "job-1", "repo-1", "pangikp", "devlens-api", nil)
+	if err != nil {
+		t.Fatalf("sync commits: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 commits, got %d", total)
+	}
+	if batches != 1 {
+		t.Fatalf("expected 1 batch write, got %d", batches)
+	}
+	if persisted != 2 {
+		t.Fatalf("expected 2 persisted commits, got %d", persisted)
+	}
 }
 
 type stubGitHubClient struct {

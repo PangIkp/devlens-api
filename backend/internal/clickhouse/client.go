@@ -197,6 +197,30 @@ func (db *DB) InsertJSONEachRow(ctx context.Context, insertSQL string, rows any)
 	return nil
 }
 
+func (db *DB) InsertJSONEachRowBatched(ctx context.Context, insertSQL string, rows any, batchSize int) error {
+	value := reflect.ValueOf(rows)
+	if value.Kind() != reflect.Slice {
+		return fmt.Errorf("clickhouse insert rows must be a slice")
+	}
+	if value.Len() == 0 {
+		return nil
+	}
+	if batchSize <= 0 || value.Len() <= batchSize {
+		return db.InsertJSONEachRow(ctx, insertSQL, rows)
+	}
+
+	for start := 0; start < value.Len(); start += batchSize {
+		end := start + batchSize
+		if end > value.Len() {
+			end = value.Len()
+		}
+		if err := db.InsertJSONEachRow(ctx, insertSQL, value.Slice(start, end).Interface()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) newRequest(ctx context.Context, query string) (*http.Request, error) {
 	endpoint := *db.baseURL
 	queryParams := endpoint.Query()

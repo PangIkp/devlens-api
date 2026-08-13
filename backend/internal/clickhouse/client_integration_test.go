@@ -17,11 +17,16 @@ type integrationRow struct {
 func TestEnsureSchemaAndQueryJSONEachRowIntegration(t *testing.T) {
 	t.Parallel()
 
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
 	db := openIntegrationDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := EnsureSchema(ctx, db); err != nil {
+	if err := EnsureSchema(ctx, db, cfg.DataLifecycle); err != nil {
 		t.Skipf("skip clickhouse integration test: ensure schema failed: %v", err)
 	}
 

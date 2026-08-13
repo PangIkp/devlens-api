@@ -17,6 +17,8 @@ import (
 
 var ErrRepositoryNotFound = errors.New("repository not found")
 
+const clickhouseInsertBatchSize = 500
+
 type Service struct {
 	pg    *postgres.DB
 	ch    *clickhouse.DB
@@ -100,7 +102,7 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt, req.MetricVersion))
 	}
 
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO metrics_daily", payload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO metrics_daily", payload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("insert metrics_daily rows: %w", err)
 	}
 

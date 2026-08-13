@@ -27,9 +27,9 @@ type store interface {
 	SyncRepositoryMetadata(context.Context, string, repositoryMetadata, time.Time) error
 	UpsertPullRequestBundle(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	ReplacePullRequestFiles(context.Context, string, int64, []fileChangeInput) error
-	UpsertCommitEvent(context.Context, string, commitEventInput) error
-	UpsertWorkflowRun(context.Context, string, workflowRunInput) error
-	UpsertDeployment(context.Context, string, deploymentInput) error
+	UpsertCommitEvents(context.Context, string, []commitEventInput) error
+	UpsertWorkflowRuns(context.Context, string, []workflowRunInput) error
+	UpsertDeployments(context.Context, string, []deploymentInput) error
 	Complete(context.Context, string, string, time.Time) (SyncJobResponse, error)
 	GetCheckpoint(context.Context, string, string, string) (*checkpointRecord, error)
 	UpsertCheckpoint(context.Context, string, string, string, string, *string, string, *time.Time) error
@@ -569,14 +569,16 @@ func (s *Service) syncCommits(ctx context.Context, jobID string, repositoryID st
 			return 0, err
 		}
 
+		payload := make([]commitEventInput, 0, len(result.Items))
 		for _, commit := range result.Items {
 			if !includeCommit(commit, cutoff) {
 				continue
 			}
-			if err := s.store.UpsertCommitEvent(ctx, repositoryID, buildCommitEventInput(commit)); err != nil {
-				return 0, fmt.Errorf("persist commit %s: %w", commit.SHA, err)
-			}
+			payload = append(payload, buildCommitEventInput(commit))
 			total++
+		}
+		if err := s.store.UpsertCommitEvents(ctx, repositoryID, payload); err != nil {
+			return 0, fmt.Errorf("persist commit batch: %w", err)
 		}
 
 		if result.NextPage == 0 {
@@ -614,14 +616,16 @@ func (s *Service) syncWorkflowRuns(ctx context.Context, jobID string, repository
 			return 0, err
 		}
 
+		payload := make([]workflowRunInput, 0, len(result.Items))
 		for _, run := range result.Items {
 			if !includeWorkflowRun(run, cutoff) {
 				continue
 			}
-			if err := s.store.UpsertWorkflowRun(ctx, repositoryID, buildWorkflowRunInput(run)); err != nil {
-				return 0, fmt.Errorf("persist workflow run %d: %w", run.ID, err)
-			}
+			payload = append(payload, buildWorkflowRunInput(run))
 			total++
+		}
+		if err := s.store.UpsertWorkflowRuns(ctx, repositoryID, payload); err != nil {
+			return 0, fmt.Errorf("persist workflow run batch: %w", err)
 		}
 
 		if result.NextPage == 0 {
@@ -659,6 +663,7 @@ func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryI
 			return 0, err
 		}
 
+		payload := make([]deploymentInput, 0, len(result.Items))
 		for _, deployment := range result.Items {
 			if !includeDeployment(deployment, cutoff) {
 				continue
@@ -677,10 +682,11 @@ func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryI
 			if latestStatus == nil {
 				continue
 			}
-			if err := s.store.UpsertDeployment(ctx, repositoryID, buildDeploymentInput(deployment, *latestStatus)); err != nil {
-				return 0, fmt.Errorf("persist deployment %d: %w", deployment.ID, err)
-			}
+			payload = append(payload, buildDeploymentInput(deployment, *latestStatus))
 			total++
+		}
+		if err := s.store.UpsertDeployments(ctx, repositoryID, payload); err != nil {
+			return 0, fmt.Errorf("persist deployment batch: %w", err)
 		}
 
 		if result.NextPage == 0 {

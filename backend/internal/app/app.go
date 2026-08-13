@@ -75,7 +75,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	if db, err := clickhouse.Open(cfg.ClickHouse, appMetrics); err != nil {
 		logger.Warn("clickhouse unavailable during startup", "error", err)
 	} else {
-		if err := clickhouse.EnsureSchema(ctx, db); err != nil {
+		if err := clickhouse.EnsureSchema(ctx, db, cfg.DataLifecycle); err != nil {
 			logger.Warn("clickhouse schema initialization failed", "error", err)
 			db.Close()
 		} else {
@@ -183,7 +183,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, cfg.Sync.WorkerBatchSize, cfg.Sync.WorkerConcurrency, cfg.Sync.JobTimeout, appMetrics)
 	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
 	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
-	webhookRepository := githubwebhook.NewRepository(postgresDB)
+	webhookRepository := githubwebhook.NewRepository(postgresDB, cfg.DataLifecycle.WebhookPayloadRetentionDays)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService, appMetrics)
 	webhookService.ConfigureRetryProcessing(cfg.Sync.WebhookRetryConcurrency, cfg.Sync.WebhookRetryTimeout)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)

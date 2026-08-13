@@ -11,17 +11,18 @@ import (
 )
 
 type Config struct {
-	AppEnv     string
-	LogLevel   slog.Level
-	HTTP       HTTPConfig
-	Postgres   PostgresConfig
-	ClickHouse ClickHouseConfig
-	GitHub     GitHubConfig
-	NATS       NATSConfig
-	Sync       SyncConfig
-	Metrics    MetricsConfig
-	Insights   InsightsConfig
-	Tracing    TracingConfig
+	AppEnv        string
+	LogLevel      slog.Level
+	HTTP          HTTPConfig
+	Postgres      PostgresConfig
+	ClickHouse    ClickHouseConfig
+	GitHub        GitHubConfig
+	NATS          NATSConfig
+	Sync          SyncConfig
+	Metrics       MetricsConfig
+	Insights      InsightsConfig
+	DataLifecycle DataLifecycleConfig
+	Tracing       TracingConfig
 }
 
 type HTTPConfig struct {
@@ -141,6 +142,15 @@ type InsightsConfig struct {
 	AutoReopenMinimumSeverity            string
 	DeduplicateEnabled                   bool
 	DeduplicateVersion                   int
+}
+
+type DataLifecycleConfig struct {
+	AnalyticsRawRetentionDays             int
+	AnalyticsAggregateRetentionDays       int
+	WebhookPayloadRetentionDays           int
+	SoftDeletedOrganizationRetentionDays  int
+	DisconnectedInstallationRetentionDays int
+	ClickHouseInsertBatchSize             int
 }
 
 func Load() (Config, error) {
@@ -372,6 +382,30 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	analyticsRawRetentionDays, err := getInt("ANALYTICS_RAW_RETENTION_DAYS", 180)
+	if err != nil {
+		return Config{}, err
+	}
+	analyticsAggregateRetentionDays, err := getInt("ANALYTICS_AGGREGATE_RETENTION_DAYS", 365)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookPayloadRetentionDays, err := getInt("WEBHOOK_PAYLOAD_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	softDeletedOrganizationRetentionDays, err := getInt("SOFT_DELETED_ORGANIZATION_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	disconnectedInstallationRetentionDays, err := getInt("DISCONNECTED_INSTALLATION_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	clickhouseInsertBatchSize, err := getInt("CLICKHOUSE_INSERT_BATCH_SIZE", 500)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -476,6 +510,14 @@ func Load() (Config, error) {
 			AutoReopenMinimumSeverity:            strings.TrimSpace(strings.ToLower(getEnv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "low"))),
 			DeduplicateEnabled:                   getBool("INSIGHTS_DEDUPLICATE_ENABLED", true),
 			DeduplicateVersion:                   insightDeduplicateVersion,
+		},
+		DataLifecycle: DataLifecycleConfig{
+			AnalyticsRawRetentionDays:             analyticsRawRetentionDays,
+			AnalyticsAggregateRetentionDays:       analyticsAggregateRetentionDays,
+			WebhookPayloadRetentionDays:           webhookPayloadRetentionDays,
+			SoftDeletedOrganizationRetentionDays:  softDeletedOrganizationRetentionDays,
+			DisconnectedInstallationRetentionDays: disconnectedInstallationRetentionDays,
+			ClickHouseInsertBatchSize:             clickhouseInsertBatchSize,
 		},
 		Tracing: TracingConfig{
 			Enabled:          getBool("OTEL_ENABLED", false),
@@ -670,6 +712,27 @@ func Load() (Config, error) {
 	}
 	if cfg.Insights.DeduplicateVersion <= 0 {
 		return Config{}, fmt.Errorf("INSIGHTS_DEDUPLICATE_VERSION must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsRawRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("ANALYTICS_RAW_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsAggregateRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("ANALYTICS_AGGREGATE_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsAggregateRetentionDays < cfg.DataLifecycle.AnalyticsRawRetentionDays {
+		return Config{}, fmt.Errorf("ANALYTICS_AGGREGATE_RETENTION_DAYS must be greater than or equal to ANALYTICS_RAW_RETENTION_DAYS")
+	}
+	if cfg.DataLifecycle.WebhookPayloadRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_PAYLOAD_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.SoftDeletedOrganizationRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("SOFT_DELETED_ORGANIZATION_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.DisconnectedInstallationRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("DISCONNECTED_INSTALLATION_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.ClickHouseInsertBatchSize <= 0 {
+		return Config{}, fmt.Errorf("CLICKHOUSE_INSERT_BATCH_SIZE must be greater than 0")
 	}
 
 	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {

@@ -135,6 +135,143 @@ func TestRepositorySchedulesAndListsRetryableDeliveries(t *testing.T) {
 	}
 }
 
+func TestProjectRepositoryEventKeepsLatestPullRequestStateOnOutOfOrderEvents(t *testing.T) {
+	t.Parallel()
+
+	repo, db := openIntegrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	graph := seedWebhookIntegrationGraph(t, ctx, db)
+
+	mergedPayload := mustParsePayload(t, `{
+		"action":"closed",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"pull_request":{
+			"id":1001,"number":12,"title":"PR merged","state":"closed","draft":false,
+			"created_at":"2026-08-10T10:00:00Z","updated_at":"2026-08-12T12:00:00Z",
+			"closed_at":"2026-08-12T12:00:00Z","merged_at":"2026-08-12T12:00:00Z",
+			"additions":10,"deletions":2,"changed_files":1,
+			"user":{"login":"pangikp"}
+		}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "pull_request", mergedPayload); err != nil {
+		t.Fatalf("project merged pull request: %v", err)
+	}
+
+	staleOpenPayload := mustParsePayload(t, `{
+		"action":"opened",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"pull_request":{
+			"id":1001,"number":12,"title":"PR opened","state":"open","draft":false,
+			"created_at":"2026-08-10T10:00:00Z","updated_at":"2026-08-10T10:05:00Z",
+			"additions":8,"deletions":1,"changed_files":1,
+			"user":{"login":"pangikp"}
+		}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "pull_request", staleOpenPayload); err != nil {
+		t.Fatalf("project stale open pull request: %v", err)
+	}
+
+	var state string
+	var mergedAt pgtype.Timestamptz
+	if err := db.Pool().QueryRow(ctx, `SELECT state, merged_at FROM pull_requests WHERE github_pr_id = 1001`).Scan(&state, &mergedAt); err != nil {
+		t.Fatalf("load pull request: %v", err)
+	}
+	if state != "closed" {
+		t.Fatalf("expected merged state to survive stale event, got %q", state)
+	}
+	if !mergedAt.Valid {
+		t.Fatal("expected merged_at to survive stale event")
+	}
+}
+
+func TestProjectRepositoryEventKeepsLatestWorkflowRunStateOnOutOfOrderEvents(t *testing.T) {
+	t.Parallel()
+
+	repo, db := openIntegrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	graph := seedWebhookIntegrationGraph(t, ctx, db)
+
+	completedPayload := mustParsePayload(t, `{
+		"action":"completed",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"workflow_run":{
+			"id":77,"name":"CI","status":"completed","conclusion":"success",
+			"run_started_at":"2026-08-12T11:00:00Z",
+			"created_at":"2026-08-12T11:00:00Z","updated_at":"2026-08-12T11:10:00Z"
+		}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "workflow_run", completedPayload); err != nil {
+		t.Fatalf("project completed workflow run: %v", err)
+	}
+
+	staleQueuedPayload := mustParsePayload(t, `{
+		"action":"requested",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"workflow_run":{
+			"id":77,"name":"CI","status":"queued","conclusion":"",
+			"run_started_at":"2026-08-12T11:00:00Z",
+			"created_at":"2026-08-12T11:00:00Z","updated_at":"2026-08-12T11:01:00Z"
+		}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "workflow_run", staleQueuedPayload); err != nil {
+		t.Fatalf("project stale workflow run: %v", err)
+	}
+
+	var status string
+	var conclusion pgtype.Text
+	if err := db.Pool().QueryRow(ctx, `SELECT status, conclusion FROM workflow_events WHERE github_workflow_run_id = 77`).Scan(&status, &conclusion); err != nil {
+		t.Fatalf("load workflow run: %v", err)
+	}
+	if status != "completed" {
+		t.Fatalf("expected completed workflow state to survive stale event, got %q", status)
+	}
+	if !conclusion.Valid || conclusion.String != "success" {
+		t.Fatalf("expected success conclusion to survive stale event, got %+v", conclusion)
+	}
+}
+
+func TestProjectRepositoryEventKeepsLatestDeploymentStateOnOutOfOrderEvents(t *testing.T) {
+	t.Parallel()
+
+	repo, db := openIntegrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	graph := seedWebhookIntegrationGraph(t, ctx, db)
+
+	successPayload := mustParsePayload(t, `{
+		"action":"success",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"deployment":{"id":88,"environment":"production","created_at":"2026-08-12T09:00:00Z","updated_at":"2026-08-12T09:10:00Z"},
+		"deployment_status":{"id":1,"state":"success","created_at":"2026-08-12T09:10:00Z","updated_at":"2026-08-12T09:10:00Z"}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "deployment_status", successPayload); err != nil {
+		t.Fatalf("project successful deployment: %v", err)
+	}
+
+	stalePendingPayload := mustParsePayload(t, `{
+		"action":"pending",
+		"repository":{"id":42,"full_name":"pangikp/devlens-api"},
+		"deployment":{"id":88,"environment":"production","created_at":"2026-08-12T09:00:00Z","updated_at":"2026-08-12T09:01:00Z"},
+		"deployment_status":{"id":2,"state":"pending","created_at":"2026-08-12T09:01:00Z","updated_at":"2026-08-12T09:01:00Z"}
+	}`)
+	if err := repo.ProjectRepositoryEvent(ctx, graph.repositoryID, "deployment_status", stalePendingPayload); err != nil {
+		t.Fatalf("project stale deployment: %v", err)
+	}
+
+	var status string
+	if err := db.Pool().QueryRow(ctx, `SELECT status FROM deployments WHERE github_deployment_id = 88`).Scan(&status); err != nil {
+		t.Fatalf("load deployment: %v", err)
+	}
+	if status != "success" {
+		t.Fatalf("expected success deployment state to survive stale event, got %q", status)
+	}
+}
+
 type integrationGraph struct {
 	installationID int64
 	repositoryID   string
@@ -218,4 +355,14 @@ func seedWebhookIntegrationGraph(t *testing.T, ctx context.Context, db *postgres
 
 func uuidString(value pgtype.UUID) string {
 	return value.String()
+}
+
+func mustParsePayload(t *testing.T, raw string) payloadEnvelope {
+	t.Helper()
+
+	payload, err := parsePayload([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse payload: %v", err)
+	}
+	return payload
 }
