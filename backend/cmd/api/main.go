@@ -13,11 +13,11 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("load config", "error", err)
+		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("load config", "error", err)
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	logger.Info("build info", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
 
 	application, err := app.New(context.Background(), cfg)
