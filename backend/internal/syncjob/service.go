@@ -27,6 +27,7 @@ type store interface {
 	SyncRepositoryMetadata(context.Context, string, repositoryMetadata, time.Time) error
 	UpsertPullRequestBundle(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	ReplacePullRequestFiles(context.Context, string, int64, []fileChangeInput) error
+	UpsertCommitEvent(context.Context, string, commitEventInput) error
 	UpsertWorkflowRun(context.Context, string, workflowRunInput) error
 	UpsertDeployment(context.Context, string, deploymentInput) error
 	Complete(context.Context, string, string, time.Time) (SyncJobResponse, error)
@@ -543,6 +544,9 @@ func (s *Service) syncCommits(ctx context.Context, jobID string, repositoryID st
 			if !includeCommit(commit, cutoff) {
 				continue
 			}
+			if err := s.store.UpsertCommitEvent(ctx, repositoryID, buildCommitEventInput(commit)); err != nil {
+				return 0, fmt.Errorf("persist commit %s: %w", commit.SHA, err)
+			}
 			total++
 		}
 
@@ -908,6 +912,20 @@ func buildFileChangeInputs(files []githubclient.PullRequestFile) []fileChangeInp
 		})
 	}
 	return items
+}
+
+func buildCommitEventInput(commit githubclient.Commit) commitEventInput {
+	author := commit.Commit.Author.Name
+	if strings.TrimSpace(author) == "" && commit.Author != nil {
+		author = commit.Author.Login
+	}
+	return commitEventInput{
+		GitHubCommitSHA: strings.TrimSpace(commit.SHA),
+		Author:          strings.TrimSpace(author),
+		AuthorEmail:     strings.TrimSpace(commit.Commit.Author.Email),
+		Message:         strings.TrimSpace(commit.Commit.Message),
+		AuthoredAt:      commit.Commit.Author.Date.UTC(),
+	}
 }
 
 func buildWorkflowRunInput(run githubclient.WorkflowRun) workflowRunInput {

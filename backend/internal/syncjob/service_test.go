@@ -24,6 +24,7 @@ type stubStore struct {
 	syncRepositoryMetadataFn  func(context.Context, string, repositoryMetadata, time.Time) error
 	upsertPullRequestBundleFn func(context.Context, pullRequestInput, []pullRequestReviewInput) error
 	replacePullRequestFilesFn func(context.Context, string, int64, []fileChangeInput) error
+	upsertCommitEventFn       func(context.Context, string, commitEventInput) error
 	upsertWorkflowRunFn       func(context.Context, string, workflowRunInput) error
 	upsertDeploymentFn        func(context.Context, string, deploymentInput) error
 	completeFn                func(context.Context, string, string, time.Time) (SyncJobResponse, error)
@@ -127,6 +128,13 @@ func (s stubStore) ReplacePullRequestFiles(ctx context.Context, repositoryID str
 		return nil
 	}
 	return s.replacePullRequestFilesFn(ctx, repositoryID, githubPRID, files)
+}
+
+func (s stubStore) UpsertCommitEvent(ctx context.Context, repositoryID string, commit commitEventInput) error {
+	if s.upsertCommitEventFn == nil {
+		return nil
+	}
+	return s.upsertCommitEventFn(ctx, repositoryID, commit)
 }
 
 func (s stubStore) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {

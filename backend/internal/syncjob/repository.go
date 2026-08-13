@@ -428,6 +428,33 @@ func (r *Repository) ReplacePullRequestFiles(ctx context.Context, repositoryID s
 	return nil
 }
 
+func (r *Repository) UpsertCommitEvent(ctx context.Context, repositoryID string, commit commitEventInput) error {
+	_, err := r.db.Pool().Exec(ctx, `
+		INSERT INTO commit_events (
+			id, repository_id, github_commit_sha, author, author_email, message, authored_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, NOW(), NOW()
+		)
+		ON CONFLICT (github_commit_sha) DO UPDATE SET
+			author = EXCLUDED.author,
+			author_email = EXCLUDED.author_email,
+			message = EXCLUDED.message,
+			authored_at = EXCLUDED.authored_at,
+			updated_at = NOW()`,
+		newUUID(),
+		parseUUID(repositoryID),
+		commit.GitHubCommitSHA,
+		commit.Author,
+		nullableString(commit.AuthorEmail),
+		commit.Message,
+		toNullableTimestamp(&commit.AuthoredAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert commit event: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) UpsertWorkflowRun(ctx context.Context, repositoryID string, run workflowRunInput) error {
 	_, err := r.db.Pool().Exec(ctx, `
 		INSERT INTO workflow_events (

@@ -78,6 +78,14 @@ type fileChangeInput struct {
 	CommitCount int
 }
 
+type commitEventInput struct {
+	GitHubCommitSHA string
+	Author          string
+	AuthorEmail     string
+	Message         string
+	AuthoredAt      time.Time
+}
+
 type workflowRunInput struct {
 	GitHubWorkflowRunID int64
 	WorkflowName        string

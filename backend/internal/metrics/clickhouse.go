@@ -51,6 +51,29 @@ type deploymentRecord struct {
 	SyncedAt     string `json:"synced_at"`
 }
 
+type commitEventRecord struct {
+	ID              string  `json:"id"`
+	RepositoryID    string  `json:"repository_id"`
+	GitHubCommitSHA string  `json:"github_commit_sha"`
+	Author          string  `json:"author"`
+	AuthorEmail     *string `json:"author_email"`
+	Message         string  `json:"message"`
+	AuthoredAt      string  `json:"authored_at"`
+	SyncedAt        string  `json:"synced_at"`
+}
+
+type workflowEventRecord struct {
+	ID                string  `json:"id"`
+	RepositoryID      string  `json:"repository_id"`
+	GithubWorkflowRun int64   `json:"github_workflow_run_id"`
+	WorkflowName      string  `json:"workflow_name"`
+	Status            string  `json:"status"`
+	Conclusion        *string `json:"conclusion"`
+	StartedAt         *string `json:"started_at"`
+	CompletedAt       *string `json:"completed_at"`
+	SyncedAt          string  `json:"synced_at"`
+}
+
 type fileChangeRecord struct {
 	ID            string `json:"id"`
 	PullRequestID string `json:"pull_request_id"`
@@ -175,6 +198,51 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 		return fmt.Errorf("sync clickhouse deployments: %w", err)
 	}
 
+	commitRows, err := s.listCommitEventsForAnalytics(ctx, repositoryID, bounds)
+	if err != nil {
+		return err
+	}
+
+	commitPayload := make([]commitEventRecord, 0, len(commitRows))
+	for _, item := range commitRows {
+		commitPayload = append(commitPayload, commitEventRecord{
+			ID:              item.ID.String(),
+			RepositoryID:    item.RepositoryID.String(),
+			GitHubCommitSHA: item.GithubCommitSHA,
+			Author:          item.Author,
+			AuthorEmail:     nullableText(item.AuthorEmail),
+			Message:         item.Message,
+			AuthoredAt:      formatTimestamp(item.AuthoredAt.Time),
+			SyncedAt:        formatTimestamp(syncedAt),
+		})
+	}
+	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO commit_events", commitPayload); err != nil {
+		return fmt.Errorf("sync clickhouse commit_events: %w", err)
+	}
+
+	workflowRows, err := s.listWorkflowEventsForAnalytics(ctx, repositoryID, bounds)
+	if err != nil {
+		return err
+	}
+
+	workflowPayload := make([]workflowEventRecord, 0, len(workflowRows))
+	for _, item := range workflowRows {
+		workflowPayload = append(workflowPayload, workflowEventRecord{
+			ID:                item.ID.String(),
+			RepositoryID:      item.RepositoryID.String(),
+			GithubWorkflowRun: item.GithubWorkflowRunID,
+			WorkflowName:      item.WorkflowName,
+			Status:            item.Status,
+			Conclusion:        nullableText(item.Conclusion),
+			StartedAt:         nullableTimestamp(item.StartedAt),
+			CompletedAt:       nullableTimestamp(item.CompletedAt),
+			SyncedAt:          formatTimestamp(syncedAt),
+		})
+	}
+	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO workflow_events", workflowPayload); err != nil {
+		return fmt.Errorf("sync clickhouse workflow_events: %w", err)
+	}
+
 	fileChanges, err := s.pg.Queries().ListFileChangesForAnalytics(ctx, sqlcgen.ListFileChangesForAnalyticsParams{
 		RepositoryID: repositoryID,
 		CreatedAt:    toTimestamp(bounds.From),
@@ -201,6 +269,127 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 	}
 
 	return nil
+}
+
+type workflowEventAnalyticsRow struct {
+	ID                  pgtype.UUID
+	RepositoryID        pgtype.UUID
+	GithubWorkflowRunID int64
+	WorkflowName        string
+	Status              string
+	Conclusion          pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+}
+
+func (s *Service) listWorkflowEventsForAnalytics(ctx context.Context, repositoryID pgtype.UUID, bounds dateBounds) ([]workflowEventAnalyticsRow, error) {
+	rows, err := s.pg.Pool().Query(ctx, `
+SELECT id,
+       repository_id,
+       github_workflow_run_id,
+       workflow_name,
+       status,
+       conclusion,
+       started_at,
+       completed_at
+FROM workflow_events
+WHERE repository_id = $1
+  AND coalesce(started_at, completed_at, updated_at, created_at) >= $2
+  AND coalesce(started_at, completed_at, updated_at, created_at) < $3
+ORDER BY coalesce(started_at, completed_at, updated_at, created_at) ASC`,
+		repositoryID,
+		toTimestamp(bounds.From),
+		toTimestamp(bounds.ToExclusive),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow_events for analytics: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]workflowEventAnalyticsRow, 0)
+	for rows.Next() {
+		var item workflowEventAnalyticsRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.RepositoryID,
+			&item.GithubWorkflowRunID,
+			&item.WorkflowName,
+			&item.Status,
+			&item.Conclusion,
+			&item.StartedAt,
+			&item.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan workflow_events analytics row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflow_events analytics rows: %w", err)
+	}
+	return items, nil
+}
+
+type commitEventAnalyticsRow struct {
+	ID              pgtype.UUID
+	RepositoryID    pgtype.UUID
+	GithubCommitSHA string
+	Author          string
+	AuthorEmail     pgtype.Text
+	Message         string
+	AuthoredAt      pgtype.Timestamptz
+}
+
+func (s *Service) listCommitEventsForAnalytics(ctx context.Context, repositoryID pgtype.UUID, bounds dateBounds) ([]commitEventAnalyticsRow, error) {
+	rows, err := s.pg.Pool().Query(ctx, `
+SELECT id,
+       repository_id,
+       github_commit_sha,
+       author,
+       author_email,
+       message,
+       authored_at
+FROM commit_events
+WHERE repository_id = $1
+  AND authored_at >= $2
+  AND authored_at < $3
+ORDER BY authored_at ASC`,
+		repositoryID,
+		toTimestamp(bounds.From),
+		toTimestamp(bounds.ToExclusive),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list commit_events for analytics: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]commitEventAnalyticsRow, 0)
+	for rows.Next() {
+		var item commitEventAnalyticsRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.RepositoryID,
+			&item.GithubCommitSHA,
+			&item.Author,
+			&item.AuthorEmail,
+			&item.Message,
+			&item.AuthoredAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan commit_events analytics row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate commit_events analytics rows: %w", err)
+	}
+	return items, nil
+}
+
+func nullableText(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String
+	return &result
 }
 
 func (s *Service) listMetricsDaily(ctx context.Context, repositoryID string, bounds dateBounds) ([]metricsDailyRecord, error) {

@@ -48,6 +48,31 @@ var schemaStatements = []string{
 	) ENGINE = ReplacingMergeTree(synced_at)
 	PARTITION BY toYYYYMM(deployed_at)
 	ORDER BY (repository_id, environment, deployed_at, id)`,
+	`CREATE TABLE IF NOT EXISTS commit_events (
+		id String,
+		repository_id String,
+		github_commit_sha String,
+		author String,
+		author_email Nullable(String),
+		message String,
+		authored_at DateTime64(3, 'UTC'),
+		synced_at DateTime64(3, 'UTC')
+	) ENGINE = ReplacingMergeTree(synced_at)
+	PARTITION BY toYYYYMM(authored_at)
+	ORDER BY (repository_id, github_commit_sha)`,
+	`CREATE TABLE IF NOT EXISTS workflow_events (
+		id String,
+		repository_id String,
+		github_workflow_run_id Int64,
+		workflow_name String,
+		status String,
+		conclusion Nullable(String),
+		started_at Nullable(DateTime64(3, 'UTC')),
+		completed_at Nullable(DateTime64(3, 'UTC')),
+		synced_at DateTime64(3, 'UTC')
+	) ENGINE = ReplacingMergeTree(synced_at)
+	PARTITION BY toYYYYMM(coalesce(started_at, completed_at, synced_at))
+	ORDER BY (repository_id, github_workflow_run_id)`,
 	`CREATE TABLE IF NOT EXISTS file_changes (
 		id String,
 		pull_request_id String,

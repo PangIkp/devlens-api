@@ -13,6 +13,7 @@ import (
 type stubStore struct {
 	findRepositoryByGithubIDFn func(context.Context, int64) (*repositoryMatch, error)
 	enqueueWebhookSyncFn       func(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error)
+	projectRepositoryEventFn   func(context.Context, string, string, payloadEnvelope) error
 	markStatusFn               func(context.Context, string, string, *string, *time.Time) error
 	getStoredDeliveryFn        func(context.Context, string) (*StoredDelivery, error)
 	scheduleRetryFn            func(context.Context, string, string, int, time.Time, time.Time) error
@@ -25,6 +26,13 @@ func (s stubStore) FindRepositoryByGithubID(ctx context.Context, githubID int64)
 
 func (s stubStore) EnqueueWebhookSync(ctx context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
 	return s.enqueueWebhookSyncFn(ctx, repositoryID, installationID, deliveryID, eventType, action, payload, enqueueJob)
+}
+
+func (s stubStore) ProjectRepositoryEvent(ctx context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+	if s.projectRepositoryEventFn == nil {
+		return nil
+	}
+	return s.projectRepositoryEventFn(ctx, repositoryID, eventType, payload)
 }
 
 func (s stubStore) MarkDeliveryStatus(ctx context.Context, deliveryID string, status string, message *string, processedAt *time.Time) error {
@@ -67,6 +75,7 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	var projected bool
 	service := NewService(stubStore{
 		findRepositoryByGithubIDFn: func(_ context.Context, githubID int64) (*repositoryMatch, error) {
 			if githubID != 42 {
@@ -86,9 +95,19 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 			}
 			return enqueueResult{deliveryID: deliveryID, syncJobID: stringPtr("job-1"), receivedAt: now, processingStatus: "enqueued"}, nil
 		},
+		projectRepositoryEventFn: func(_ context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+			projected = true
+			if repositoryID != "repo-1" || eventType != "pull_request" {
+				t.Fatalf("unexpected projection args")
+			}
+			if payload.PullRequest.ID != 1001 || payload.PullRequest.Number != 12 {
+				t.Fatalf("unexpected projected payload %+v", payload.PullRequest)
+			}
+			return nil
+		},
 	}, "top-secret", nil, nil)
 
-	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"}}`)
+	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"},"pull_request":{"id":1001,"number":12,"title":"Add metrics","state":"open","draft":false,"created_at":"2026-07-27T11:59:00Z","updated_at":"2026-07-27T12:00:00Z","user":{"login":"pangikp"}}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
 		DeliveryID: "delivery-1",
 		EventType:  "pull_request",
@@ -103,6 +122,9 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 	}
 	if result.ProcessingStatus != "enqueued" {
 		t.Fatalf("expected enqueued processing status, got %q", result.ProcessingStatus)
+	}
+	if !projected {
+		t.Fatal("expected repository event projection")
 	}
 }
 
@@ -375,6 +397,7 @@ func TestHandleProcessesOutOfOrderInstallationDeletedEventIdempotently(t *testin
 func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 	t.Parallel()
 
+	var projected bool
 	service := NewService(stubStore{
 		findRepositoryByGithubIDFn: func(context.Context, int64) (*repositoryMatch, error) { return &repositoryMatch{ID: "repo-1"}, nil },
 		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
@@ -383,9 +406,16 @@ func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 			}
 			return enqueueResult{deliveryID: deliveryID, receivedAt: time.Now().UTC(), processingStatus: "enqueued"}, nil
 		},
+		projectRepositoryEventFn: func(_ context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+			projected = true
+			if repositoryID != "repo-1" || eventType != "workflow_run" || payload.WorkflowRun.ID != 77 {
+				t.Fatalf("unexpected workflow projection args")
+			}
+			return nil
+		},
 	}, "top-secret", nil, nil)
 
-	body := []byte(`{"action":"completed","repository":{"id":42}}`)
+	body := []byte(`{"action":"completed","repository":{"id":42},"workflow_run":{"id":77,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-08-12T23:00:00Z","updated_at":"2026-08-12T23:01:00Z"}}`)
 	result, err := service.Handle(context.Background(), HandleRequest{
 		DeliveryID: "delivery-4",
 		EventType:  "workflow_run",
@@ -397,6 +427,49 @@ func TestHandleEnqueuesWorkflowRunEvent(t *testing.T) {
 	}
 	if !result.Enqueued || result.ProcessingStatus != "enqueued" {
 		t.Fatalf("unexpected result %+v", result)
+	}
+	if !projected {
+		t.Fatal("expected workflow event projection")
+	}
+}
+
+func TestRetryReprojectsStoredRepositoryEvent(t *testing.T) {
+	t.Parallel()
+
+	var projected bool
+	service := NewService(stubStore{
+		getStoredDeliveryFn: func(_ context.Context, deliveryID string) (*StoredDelivery, error) {
+			action := "completed"
+			repositoryID := "repo-1"
+			return &StoredDelivery{
+				DeliveryID:       deliveryID,
+				EventType:        "workflow_run",
+				Action:           &action,
+				RepositoryID:     &repositoryID,
+				Payload:          []byte(`{"action":"completed","repository":{"id":42},"workflow_run":{"id":77,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-08-12T23:00:00Z","updated_at":"2026-08-12T23:01:00Z"}}`),
+				ProcessingStatus: "failed",
+				ReceivedAt:       time.Now().UTC(),
+			}, nil
+		},
+		projectRepositoryEventFn: func(_ context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+			projected = true
+			if repositoryID != "repo-1" || eventType != "workflow_run" || payload.WorkflowRun.ID != 77 {
+				t.Fatalf("unexpected retry projection args")
+			}
+			return nil
+		},
+		markStatusFn: func(context.Context, string, string, *string, *time.Time) error { return nil },
+	}, "top-secret", nil, nil)
+
+	result, err := service.Retry(context.Background(), "delivery-9")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.ProcessingStatus != "ignored" {
+		t.Fatalf("expected ignored processing status without queued job, got %q", result.ProcessingStatus)
+	}
+	if !projected {
+		t.Fatal("expected retry to reproject repository event")
 	}
 }
 

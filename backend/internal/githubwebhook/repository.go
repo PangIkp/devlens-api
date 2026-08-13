@@ -90,6 +90,23 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 		}
 		syncJobID = &row.ID
 		processingStatus = "enqueued"
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO sync_checkpoints (
+				id, sync_job_id, repository_id, resource_type, checkpoint_key, checkpoint_value, status, last_processed_at, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, 'job', 'mode', 'full', 'pending', NOW(), NOW(), NOW()
+			)
+			ON CONFLICT (sync_job_id, resource_type, checkpoint_key) DO UPDATE SET
+				checkpoint_value = EXCLUDED.checkpoint_value,
+				status = EXCLUDED.status,
+				last_processed_at = EXCLUDED.last_processed_at,
+				updated_at = NOW()`,
+			newUUID(),
+			row.ID,
+			parseUUID(*repositoryID),
+		); err != nil {
+			return enqueueResult{}, fmt.Errorf("persist webhook sync mode: %w", err)
+		}
 	} else {
 		processingStatus = "ignored"
 	}
@@ -170,6 +187,249 @@ func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *strin
 		result.syncJobID = &value
 	}
 	return result, nil
+}
+
+func (r *Repository) ProjectRepositoryEvent(ctx context.Context, repositoryID string, eventType string, payload payloadEnvelope) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin webhook projection transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	queries := r.queries.WithTx(tx)
+	repoUUID := parseUUID(repositoryID)
+
+	switch strings.TrimSpace(eventType) {
+	case "pull_request":
+		if err := r.projectPullRequest(ctx, queries, repoUUID, payload); err != nil {
+			return err
+		}
+	case "pull_request_review":
+		if err := r.projectPullRequest(ctx, queries, repoUUID, payload); err != nil {
+			return err
+		}
+		if err := r.projectReview(ctx, queries, repoUUID, payload); err != nil {
+			return err
+		}
+	case "push":
+		if err := r.projectPushCommits(ctx, tx, repoUUID, payload); err != nil {
+			return err
+		}
+	case "workflow_run":
+		if err := r.projectWorkflowRun(ctx, tx, repoUUID, payload); err != nil {
+			return err
+		}
+	case "deployment", "deployment_status":
+		if err := r.projectDeployment(ctx, tx, repoUUID, payload); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit webhook projection transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) projectPullRequest(ctx context.Context, queries *sqlcgen.Queries, repositoryID pgtype.UUID, payload payloadEnvelope) error {
+	if payload.PullRequest.ID < 1 {
+		return nil
+	}
+	createdAt := payload.PullRequest.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	author := strings.TrimSpace(payload.PullRequest.User.Login)
+	if author == "" {
+		author = "unknown"
+	}
+	title := strings.TrimSpace(payload.PullRequest.Title)
+	if title == "" {
+		title = fmt.Sprintf("PR #%d", payload.PullRequest.Number)
+	}
+	state := strings.TrimSpace(payload.PullRequest.State)
+	if state == "" {
+		state = "open"
+	}
+	_, err := queries.UpsertPullRequest(ctx, sqlcgen.UpsertPullRequestParams{
+		ID:           newUUID(),
+		RepositoryID: repositoryID,
+		GithubPrID:   payload.PullRequest.ID,
+		Number:       int32(payload.PullRequest.Number),
+		Title:        title,
+		Author:       author,
+		State:        state,
+		CreatedAt:    toNullableTimestamp(&createdAt),
+		MergedAt:     toNullableTimestamp(payload.PullRequest.MergedAt),
+		ClosedAt:     toNullableTimestamp(payload.PullRequest.ClosedAt),
+		Additions:    int32(payload.PullRequest.Additions),
+		Deletions:    int32(payload.PullRequest.Deletions),
+		FilesChanged: int32(payload.PullRequest.ChangedFiles),
+		IsDraft:      payload.PullRequest.Draft,
+	})
+	if err != nil {
+		return fmt.Errorf("project pull request: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) projectReview(ctx context.Context, queries *sqlcgen.Queries, repositoryID pgtype.UUID, payload payloadEnvelope) error {
+	if payload.PullRequest.ID < 1 || payload.Review.ID < 1 {
+		return nil
+	}
+	pullRequestID, err := queries.UpsertPullRequest(ctx, sqlcgen.UpsertPullRequestParams{
+		ID:           newUUID(),
+		RepositoryID: repositoryID,
+		GithubPrID:   payload.PullRequest.ID,
+		Number:       int32(payload.PullRequest.Number),
+		Title:        fallbackString(strings.TrimSpace(payload.PullRequest.Title), fmt.Sprintf("PR #%d", payload.PullRequest.Number)),
+		Author:       fallbackString(strings.TrimSpace(payload.PullRequest.User.Login), "unknown"),
+		State:        fallbackString(strings.TrimSpace(payload.PullRequest.State), "open"),
+		CreatedAt:    toNullableTimestamp(timeOrNow(payload.PullRequest.CreatedAt)),
+		MergedAt:     toNullableTimestamp(payload.PullRequest.MergedAt),
+		ClosedAt:     toNullableTimestamp(payload.PullRequest.ClosedAt),
+		Additions:    int32(payload.PullRequest.Additions),
+		Deletions:    int32(payload.PullRequest.Deletions),
+		FilesChanged: int32(payload.PullRequest.ChangedFiles),
+		IsDraft:      payload.PullRequest.Draft,
+	})
+	if err != nil {
+		return fmt.Errorf("ensure pull request before review projection: %w", err)
+	}
+	if err := queries.UpsertPullRequestReview(ctx, sqlcgen.UpsertPullRequestReviewParams{
+		ID:                newUUID(),
+		PullRequestID:     pullRequestID,
+		GithubReviewID:    payload.Review.ID,
+		Reviewer:          fallbackString(strings.TrimSpace(payload.Review.User.Login), "unknown"),
+		ReviewRequestedAt: pgtype.Timestamptz{},
+		FirstReviewAt:     toNullableTimestamp(payload.Review.SubmittedAt),
+		ReviewSubmittedAt: toNullableTimestamp(payload.Review.SubmittedAt),
+		State:             fallbackString(strings.TrimSpace(payload.Review.State), "commented"),
+	}); err != nil {
+		return fmt.Errorf("project pull request review: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) projectPushCommits(ctx context.Context, tx pgx.Tx, repositoryID pgtype.UUID, payload payloadEnvelope) error {
+	for _, commit := range payload.Commits {
+		if strings.TrimSpace(commit.ID) == "" {
+			continue
+		}
+		authoredAt := time.Now().UTC()
+		if commit.Timestamp != nil && !commit.Timestamp.IsZero() {
+			authoredAt = commit.Timestamp.UTC()
+		}
+		author := strings.TrimSpace(commit.Author.Name)
+		if author == "" {
+			author = strings.TrimSpace(commit.Author.Username)
+		}
+		if author == "" {
+			author = "unknown"
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO commit_events (
+				id, repository_id, github_commit_sha, author, author_email, message, authored_at, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, NOW(), NOW()
+			)
+			ON CONFLICT (github_commit_sha) DO UPDATE SET
+				author = EXCLUDED.author,
+				author_email = EXCLUDED.author_email,
+				message = EXCLUDED.message,
+				authored_at = EXCLUDED.authored_at,
+				updated_at = NOW()`,
+			newUUID(),
+			repositoryID,
+			strings.TrimSpace(commit.ID),
+			author,
+			nullableString(strings.TrimSpace(commit.Author.Email)),
+			fallbackString(strings.TrimSpace(commit.Message), strings.TrimSpace(commit.ID)),
+			toNullableTimestamp(&authoredAt),
+		); err != nil {
+			return fmt.Errorf("project push commit %s: %w", commit.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *Repository) projectWorkflowRun(ctx context.Context, tx pgx.Tx, repositoryID pgtype.UUID, payload payloadEnvelope) error {
+	if payload.WorkflowRun.ID < 1 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO workflow_events (
+			id, repository_id, github_workflow_run_id, workflow_name, status, conclusion, started_at, completed_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+		)
+		ON CONFLICT (github_workflow_run_id) DO UPDATE SET
+			workflow_name = EXCLUDED.workflow_name,
+			status = EXCLUDED.status,
+			conclusion = EXCLUDED.conclusion,
+			started_at = EXCLUDED.started_at,
+			completed_at = EXCLUDED.completed_at,
+			updated_at = NOW()`,
+		newUUID(),
+		repositoryID,
+		payload.WorkflowRun.ID,
+		fallbackString(strings.TrimSpace(payload.WorkflowRun.Name), fmt.Sprintf("workflow-%d", payload.WorkflowRun.ID)),
+		fallbackString(strings.TrimSpace(payload.WorkflowRun.Status), "queued"),
+		nullableString(strings.TrimSpace(payload.WorkflowRun.Conclusion)),
+		toNullableTimestamp(payload.WorkflowRun.RunStartedAt),
+		toNullableTimestamp(workflowCompletedAt(payload.WorkflowRun.Conclusion, payload.WorkflowRun.UpdatedAt)),
+	)
+	if err != nil {
+		return fmt.Errorf("project workflow run: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) projectDeployment(ctx context.Context, tx pgx.Tx, repositoryID pgtype.UUID, payload payloadEnvelope) error {
+	if payload.Deployment.ID < 1 {
+		return nil
+	}
+	deployedAt := payload.DeploymentStatus.UpdatedAt
+	if deployedAt.IsZero() {
+		deployedAt = payload.DeploymentStatus.CreatedAt
+	}
+	if deployedAt.IsZero() {
+		deployedAt = payload.Deployment.UpdatedAt
+	}
+	if deployedAt.IsZero() {
+		deployedAt = payload.Deployment.CreatedAt
+	}
+	if deployedAt.IsZero() {
+		deployedAt = time.Now().UTC()
+	}
+	status := strings.TrimSpace(payload.DeploymentStatus.State)
+	if status == "" {
+		status = strings.TrimSpace(payload.Action)
+	}
+	if status == "" {
+		status = "pending"
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO deployments (
+			id, repository_id, github_deployment_id, environment, status, deployed_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6
+		)
+		ON CONFLICT (github_deployment_id) DO UPDATE SET
+			environment = EXCLUDED.environment,
+			status = EXCLUDED.status,
+			deployed_at = EXCLUDED.deployed_at`,
+		newUUID(),
+		repositoryID,
+		payload.Deployment.ID,
+		fallbackString(strings.TrimSpace(payload.Deployment.Environment), "production"),
+		status,
+		toNullableTimestamp(&deployedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("project deployment: %w", err)
+	}
+	return nil
 }
 
 type webhookDeliveryLifecycle struct {
@@ -391,6 +651,37 @@ func toNullableTimestamp(value *time.Time) pgtype.Timestamptz {
 		return pgtype.Timestamptz{}
 	}
 	return pgtype.Timestamptz{Time: value.UTC(), Valid: true}
+}
+
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
+}
+
+func fallbackString(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+func timeOrNow(value time.Time) *time.Time {
+	if value.IsZero() {
+		now := time.Now().UTC()
+		return &now
+	}
+	utc := value.UTC()
+	return &utc
+}
+
+func workflowCompletedAt(conclusion string, updatedAt time.Time) *time.Time {
+	if strings.TrimSpace(conclusion) == "" || updatedAt.IsZero() {
+		return nil
+	}
+	utc := updatedAt.UTC()
+	return &utc
 }
 
 func processedAtForStatus(status string, now time.Time) pgtype.Timestamptz {

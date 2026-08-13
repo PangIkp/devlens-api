@@ -58,6 +58,21 @@ func TestRepositoryEnqueueWebhookSyncIsIdempotentForDuplicateDelivery(t *testing
 	if syncJobCount != 1 {
 		t.Fatalf("expected exactly one sync job for duplicate delivery, got %d", syncJobCount)
 	}
+
+	var syncMode string
+	if err := db.Pool().QueryRow(ctx, `
+		SELECT checkpoint_value
+		FROM sync_checkpoints
+		WHERE sync_job_id = $1
+		  AND resource_type = 'job'
+		  AND checkpoint_key = 'mode'`,
+		parseUUID(*first.syncJobID),
+	).Scan(&syncMode); err != nil {
+		t.Fatalf("load webhook sync mode checkpoint: %v", err)
+	}
+	if syncMode != "full" {
+		t.Fatalf("expected webhook sync mode to be full, got %q", syncMode)
+	}
 }
 
 func TestRepositorySchedulesAndListsRetryableDeliveries(t *testing.T) {

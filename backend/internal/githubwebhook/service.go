@@ -16,6 +16,7 @@ import (
 type store interface {
 	FindRepositoryByGithubID(context.Context, int64) (*repositoryMatch, error)
 	EnqueueWebhookSync(context.Context, *string, *int64, string, string, *string, []byte, bool) (enqueueResult, error)
+	ProjectRepositoryEvent(context.Context, string, string, payloadEnvelope) error
 	MarkDeliveryStatus(context.Context, string, string, *string, *time.Time) error
 	GetStoredDelivery(context.Context, string) (*StoredDelivery, error)
 	ScheduleRetry(context.Context, string, string, int, time.Time, time.Time) error
@@ -80,6 +81,13 @@ func (s *Service) Handle(ctx context.Context, req HandleRequest) (HandleResult, 
 	}
 
 	if !result.duplicate {
+		if repositoryID != nil && isSupportedEvent(req.EventType) {
+			if err := s.store.ProjectRepositoryEvent(ctx, *repositoryID, req.EventType, payload); err != nil {
+				_ = s.scheduleRetryFailure(ctx, req.DeliveryID, 0, err)
+				s.recordWebhookDelay(req.EventType, "failed", result.receivedAt)
+				return HandleResult{}, err
+			}
+		}
 		if err := s.processPersistedDelivery(ctx, req.DeliveryID, req.EventType, payload.Action, installationID); err != nil {
 			_ = s.scheduleRetryFailure(ctx, req.DeliveryID, 0, err)
 			s.recordWebhookDelay(req.EventType, "failed", result.receivedAt)
@@ -111,6 +119,18 @@ func (s *Service) Retry(ctx context.Context, deliveryID string) (HandleResult, e
 	}
 	if stored.ProcessingStatus != "failed" {
 		return HandleResult{}, ErrRetryNotAllowed
+	}
+
+	if stored.RepositoryID != nil && isSupportedEvent(stored.EventType) {
+		payload, err := parsePayload(stored.Payload)
+		if err != nil {
+			return HandleResult{}, err
+		}
+		if err := s.store.ProjectRepositoryEvent(ctx, *stored.RepositoryID, stored.EventType, payload); err != nil {
+			_ = s.scheduleRetryFailure(ctx, stored.DeliveryID, stored.RetryCount, err)
+			s.recordWebhookDelay(stored.EventType, "failed", stored.ReceivedAt)
+			return HandleResult{}, err
+		}
 	}
 
 	if err := s.processPersistedDelivery(ctx, stored.DeliveryID, stored.EventType, valueOrEmpty(stored.Action), stored.InstallationID); err != nil {
