@@ -19,6 +19,7 @@ servers:
 
 tags:
   - name: Health
+  - name: Auth
   - name: Users
   - name: Organizations
   - name: GitHub Connections
@@ -37,15 +38,74 @@ security:
   - bearerAuth: []
 
 paths:
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Create a user session
+      description: Creates or updates a user record by email and returns an access token plus refresh token for the new session.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: Refresh an existing session
+      operationId: refreshSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshSessionRequest"
+      responses:
+        "200":
+          description: Session refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Revoke the current session
+      operationId: logout
+      responses:
+        "204":
+          description: Session revoked successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /me:
     get:
       tags:
         - Users
       summary: Get current user profile
-      description: Authentication is deferred in the current milestone, so `userId` is provided as a query parameter.
+      description: Returns the currently authenticated user profile.
       operationId: getMe
-      parameters:
-        - $ref: "#/components/parameters/UserId"
       responses:
         "200":
           description: Current user profile
@@ -53,8 +113,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MeResponse"
-        "400":
-          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1218,7 +1278,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: opaque
 
   parameters:
     OrganizationId:
@@ -2018,6 +2078,60 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/UserProfile"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+
+    RefreshSessionRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+
+    SessionPayload:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+        - tokenType
+        - expiresAt
+        - refreshExpiresAt
+        - user
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresAt:
+          type: string
+          format: date-time
+        refreshExpiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: "#/components/schemas/UserProfile"
+
+    SessionResponse:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: "#/components/schemas/SessionPayload"
 
     PullRequestReview:
       type: object

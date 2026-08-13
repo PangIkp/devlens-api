@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/auth"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/userprofile"
 	"github.com/go-chi/chi/v5"
 )
@@ -23,11 +24,20 @@ func NewMeHandler(service MeService) *MeHandler {
 }
 
 func (h *MeHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/me", h.get)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.Get("/me", h.get)
+	})
 }
 
 func (h *MeHandler) get(w http.ResponseWriter, r *http.Request) {
-	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		WriteError(w, r, http.StatusUnauthorized, NewUnauthorizedError("Authentication required"))
+		return
+	}
+
+	userID := principal.User.ID
 	item, err := h.service.Get(r.Context(), userID)
 	if err != nil {
 		writeMeError(w, r, err)

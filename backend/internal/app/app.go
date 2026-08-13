@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 	"github.com/PangIkp/devlens/backend/internal/config"
 	"github.com/PangIkp/devlens/backend/internal/githubapp"
@@ -67,6 +69,9 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	organizationRepository := organization.NewRepository(postgresDB)
 	organizationService := organization.NewService(organizationRepository)
 	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
+	authRepository := auth.NewRepository(postgresDB)
+	authService := auth.NewService(authRepository, 15*time.Minute, 30*24*time.Hour)
+	authHandler := httpapi.NewAuthHandler(authService)
 	userRepository := userprofile.NewRepository(postgresDB)
 	userService := userprofile.NewService(userRepository)
 	meHandler := httpapi.NewMeHandler(userService)
@@ -132,6 +137,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:            postgresDB,
 		ClickHouse:          clickhouseHealthChecker,
+		Auth:                authHandler,
+		Authenticator:       authService,
 		Me:                  meHandler,
 		Organizations:       organizationHandler,
 		OrganizationMembers: organizationMemberHandler,

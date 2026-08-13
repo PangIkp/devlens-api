@@ -21,6 +21,8 @@ type ClickHouseHealthChecker interface {
 type Dependencies struct {
 	Postgres            PostgresHealthChecker
 	ClickHouse          ClickHouseHealthChecker
+	Auth                *AuthHandler
+	Authenticator       middleware.Authenticator
 	Organizations       *OrganizationHandler
 	OrganizationMembers *OrganizationMemberHandler
 	Me                  *MeHandler
@@ -39,6 +41,7 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.Recoverer(logger))
 	router.Use(middleware.RequestLogger(logger))
+	router.Use(middleware.OptionalAuth(deps.Authenticator))
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, http.StatusNotFound, Error{
@@ -57,6 +60,9 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
 		r.Get("/readiness", NewReadinessHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
+		if deps.Auth != nil {
+			deps.Auth.RegisterRoutes(r)
+		}
 		if deps.Me != nil {
 			deps.Me.RegisterRoutes(r)
 		}

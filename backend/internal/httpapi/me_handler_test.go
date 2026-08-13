@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/userprofile"
 	"github.com/go-chi/chi/v5"
 )
@@ -38,11 +40,48 @@ func TestMeHandlerGet(t *testing.T) {
 	router := chi.NewRouter()
 	handler.RegisterRoutes(router)
 
-	req := httptest.NewRequest(http.MethodGet, "/me?userId=8f1cd971-1fd9-4f4f-9f75-47f6ed14938d", nil)
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), auth.SessionPrincipal{
+		SessionID: "5b92a80c-ef85-4f3f-90bd-d506e9ab7a9d",
+		User: auth.User{
+			ID: "8f1cd971-1fd9-4f4f-9f75-47f6ed14938d",
+		},
+	}))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestMeHandlerGetUnauthorizedWithoutPrincipal(t *testing.T) {
+	t.Parallel()
+
+	handler := NewMeHandler(stubMeService{
+		getFn: func(_ context.Context, _ string) (userprofile.Response, error) {
+			t.Fatal("service should not be called")
+			return userprofile.Response{}, nil
+		},
+	})
+
+	router := chi.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Error.Code != ErrorCodeUnauthorized {
+		t.Fatalf("expected %s, got %s", ErrorCodeUnauthorized, body.Error.Code)
 	}
 }
