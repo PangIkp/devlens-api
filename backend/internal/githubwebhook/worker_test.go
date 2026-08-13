@@ -29,7 +29,7 @@ func TestWorkerRunsRetryLoopImmediatelyAndOnInterval(t *testing.T) {
 	t.Parallel()
 
 	processor := &stubRetryProcessor{callCh: make(chan int, 4)}
-	worker := NewWorker(slog.New(slog.NewTextHandler(io.Discard, nil)), processor, 10*time.Millisecond, nil)
+	worker := NewWorker(slog.New(slog.NewTextHandler(io.Discard, nil)), processor, 10*time.Millisecond, 10, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

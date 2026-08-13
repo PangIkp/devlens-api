@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -526,6 +527,98 @@ func TestRetrySchedulesNextAttemptWhenReprocessingFails(t *testing.T) {
 	}
 	if !gotNextRetryAt.Equal(now.Add(2 * time.Minute)) {
 		t.Fatalf("unexpected next retry at %s", gotNextRetryAt)
+	}
+}
+
+func TestRetryMarksDeadLetterAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 13, 11, 0, 0, 0, time.UTC)
+	var markedStatus string
+
+	service := NewService(stubStore{
+		getStoredDeliveryFn: func(_ context.Context, deliveryID string) (*StoredDelivery, error) {
+			action := "created"
+			installationID := int64(77)
+			return &StoredDelivery{
+				DeliveryID:       deliveryID,
+				EventType:        "installation",
+				Action:           &action,
+				InstallationID:   &installationID,
+				ProcessingStatus: "failed",
+				RetryCount:       4,
+				ReceivedAt:       now.Add(-time.Minute),
+			}, nil
+		},
+		markStatusFn: func(_ context.Context, deliveryID string, status string, message *string, processedAt *time.Time) error {
+			if deliveryID != "delivery-dead" {
+				t.Fatalf("unexpected delivery id %q", deliveryID)
+			}
+			markedStatus = status
+			if message == nil || *message == "" {
+				t.Fatal("expected dead-letter message")
+			}
+			return nil
+		},
+	}, "top-secret", stubInstallationHandler{
+		handleFn: func(context.Context, string, int64, string) error {
+			return errors.New("permanent retry failure")
+		},
+	}, nil)
+	service.now = func() time.Time { return now }
+
+	_, err := service.Retry(context.Background(), "delivery-dead")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if markedStatus != "dead_letter" {
+		t.Fatalf("expected dead_letter status, got %q", markedStatus)
+	}
+}
+
+func TestRetryFailedPendingHonorsConfiguredConcurrency(t *testing.T) {
+	t.Parallel()
+
+	var active int32
+	var maxActive int32
+	service := NewService(stubStore{
+		listRetryableFn: func(_ context.Context, limit int, _ time.Time) ([]string, error) {
+			return []string{"delivery-1", "delivery-2", "delivery-3"}, nil
+		},
+		getStoredDeliveryFn: func(_ context.Context, deliveryID string) (*StoredDelivery, error) {
+			action := "completed"
+			repositoryID := "repo-1"
+			return &StoredDelivery{
+				DeliveryID:       deliveryID,
+				EventType:        "workflow_run",
+				Action:           &action,
+				RepositoryID:     &repositoryID,
+				Payload:          []byte(`{"action":"completed","repository":{"id":42},"workflow_run":{"id":77,"name":"CI","status":"completed","conclusion":"success","created_at":"2026-08-12T23:00:00Z","updated_at":"2026-08-12T23:01:00Z"}}`),
+				ProcessingStatus: "failed",
+				ReceivedAt:       time.Now().UTC(),
+			}, nil
+		},
+		projectRepositoryEventFn: func(_ context.Context, _ string, _ string, _ payloadEnvelope) error {
+			current := atomic.AddInt32(&active, 1)
+			for {
+				seen := atomic.LoadInt32(&maxActive)
+				if current <= seen || atomic.CompareAndSwapInt32(&maxActive, seen, current) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			atomic.AddInt32(&active, -1)
+			return nil
+		},
+		markStatusFn: func(context.Context, string, string, *string, *time.Time) error { return nil },
+	}, "top-secret", nil, nil)
+	service.ConfigureRetryProcessing(2, time.Second)
+
+	if err := service.RetryFailedPending(context.Background(), 3); err != nil {
+		t.Fatalf("retry failed pending: %v", err)
+	}
+	if maxActive > 2 {
+		t.Fatalf("expected webhook retry concurrency <= 2, got %d", maxActive)
 	}
 }
 

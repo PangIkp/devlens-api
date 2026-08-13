@@ -20,6 +20,7 @@ import (
 const (
 	streamName   = "METRICS"
 	subjectName  = "repository.sync.completed"
+	dlqSubject   = "repository.sync.completed.dlq"
 	durableName  = "metrics-calculator"
 	ackWait      = 30 * time.Second
 	maxDeliver   = 5
@@ -236,6 +237,15 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 		}
 		c.recordLag()
 		span.SetStatus(codes.Error, err.Error())
+		if shouldDeadLetter(msg) {
+			if dlqErr := c.publishDeadLetter(msg, err); dlqErr != nil {
+				c.logger.Error("publish dead-letter failed", "error", dlqErr)
+				_ = msg.Nak()
+				return
+			}
+			_ = msg.Ack()
+			return
+		}
 		_ = msg.Nak()
 		return
 	}
@@ -277,7 +287,7 @@ func (c *Client) ensureStream() error {
 
 	_, err = c.js.AddStream(&nats.StreamConfig{
 		Name:      streamName,
-		Subjects:  []string{subjectName},
+		Subjects:  []string{subjectName, dlqSubject},
 		Retention: nats.LimitsPolicy,
 		Storage:   nats.FileStorage,
 	})
@@ -285,5 +295,43 @@ func (c *Client) ensureStream() error {
 		return fmt.Errorf("create metrics stream: %w", err)
 	}
 
+	return nil
+}
+
+func shouldDeadLetter(msg *nats.Msg) bool {
+	if msg == nil {
+		return false
+	}
+	meta, err := msg.Metadata()
+	if err != nil || meta == nil {
+		return false
+	}
+	return meta.NumDelivered >= maxDeliver
+}
+
+func (c *Consumer) publishDeadLetter(msg *nats.Msg, reason error) error {
+	if c == nil || c.js == nil || msg == nil {
+		return fmt.Errorf("metrics dead-letter publisher is not configured")
+	}
+	headers := nats.Header{}
+	for key, values := range msg.Header {
+		copyValues := append([]string(nil), values...)
+		headers[key] = copyValues
+	}
+	headers.Set("X-DevLens-DLQ-Reason", reason.Error())
+	if meta, err := msg.Metadata(); err == nil && meta != nil {
+		headers.Set("X-DevLens-DLQ-Deliveries", fmt.Sprintf("%d", meta.NumDelivered))
+	}
+	_, err := c.js.PublishMsg(&nats.Msg{
+		Subject: dlqSubject,
+		Data:    msg.Data,
+		Header:  headers,
+	})
+	if err != nil {
+		return fmt.Errorf("publish dead-letter message: %w", err)
+	}
+	if c.metrics != nil {
+		c.metrics.RecordQueuePublish("metricsbus", dlqSubject, "ok")
+	}
 	return nil
 }

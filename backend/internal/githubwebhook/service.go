@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/observability"
 )
+
+const maxWebhookRetries = 5
 
 type store interface {
 	FindRepositoryByGithubID(context.Context, int64) (*repositoryMatch, error)
@@ -33,6 +36,8 @@ type Service struct {
 	installations installationEventHandler
 	now           func() time.Time
 	metrics       *observability.Metrics
+	retryConcurrency int
+	retryTimeout     time.Duration
 }
 
 func NewService(store store, webhookSecret string, installations installationEventHandler, metrics *observability.Metrics) *Service {
@@ -42,6 +47,17 @@ func NewService(store store, webhookSecret string, installations installationEve
 		installations: installations,
 		now:           time.Now,
 		metrics:       metrics,
+		retryConcurrency: 1,
+		retryTimeout:     30 * time.Second,
+	}
+}
+
+func (s *Service) ConfigureRetryProcessing(concurrency int, timeout time.Duration) {
+	if concurrency > 0 {
+		s.retryConcurrency = concurrency
+	}
+	if timeout > 0 {
+		s.retryTimeout = timeout
 	}
 }
 
@@ -162,8 +178,37 @@ func (s *Service) RetryFailedPending(ctx context.Context, limit int) error {
 	if err != nil {
 		return err
 	}
+	if len(ids) == 0 {
+		return nil
+	}
+	concurrency := s.retryConcurrency
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+	errCh := make(chan error, len(ids))
+	var wg sync.WaitGroup
 	for _, id := range ids {
-		_, _ = s.Retry(ctx, id)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(deliveryID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			retryCtx := ctx
+			if s.retryTimeout > 0 {
+				var cancel context.CancelFunc
+				retryCtx, cancel = context.WithTimeout(ctx, s.retryTimeout)
+				defer cancel()
+			}
+			if _, err := s.Retry(retryCtx, deliveryID); err != nil {
+				errCh <- err
+			}
+		}(id)
+	}
+	wg.Wait()
+	close(errCh)
+	for range errCh {
 	}
 	return nil
 }
@@ -266,8 +311,13 @@ func valueOrEmpty(value *string) string {
 
 func (s *Service) scheduleRetryFailure(ctx context.Context, deliveryID string, retryCount int, err error) error {
 	failedAt := s.now().UTC()
-	nextRetryAt := failedAt.Add(retryDelayForAttempt(retryCount + 1))
-	return s.store.ScheduleRetry(ctx, deliveryID, err.Error(), retryCount+1, failedAt, nextRetryAt)
+	attempt := retryCount + 1
+	if attempt >= maxWebhookRetries {
+		message := err.Error()
+		return s.store.MarkDeliveryStatus(ctx, deliveryID, "dead_letter", &message, &failedAt)
+	}
+	nextRetryAt := failedAt.Add(retryDelayForAttempt(attempt))
+	return s.store.ScheduleRetry(ctx, deliveryID, err.Error(), attempt, failedAt, nextRetryAt)
 }
 
 func retryDelayForAttempt(attempt int) time.Duration {

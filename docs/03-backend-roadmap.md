@@ -164,23 +164,25 @@
 ### Queue Subjects
 
 ```text
-github.sync.requested
-github.sync.repository
-github.sync.pull_requests
-github.sync.reviews
-github.sync.workflows
-github.sync.deployments
+repository.sync.completed
+repository.sync.completed.dlq
 metrics.calculate
 insights.generate
 ```
 
+หมายเหตุ:
+
+- sync orchestration หลักของ backend ปัจจุบันใช้ PostgreSQL-backed `sync_jobs` และ polling workers
+- NATS JetStream ใช้สำหรับ downstream asynchronous workloads หลัง sync เสร็จ เช่น metric recalculation และงาน derived processing อื่น
+- หากภายหน้าจะย้าย sync ทั้ง flow ไป event-driven queue เต็มรูปแบบ ค่อยแตก subject เพิ่มตาม stage ที่ต้องการจริง
+
 ### Worker
 
-- [ ] กำหนด Consumer Group
+- [ ] กำหนด Consumer Group สำหรับ NATS consumers ที่ใช้งานจริง
 - [ ] จำกัด Worker Concurrency
-- [ ] Ack เมื่อบันทึกข้อมูลสำเร็จ
-- [ ] Nak หรือ Retry เมื่อเกิด Temporary Error
-- [ ] Dead-letter Subject
+- [ ] Ack เมื่อบันทึกข้อมูลสำเร็จใน NATS consumers ที่ใช้งานจริง
+- [ ] Nak หรือ Retry เมื่อเกิด Temporary Error ใน NATS consumers ที่ใช้งานจริง
+- [ ] Dead-letter Subject สำหรับ asynchronous workloads ที่วิ่งผ่าน NATS
 - [ ] Job Timeout
 - [ ] Idempotency Key
 - [ ] Structured Error
@@ -197,7 +199,7 @@ insights.generate
 - [ ] อ่าน `X-GitHub-Event`
 - [ ] ตอบ GitHub ให้เร็ว
 - [ ] บันทึก Delivery ID ป้องกัน Event ซ้ำ
-- [ ] ส่ง Event เข้า NATS
+- [ ] บันทึก webhook delivery และ enqueue/retry processing ผ่าน PostgreSQL-backed workflow
 - [ ] เก็บ Raw Payload ตาม Data Retention
 
 ### Events

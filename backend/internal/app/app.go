@@ -129,14 +129,16 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient, appMetrics)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
 	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient, appMetrics)
+	syncJobService.ConfigureRateLimitThrottle(cfg.Sync.GitHubRateLimitRemaining)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
-	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, appMetrics)
+	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, cfg.Sync.WorkerBatchSize, cfg.Sync.WorkerConcurrency, cfg.Sync.JobTimeout, appMetrics)
 	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
 	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
 	webhookRepository := githubwebhook.NewRepository(postgresDB)
 	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService, appMetrics)
+	webhookService.ConfigureRetryProcessing(cfg.Sync.WebhookRetryConcurrency, cfg.Sync.WebhookRetryTimeout)
 	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, auditService)
-	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, appMetrics)
+	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, cfg.Sync.WebhookRetryBatchSize, appMetrics)
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer

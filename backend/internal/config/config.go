@@ -86,8 +86,15 @@ type NATSConfig struct {
 }
 
 type SyncConfig struct {
-	WorkerPollInterval   time.Duration
-	WebhookRetryInterval time.Duration
+	WorkerPollInterval        time.Duration
+	WorkerBatchSize           int
+	WorkerConcurrency         int
+	JobTimeout                time.Duration
+	WebhookRetryInterval      time.Duration
+	WebhookRetryBatchSize     int
+	WebhookRetryConcurrency   int
+	WebhookRetryTimeout       time.Duration
+	GitHubRateLimitRemaining  int
 }
 
 type TracingConfig struct {
@@ -191,7 +198,35 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	syncWorkerBatchSize, err := getInt("SYNC_WORKER_BATCH_SIZE", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	syncWorkerConcurrency, err := getInt("SYNC_WORKER_CONCURRENCY", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	syncJobTimeout, err := getDuration("SYNC_JOB_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 	webhookRetryInterval, err := getDuration("WEBHOOK_RETRY_INTERVAL", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryBatchSize, err := getInt("WEBHOOK_RETRY_BATCH_SIZE", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryConcurrency, err := getInt("WEBHOOK_RETRY_CONCURRENCY", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryTimeout, err := getDuration("WEBHOOK_RETRY_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	githubRateLimitRemaining, err := getInt("GITHUB_RATE_LIMIT_MIN_REMAINING", 100)
 	if err != nil {
 		return Config{}, err
 	}
@@ -260,8 +295,15 @@ func Load() (Config, error) {
 			URL: getEnv("NATS_URL", "nats://localhost:4222"),
 		},
 		Sync: SyncConfig{
-			WorkerPollInterval:   syncWorkerPollInterval,
-			WebhookRetryInterval: webhookRetryInterval,
+			WorkerPollInterval:       syncWorkerPollInterval,
+			WorkerBatchSize:          syncWorkerBatchSize,
+			WorkerConcurrency:        syncWorkerConcurrency,
+			JobTimeout:               syncJobTimeout,
+			WebhookRetryInterval:     webhookRetryInterval,
+			WebhookRetryBatchSize:    webhookRetryBatchSize,
+			WebhookRetryConcurrency:  webhookRetryConcurrency,
+			WebhookRetryTimeout:      webhookRetryTimeout,
+			GitHubRateLimitRemaining: githubRateLimitRemaining,
 		},
 		Tracing: TracingConfig{
 			Enabled:          getBool("OTEL_ENABLED", false),
@@ -342,9 +384,30 @@ func Load() (Config, error) {
 	if cfg.Sync.WorkerPollInterval <= 0 {
 		return Config{}, fmt.Errorf("SYNC_WORKER_POLL_INTERVAL must be greater than 0")
 	}
+	if cfg.Sync.WorkerBatchSize <= 0 {
+		return Config{}, fmt.Errorf("SYNC_WORKER_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.Sync.WorkerConcurrency <= 0 {
+		return Config{}, fmt.Errorf("SYNC_WORKER_CONCURRENCY must be greater than 0")
+	}
+	if cfg.Sync.JobTimeout <= 0 {
+		return Config{}, fmt.Errorf("SYNC_JOB_TIMEOUT must be greater than 0")
+	}
 
 	if cfg.Sync.WebhookRetryInterval <= 0 {
 		return Config{}, fmt.Errorf("WEBHOOK_RETRY_INTERVAL must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryBatchSize <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryConcurrency <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_CONCURRENCY must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryTimeout <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_TIMEOUT must be greater than 0")
+	}
+	if cfg.Sync.GitHubRateLimitRemaining < 0 {
+		return Config{}, fmt.Errorf("GITHUB_RATE_LIMIT_MIN_REMAINING must be greater than or equal to 0")
 	}
 
 	if cfg.ClickHouse.Timeout <= 0 {

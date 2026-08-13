@@ -16,7 +16,14 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	t.Setenv("GITHUB_APP_ID", "12345")
 	t.Setenv("GITHUB_APP_INSTALL_URL", "https://github.com/apps/devlens/installations/new")
 	t.Setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----")
+	t.Setenv("SYNC_WORKER_BATCH_SIZE", "20")
+	t.Setenv("SYNC_WORKER_CONCURRENCY", "4")
+	t.Setenv("SYNC_JOB_TIMEOUT", "2m")
 	t.Setenv("WEBHOOK_RETRY_INTERVAL", "15s")
+	t.Setenv("WEBHOOK_RETRY_BATCH_SIZE", "8")
+	t.Setenv("WEBHOOK_RETRY_CONCURRENCY", "3")
+	t.Setenv("WEBHOOK_RETRY_TIMEOUT", "45s")
+	t.Setenv("GITHUB_RATE_LIMIT_MIN_REMAINING", "75")
 
 	cfg, err := Load()
 	if err != nil {
@@ -56,6 +63,27 @@ func TestLoadGitHubConfigFromEnv(t *testing.T) {
 	if cfg.Sync.WebhookRetryInterval != 15*time.Second {
 		t.Fatalf("unexpected webhook retry interval %s", cfg.Sync.WebhookRetryInterval)
 	}
+	if cfg.Sync.WorkerBatchSize != 20 {
+		t.Fatalf("unexpected worker batch size %d", cfg.Sync.WorkerBatchSize)
+	}
+	if cfg.Sync.WorkerConcurrency != 4 {
+		t.Fatalf("unexpected worker concurrency %d", cfg.Sync.WorkerConcurrency)
+	}
+	if cfg.Sync.JobTimeout != 2*time.Minute {
+		t.Fatalf("unexpected sync job timeout %s", cfg.Sync.JobTimeout)
+	}
+	if cfg.Sync.WebhookRetryBatchSize != 8 {
+		t.Fatalf("unexpected webhook retry batch size %d", cfg.Sync.WebhookRetryBatchSize)
+	}
+	if cfg.Sync.WebhookRetryConcurrency != 3 {
+		t.Fatalf("unexpected webhook retry concurrency %d", cfg.Sync.WebhookRetryConcurrency)
+	}
+	if cfg.Sync.WebhookRetryTimeout != 45*time.Second {
+		t.Fatalf("unexpected webhook retry timeout %s", cfg.Sync.WebhookRetryTimeout)
+	}
+	if cfg.Sync.GitHubRateLimitRemaining != 75 {
+		t.Fatalf("unexpected github rate limit remaining threshold %d", cfg.Sync.GitHubRateLimitRemaining)
+	}
 }
 
 func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
@@ -70,6 +98,15 @@ func TestLoadRejectsInvalidGitHubBackoffWindow(t *testing.T) {
 
 func TestLoadRejectsInvalidWebhookRetryInterval(t *testing.T) {
 	t.Setenv("WEBHOOK_RETRY_INTERVAL", "0s")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadRejectsInvalidWorkerConcurrency(t *testing.T) {
+	t.Setenv("SYNC_WORKER_CONCURRENCY", "0")
 
 	_, err := Load()
 	if err == nil {

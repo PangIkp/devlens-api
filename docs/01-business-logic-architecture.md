@@ -171,9 +171,10 @@ Webhook จะไม่ประมวลผลข้อมูลหนักท
 flowchart LR
     GH[GitHub] -->|REST API| ING[Go Ingestor]
     GH -->|Webhook| WH[Webhook Handler]
-    ING --> NATS[NATS JetStream]
-    WH --> NATS
-    NATS --> SW[Sync Worker]
+    ING --> SW[Sync Worker]
+    WH --> PG[(PostgreSQL)]
+    PG --> SW
+    SW --> NATS[NATS JetStream]
     NATS --> MW[Metric Worker]
     SW --> PG[(PostgreSQL)]
     SW --> CH[(ClickHouse)]

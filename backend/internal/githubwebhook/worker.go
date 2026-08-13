@@ -16,18 +16,23 @@ type retryProcessor interface {
 }
 
 type Worker struct {
-	logger   *slog.Logger
-	service  retryProcessor
-	interval time.Duration
-	metrics  *observability.Metrics
+	logger    *slog.Logger
+	service   retryProcessor
+	interval  time.Duration
+	batchSize int
+	metrics   *observability.Metrics
 }
 
-func NewWorker(logger *slog.Logger, service retryProcessor, interval time.Duration, metrics *observability.Metrics) *Worker {
+func NewWorker(logger *slog.Logger, service retryProcessor, interval time.Duration, batchSize int, metrics *observability.Metrics) *Worker {
+	if batchSize <= 0 {
+		batchSize = 10
+	}
 	return &Worker{
-		logger:   logger,
-		service:  service,
-		interval: interval,
-		metrics:  metrics,
+		logger:    logger,
+		service:   service,
+		interval:  interval,
+		batchSize: batchSize,
+		metrics:   metrics,
 	}
 }
 
@@ -38,7 +43,7 @@ func (w *Worker) Run(ctx context.Context) {
 	for {
 		started := time.Now()
 		iterationCtx, span := otel.Tracer("devlens/webhook-worker").Start(ctx, "githubwebhook.retry_failed_pending")
-		err := w.service.RetryFailedPending(iterationCtx, 10)
+		err := w.service.RetryFailedPending(iterationCtx, w.batchSize)
 		if err != nil {
 			w.logger.Error("webhook retry worker iteration failed", "error", err)
 			if w.metrics != nil {
@@ -53,7 +58,10 @@ func (w *Worker) Run(ctx context.Context) {
 			}
 			span.SetStatus(codes.Ok, "")
 		}
-		span.SetAttributes(attribute.Int64("devlens.webhook.retry_iteration_ms", time.Since(started).Milliseconds()))
+		span.SetAttributes(
+			attribute.Int("devlens.webhook.retry_batch_size", w.batchSize),
+			attribute.Int64("devlens.webhook.retry_iteration_ms", time.Since(started).Milliseconds()),
+		)
 		span.End()
 
 		select {

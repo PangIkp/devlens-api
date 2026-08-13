@@ -41,6 +41,8 @@ type Service struct {
 	publisher    completionPublisher
 	now          func() time.Time
 	metrics      *observability.Metrics
+	sleep        func(context.Context, time.Duration) error
+	minRateLimitRemaining int
 }
 
 var errSyncCanceled = errors.New("sync job canceled")
@@ -62,6 +64,13 @@ func NewService(store store, githubClient githubclient.Client, metrics *observab
 		githubClient: githubClient,
 		now:          time.Now,
 		metrics:      metrics,
+		sleep:        sleepWithContext,
+	}
+}
+
+func (s *Service) ConfigureRateLimitThrottle(minRemaining int) {
+	if minRemaining >= 0 {
+		s.minRateLimitRemaining = minRemaining
 	}
 }
 
@@ -400,6 +409,9 @@ func (s *Service) syncPullRequests(ctx context.Context, jobID string, repository
 		if err != nil {
 			return 0, fmt.Errorf("list pull requests: %w", err)
 		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return 0, err
+		}
 
 		for _, pullRequest := range result.Items {
 			if err := s.ensureNotCanceled(ctx, jobID); err != nil {
@@ -465,6 +477,9 @@ func (s *Service) syncPullRequestFiles(ctx context.Context, jobID string, owner 
 		if err != nil {
 			return nil, fmt.Errorf("list pull request files for pull request %d: %w", pullNumber, err)
 		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return nil, err
+		}
 
 		items = append(items, result.Items...)
 
@@ -499,6 +514,9 @@ func (s *Service) syncReviews(ctx context.Context, jobID string, owner string, r
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list reviews for pull request %d: %w", pullNumber, err)
+		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return nil, err
 		}
 
 		for _, review := range result.Items {
@@ -538,6 +556,9 @@ func (s *Service) syncCommits(ctx context.Context, jobID string, repositoryID st
 		})
 		if err != nil {
 			return 0, fmt.Errorf("list commits: %w", err)
+		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return 0, err
 		}
 
 		for _, commit := range result.Items {
@@ -581,6 +602,9 @@ func (s *Service) syncWorkflowRuns(ctx context.Context, jobID string, repository
 		if err != nil {
 			return 0, fmt.Errorf("list workflow runs: %w", err)
 		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return 0, err
+		}
 
 		for _, run := range result.Items {
 			if !includeWorkflowRun(run, cutoff) {
@@ -623,6 +647,9 @@ func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryI
 		if err != nil {
 			return 0, fmt.Errorf("list deployments: %w", err)
 		}
+		if err := s.maybeThrottleGitHub(ctx, result.RateLimit); err != nil {
+			return 0, err
+		}
 
 		for _, deployment := range result.Items {
 			if !includeDeployment(deployment, cutoff) {
@@ -634,6 +661,9 @@ func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryI
 			})
 			if err != nil {
 				return 0, fmt.Errorf("list deployment statuses for deployment %d: %w", deployment.ID, err)
+			}
+			if err := s.maybeThrottleGitHub(ctx, statuses.RateLimit); err != nil {
+				return 0, err
 			}
 			latestStatus := latestDeploymentStatus(statuses.Items)
 			if latestStatus == nil {
@@ -655,6 +685,34 @@ func (s *Service) syncDeployments(ctx context.Context, jobID string, repositoryI
 			return 0, err
 		}
 		page = result.NextPage
+	}
+}
+
+func (s *Service) maybeThrottleGitHub(ctx context.Context, rate githubclient.RateLimit) error {
+	if s == nil || s.sleep == nil || s.minRateLimitRemaining <= 0 {
+		return nil
+	}
+	if rate.Remaining > s.minRateLimitRemaining {
+		return nil
+	}
+	waitFor := 2 * time.Second
+	if !rate.ResetAt.IsZero() {
+		if untilReset := time.Until(rate.ResetAt); untilReset > 0 {
+			waitFor = untilReset
+		}
+	}
+	return s.sleep(ctx, waitFor)
+}
+
+func sleepWithContext(ctx context.Context, waitFor time.Duration) error {
+	timer := time.NewTimer(waitFor)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

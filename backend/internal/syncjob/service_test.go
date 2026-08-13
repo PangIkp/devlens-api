@@ -648,3 +648,64 @@ func TestServiceListValidation(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestServiceThrottlesWhenGitHubRateLimitIsLow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC)
+	var slept time.Duration
+
+	svc := NewService(stubStore{
+		getByIDFn: func(context.Context, string) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: "job-throttle", RepositoryID: "repo-1", Status: StatusPending, CreatedAt: now}, nil
+		},
+		markRunningFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return repositoryTarget{ID: "repo-1", FullName: "devlens-labs/devlens-api"}, nil
+		},
+		syncRepositoryMetadataFn:  func(context.Context, string, repositoryMetadata, time.Time) error { return nil },
+		upsertPullRequestBundleFn: func(context.Context, pullRequestInput, []pullRequestReviewInput) error { return nil },
+		updateProgressFn: func(_ context.Context, id string, progress int, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: "repo-1", Status: StatusRunning, Progress: progress, CreatedAt: now}, nil
+		},
+		completeFn: func(_ context.Context, id string, repositoryID string, _ time.Time) (SyncJobResponse, error) {
+			return SyncJobResponse{ID: id, RepositoryID: repositoryID, Status: StatusCompleted, Progress: 100, CreatedAt: now}, nil
+		},
+	}, stubGitHubClient{
+		getRepositoryFn: func(context.Context, string, string) (githubclient.Repository, error) {
+			return githubclient.Repository{Name: "devlens-api", FullName: "devlens-labs/devlens-api", DefaultBranch: "main"}, nil
+		},
+		listPullsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.PullRequest], error) {
+			return githubclient.Page[githubclient.PullRequest]{
+				RateLimit: githubclient.RateLimit{
+					Remaining: 10,
+					ResetAt:   now.Add(2 * time.Second),
+				},
+			}, nil
+		},
+		getPullRequestFn: func(context.Context, string, string, int) (githubclient.PullRequest, error) {
+			return githubclient.PullRequest{}, nil
+		},
+		listReviewsFn: func(context.Context, string, string, int, githubclient.ListOptions) (githubclient.Page[githubclient.Review], error) {
+			return githubclient.Page[githubclient.Review]{}, nil
+		},
+		listCommitsFn: func(context.Context, string, string, githubclient.ListOptions) (githubclient.Page[githubclient.Commit], error) {
+			return githubclient.Page[githubclient.Commit]{}, nil
+		},
+	}, nil)
+	svc.ConfigureRateLimitThrottle(100)
+	svc.sleep = func(context.Context, time.Duration) error {
+		slept = 2 * time.Second
+		return nil
+	}
+	svc.now = func() time.Time { return now }
+
+	if _, err := svc.ProcessPending(context.Background(), "job-throttle"); err != nil {
+		t.Fatalf("process pending: %v", err)
+	}
+	if slept == 0 {
+		t.Fatal("expected throttling sleep")
+	}
+}
