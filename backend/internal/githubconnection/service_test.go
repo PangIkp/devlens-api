@@ -19,6 +19,7 @@ type stubStore struct {
 	upsertFn          func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
 	updateLifeFn      func(context.Context, int64, string, *time.Time, *time.Time) error
 	replaceFn         func(context.Context, string, []accessibleRepositoryRecord) error
+	clearSelectionsFn func(context.Context, string) error
 	listFn            func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error)
 	getReposFn        func(context.Context, string, []int64) ([]accessibleRepositoryRecord, error)
 	linkFn            func(context.Context, string, int64, bool) (string, error)
@@ -42,6 +43,9 @@ func (s stubStore) UpdateInstallationLifecycle(ctx context.Context, installation
 }
 func (s stubStore) ReplaceAccessibleRepositories(ctx context.Context, organizationID string, items []accessibleRepositoryRecord) error {
 	return s.replaceFn(ctx, organizationID, items)
+}
+func (s stubStore) ClearRepositorySelections(ctx context.Context, organizationID string) error {
+	return s.clearSelectionsFn(ctx, organizationID)
 }
 func (s stubStore) ListAccessibleRepositories(ctx context.Context, params ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
 	return s.listFn(ctx, params)
@@ -328,7 +332,7 @@ func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testi
 	organizationID := "org-1"
 	var gotStatus string
 	var gotDisconnectedAt *time.Time
-	var clearedRepositoryCount int
+	var selectionsClearedForOrg string
 
 	service := NewService(stubStore{
 		ensureFn:          func(context.Context, string) error { return nil },
@@ -344,8 +348,8 @@ func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testi
 			gotDisconnectedAt = disconnectedAt
 			return nil
 		},
-		replaceFn: func(_ context.Context, _ string, items []accessibleRepositoryRecord) error {
-			clearedRepositoryCount = len(items)
+		clearSelectionsFn: func(_ context.Context, organizationID string) error {
+			selectionsClearedForOrg = organizationID
 			return nil
 		},
 		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
@@ -364,8 +368,8 @@ func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testi
 	if gotDisconnectedAt == nil {
 		t.Fatal("expected disconnected_at to be set")
 	}
-	if clearedRepositoryCount != 0 {
-		t.Fatalf("expected repositories to be cleared, got %d items", clearedRepositoryCount)
+	if selectionsClearedForOrg != organizationID {
+		t.Fatalf("expected repository selections to be cleared for %q, got %q", organizationID, selectionsClearedForOrg)
 	}
 }
 
@@ -374,7 +378,7 @@ func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
 
 	var gotStatus string
 	var gotDisconnectedAt *time.Time
-	var clearedRepositoryCount int
+	var selectionsClearedForOrg string
 	var canceledJobIDs []string
 
 	service := NewService(stubStore{
@@ -394,8 +398,8 @@ func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
 			gotDisconnectedAt = disconnectedAt
 			return nil
 		},
-		replaceFn: func(_ context.Context, _ string, items []accessibleRepositoryRecord) error {
-			clearedRepositoryCount = len(items)
+		clearSelectionsFn: func(_ context.Context, organizationID string) error {
+			selectionsClearedForOrg = organizationID
 			return nil
 		},
 		listFn: func(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
@@ -431,8 +435,8 @@ func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
 	if gotDisconnectedAt == nil {
 		t.Fatal("expected disconnected_at to be set")
 	}
-	if clearedRepositoryCount != 0 {
-		t.Fatalf("expected repositories to be cleared, got %d items", clearedRepositoryCount)
+	if selectionsClearedForOrg != "org-1" {
+		t.Fatalf("expected repository selections to be cleared for %q, got %q", "org-1", selectionsClearedForOrg)
 	}
 }
 

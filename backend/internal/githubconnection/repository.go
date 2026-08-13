@@ -289,6 +289,32 @@ func (r *Repository) ReplaceAccessibleRepositories(ctx context.Context, organiza
 	return nil
 }
 
+func (r *Repository) ClearRepositorySelections(ctx context.Context, organizationID string) error {
+	installation, err := r.GetInstallation(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+	if installation == nil {
+		return ErrInstallationNotFound
+	}
+
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE github_installation_repositories
+		SET selection_status = $2,
+		    linked_repository_id = NULL,
+		    installation_status = $3,
+		    updated_at = NOW()
+		WHERE github_installation_id = $1`,
+		parseUUID(installation.ID),
+		SelectionStatusNotSelected,
+		InstallationStatusInstallationRequired,
+	); err != nil {
+		return fmt.Errorf("clear repository selections: %w", err)
+	}
+
+	return nil
+}
+
 func (r *Repository) ListAccessibleRepositories(ctx context.Context, params ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error) {
 	installation, err := r.GetInstallation(ctx, params.OrganizationID)
 	if err != nil {
