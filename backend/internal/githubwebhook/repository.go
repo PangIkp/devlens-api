@@ -430,7 +430,7 @@ func (r *Repository) projectDeployment(ctx context.Context, tx pgx.Tx, repositor
 		) VALUES (
 			$1, $2, $3, $4, $5, $6
 		)
-		ON CONFLICT (github_deployment_id) DO UPDATE SET
+		ON CONFLICT (github_deployment_id) WHERE github_deployment_id IS NOT NULL DO UPDATE SET
 			environment = EXCLUDED.environment,
 			status = CASE
 				WHEN EXCLUDED.deployed_at >= deployments.deployed_at THEN EXCLUDED.status
