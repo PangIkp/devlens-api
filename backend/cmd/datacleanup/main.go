@@ -47,11 +47,12 @@ func main() {
 	}
 
 	fmt.Printf(
-		"data cleanup complete cleaned_webhook_payloads=%d deleted_organizations=%d deleted_installations=%d purged_analytics_repositories=%d at=%s\n",
+		"data cleanup complete cleaned_webhook_payloads=%d deleted_organizations=%d deleted_installations=%d purged_analytics_repositories=%d expired_analytics_raw_data_organizations=%d at=%s\n",
 		result.CleanedWebhookPayloads,
 		result.DeletedOrganizations,
 		result.DeletedInstallations,
 		result.PurgedAnalyticsRepoCount,
+		result.ExpiredAnalyticsRawDataOrgCount,
 		time.Now().UTC().Format(time.RFC3339),
 	)
 }

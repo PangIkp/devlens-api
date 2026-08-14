@@ -20,10 +20,11 @@ type Service struct {
 }
 
 type CleanupResult struct {
-	CleanedWebhookPayloads   int64
-	DeletedOrganizations     int64
-	DeletedInstallations     int64
-	PurgedAnalyticsRepoCount int
+	CleanedWebhookPayloads          int64
+	DeletedOrganizations            int64
+	DeletedInstallations            int64
+	PurgedAnalyticsRepoCount        int
+	ExpiredAnalyticsRawDataOrgCount int
 }
 
 func NewService(pg *postgres.DB, ch *clickhouse.DB, cfg config.DataLifecycleConfig) *Service {
@@ -58,7 +59,105 @@ func (s *Service) Run(ctx context.Context) (CleanupResult, error) {
 	result.DeletedOrganizations = deletedOrgs
 	result.PurgedAnalyticsRepoCount += purgedOrgRepos
 
+	expiredRawDataOrgs, err := s.PurgeExpiredAnalyticsRawData(ctx)
+	if err != nil {
+		return CleanupResult{}, err
+	}
+	result.ExpiredAnalyticsRawDataOrgCount = expiredRawDataOrgs
+
 	return result, nil
+}
+
+// PurgeExpiredAnalyticsRawData enforces each organization's configured (or
+// default) raw analytics retention window against the ClickHouse raw event
+// tables. Unlike a table-level TTL, this can honor a per-organization value
+// because it deletes per organization's own repository/pull-request ids
+// rather than applying one cutoff to every row in the table.
+func (s *Service) PurgeExpiredAnalyticsRawData(ctx context.Context) (int, error) {
+	if s.ch == nil {
+		return 0, nil
+	}
+
+	defaultDays := s.cfg.AnalyticsRawRetentionDays
+	if defaultDays <= 0 {
+		defaultDays = 180
+	}
+
+	rows, err := s.pg.Pool().Query(ctx, `
+SELECT o.id, COALESCE(ors.analytics_raw_retention_days, $1)
+FROM organizations o
+LEFT JOIN organization_retention_settings ors ON ors.organization_id = o.id
+WHERE o.deleted_at IS NULL`, defaultDays)
+	if err != nil {
+		return 0, fmt.Errorf("list organization retention settings: %w", err)
+	}
+
+	type orgRetention struct {
+		id   pgtype.UUID
+		days int
+	}
+	orgs := make([]orgRetention, 0)
+	for rows.Next() {
+		var item orgRetention
+		if err := rows.Scan(&item.id, &item.days); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan organization retention: %w", err)
+		}
+		orgs = append(orgs, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+
+	purged := 0
+	for _, org := range orgs {
+		if org.days <= 0 {
+			continue
+		}
+		repoIDs, prIDs, err := s.collectOrganizationResourceIDs(ctx, []pgtype.UUID{org.id})
+		if err != nil {
+			return purged, err
+		}
+		if len(repoIDs) == 0 && len(prIDs) == 0 {
+			continue
+		}
+		if err := s.purgeExpiredAnalyticsRawDataForOrganization(ctx, repoIDs, prIDs, org.days); err != nil {
+			return purged, err
+		}
+		purged++
+	}
+	return purged, nil
+}
+
+func (s *Service) purgeExpiredAnalyticsRawDataForOrganization(ctx context.Context, repoIDs []string, prIDs []string, retentionDays int) error {
+	cutoff := fmt.Sprintf("now() - INTERVAL %d DAY", retentionDays)
+	// Deliberately async (no mutations_sync), matching purgeClickHouse below:
+	// the shared ClickHouse client's HTTP timeout is tuned for fast
+	// interactive queries and is too short to block on a mutation applying,
+	// especially against larger tables. ClickHouse applies these mutations
+	// in the background on its own.
+
+	if len(prIDs) > 0 {
+		prCondition := sqlStringList(prIDs)
+		if err := s.ch.Exec(ctx, fmt.Sprintf("ALTER TABLE pull_request_reviews DELETE WHERE pull_request_id IN (%s) AND synced_at < %s", prCondition, cutoff)); err != nil {
+			return fmt.Errorf("purge expired pull_request_reviews: %w", err)
+		}
+		if err := s.ch.Exec(ctx, fmt.Sprintf("ALTER TABLE file_changes DELETE WHERE pull_request_id IN (%s) AND synced_at < %s", prCondition, cutoff)); err != nil {
+			return fmt.Errorf("purge expired file_changes: %w", err)
+		}
+	}
+
+	if len(repoIDs) > 0 {
+		repoCondition := sqlStringList(repoIDs)
+		for _, table := range []string{"pull_requests", "deployments", "commit_events", "workflow_events"} {
+			if err := s.ch.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DELETE WHERE repository_id IN (%s) AND synced_at < %s", table, repoCondition, cutoff)); err != nil {
+				return fmt.Errorf("purge expired %s: %w", table, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) CleanupExpiredWebhookPayloads(ctx context.Context) (int64, error) {
