@@ -119,6 +119,21 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 		return ConnectionResponse{}, err
 	}
 
+	// A GitHub App installation is unique per (app, account) — installing it
+	// again from a different DevLens organization while it's already linked
+	// elsewhere doesn't create a new installation id, GitHub just redirects
+	// back with the existing one. Without this check that collides with the
+	// unique constraint on installation_id and fails as a raw 500 instead of
+	// a message the user can act on. Checked before the GitHub API call so
+	// the conflict is caught without spending a request on it.
+	linkedOrganizationID, err := s.store.FindOrganizationIDByInstallationID(ctx, installationID)
+	if err != nil {
+		return ConnectionResponse{}, err
+	}
+	if linkedOrganizationID != nil && *linkedOrganizationID != organizationID {
+		return ConnectionResponse{}, ErrInstallationLinkedToAnotherOrg
+	}
+
 	installation, err := s.app.GetInstallation(ctx, installationID)
 	if err != nil {
 		return ConnectionResponse{}, err

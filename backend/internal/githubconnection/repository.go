@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/postgres"
@@ -324,6 +325,8 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 		return ListAccessibleRepositoriesResult{}, ErrInstallationNotFound
 	}
 
+	search := strings.TrimSpace(params.Search)
+
 	rows, err := r.db.Pool().Query(ctx, `
 		SELECT
 			gir.id,
@@ -353,11 +356,13 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 			LIMIT 1
 		) latest_job ON gir.linked_repository_id IS NOT NULL
 		WHERE gir.github_installation_id = $1
+		  AND ($4 = '' OR gir.full_name ILIKE '%' || $4 || '%')
 		ORDER BY full_name ASC
 		LIMIT $2 OFFSET $3`,
 		parseUUID(installation.ID),
 		params.PageSize,
 		(params.Page-1)*params.PageSize,
+		search,
 	)
 	if err != nil {
 		return ListAccessibleRepositoriesResult{}, fmt.Errorf("list accessible repositories: %w", err)
@@ -374,7 +379,14 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 	}
 
 	var total int
-	if err := r.db.Pool().QueryRow(ctx, `SELECT COUNT(*)::int FROM github_installation_repositories WHERE github_installation_id = $1`, parseUUID(installation.ID)).Scan(&total); err != nil {
+	if err := r.db.Pool().QueryRow(ctx, `
+		SELECT COUNT(*)::int
+		FROM github_installation_repositories
+		WHERE github_installation_id = $1
+		  AND ($2 = '' OR full_name ILIKE '%' || $2 || '%')`,
+		parseUUID(installation.ID),
+		search,
+	).Scan(&total); err != nil {
 		return ListAccessibleRepositoriesResult{}, fmt.Errorf("count accessible repositories: %w", err)
 	}
 

@@ -194,6 +194,7 @@ func (h *GitHubConnectionHandler) listAccessibleRepositories(w http.ResponseWrit
 		OrganizationID: organizationID,
 		Page:           page.Page,
 		PageSize:       page.PageSize,
+		Search:         strings.TrimSpace(r.URL.Query().Get("search")),
 	})
 	if svcErr != nil {
 		writeGitHubConnectionError(w, r, svcErr)
@@ -249,6 +250,8 @@ func writeGitHubConnectionError(w http.ResponseWriter, r *http.Request, err erro
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Accessible GitHub repository not found"))
 	case errors.Is(err, githubconnection.ErrConnectionNotConfigured):
 		WriteError(w, r, http.StatusConflict, NewConflictError("GitHub App is not configured"))
+	case errors.Is(err, githubconnection.ErrInstallationLinkedToAnotherOrg):
+		WriteError(w, r, http.StatusConflict, NewConflictError("This GitHub installation is already connected to a different organization. Disconnect it there first, or install the app on a different GitHub account or organization."))
 	case errors.Is(err, githubconnection.ErrInvalidInstallationState):
 		WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("state", "is invalid or expired")))
 	default:

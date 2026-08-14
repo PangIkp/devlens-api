@@ -572,6 +572,7 @@ paths:
         - $ref: "#/components/parameters/OrganizationId"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Search"
       responses:
         "200":
           description: Accessible repository list

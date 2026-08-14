@@ -326,6 +326,35 @@ func TestCompleteInstallationRejectsExpiredState(t *testing.T) {
 	}
 }
 
+func TestCompleteInstallationRejectsInstallationLinkedToAnotherOrganization(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn: func(context.Context, int64) (*string, error) {
+			otherOrg := "org-2"
+			return &otherOrg, nil
+		},
+		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			t.Fatal("upsert should not run when the installation belongs to a different organization")
+			return nil, nil
+		},
+	}, stubApp{
+		enabled: true,
+		getFn: func(context.Context, int64) (githubapp.Installation, error) {
+			t.Fatal("github app fetch should not run when the installation belongs to a different organization")
+			return githubapp.Installation{}, nil
+		},
+	}, nil)
+
+	validState := "org-1:" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState)
+	if !errors.Is(err, ErrInstallationLinkedToAnotherOrg) {
+		t.Fatalf("expected ErrInstallationLinkedToAnotherOrg, got %v", err)
+	}
+}
+
 func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testing.T) {
 	t.Parallel()
 
