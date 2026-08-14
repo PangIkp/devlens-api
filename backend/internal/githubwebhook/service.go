@@ -83,7 +83,10 @@ func (s *Service) Handle(ctx context.Context, req HandleRequest) (HandleResult, 
 		if err != nil {
 			return HandleResult{}, err
 		}
-		if match != nil {
+		// A deactivated repository keeps its webhook delivery recorded (for
+		// audit/dedup) but must not have new data projected or a sync job
+		// enqueued for it — leaving repositoryID nil short-circuits both.
+		if match != nil && !match.Inactive {
 			repositoryID = &match.ID
 		}
 	}

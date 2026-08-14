@@ -23,7 +23,8 @@ type Repository struct {
 }
 
 type repositoryMatch struct {
-	ID string
+	ID       string
+	Inactive bool
 }
 
 type enqueueResult struct {
@@ -55,7 +56,7 @@ func (r *Repository) FindRepositoryByGithubID(ctx context.Context, githubID int6
 		return nil, fmt.Errorf("find repository by github id: %w", err)
 	}
 
-	return &repositoryMatch{ID: row.ID.String()}, nil
+	return &repositoryMatch{ID: row.ID.String(), Inactive: !row.IsActive}, nil
 }
 
 func (r *Repository) EnqueueWebhookSync(ctx context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {

@@ -131,6 +131,51 @@ func TestHandleEnqueuesSupportedEvent(t *testing.T) {
 	}
 }
 
+func TestHandleSkipsProjectionAndSyncForInactiveRepository(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	var projected bool
+	service := NewService(stubStore{
+		findRepositoryByGithubIDFn: func(_ context.Context, githubID int64) (*repositoryMatch, error) {
+			if githubID != 42 {
+				t.Fatalf("unexpected github id %d", githubID)
+			}
+			return &repositoryMatch{ID: "repo-1", Inactive: true}, nil
+		},
+		enqueueWebhookSyncFn: func(_ context.Context, repositoryID *string, installationID *int64, deliveryID string, eventType string, action *string, payload []byte, enqueueJob bool) (enqueueResult, error) {
+			if repositoryID != nil {
+				t.Fatalf("expected nil repository id for inactive repository, got %v", *repositoryID)
+			}
+			if enqueueJob {
+				t.Fatal("did not expect enqueueJob for inactive repository")
+			}
+			return enqueueResult{deliveryID: deliveryID, receivedAt: now, processingStatus: "skipped"}, nil
+		},
+		projectRepositoryEventFn: func(context.Context, string, string, payloadEnvelope) error {
+			projected = true
+			return nil
+		},
+	}, "top-secret", nil, nil)
+
+	body := []byte(`{"action":"opened","repository":{"id":42,"full_name":"devlens-labs/devlens-api"},"pull_request":{"id":1001,"number":12,"title":"Add metrics","state":"open","draft":false,"created_at":"2026-07-27T11:59:00Z","updated_at":"2026-07-27T12:00:00Z","user":{"login":"pangikp"}}}`)
+	result, err := service.Handle(context.Background(), HandleRequest{
+		DeliveryID: "delivery-1",
+		EventType:  "pull_request",
+		Signature:  sign("top-secret", body),
+		Body:       body,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Enqueued || result.SyncJobID != nil {
+		t.Fatalf("unexpected result %+v", result)
+	}
+	if projected {
+		t.Fatal("did not expect repository event projection for an inactive repository")
+	}
+}
+
 func TestRetryReprocessesFailedInstallationDelivery(t *testing.T) {
 	t.Parallel()
 
