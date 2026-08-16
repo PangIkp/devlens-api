@@ -18,6 +18,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			logger.Info("http request completed",
 				"request_id", chimiddleware.GetReqID(r.Context()),
+				"trace_id", TraceIDFromContext(r.Context()),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", ww.Status(),

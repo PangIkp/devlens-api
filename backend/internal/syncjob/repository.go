@@ -12,6 +12,7 @@ import (
 	"github.com/PangIkp/devlens/backend/internal/postgres/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository struct {
@@ -46,20 +47,65 @@ func (r *Repository) HasActiveJob(ctx context.Context, repositoryID string) (boo
 }
 
 func (r *Repository) Create(ctx context.Context, params createParams) (SyncJobResponse, error) {
-	row, err := r.queries.CreateSyncJob(ctx, sqlcgen.CreateSyncJobParams{
-		ID:           newUUID(),
-		RepositoryID: parseUUID(params.RepositoryID),
-		Status:       StatusPending,
-		Progress:     0,
-		TriggeredBy:  nullableUUID(params.TriggeredBy),
-		ErrorMessage: pgtype.Text{},
-		StartedAt:    pgtype.Timestamptz{},
-		FinishedAt:   pgtype.Timestamptz{},
-	})
-	if err != nil {
+	if params.IdempotencyKey != nil && strings.TrimSpace(*params.IdempotencyKey) != "" {
+		job, err := r.getByIdempotencyKey(ctx, strings.TrimSpace(*params.IdempotencyKey))
+		if err != nil {
+			return SyncJobResponse{}, err
+		}
+		if job != nil {
+			return *job, nil
+		}
+	}
+
+	row := r.db.Pool().QueryRow(ctx, `
+		INSERT INTO sync_jobs (
+			id, repository_id, job_type, status, progress, idempotency_key, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+		) VALUES (
+			$1, $2, 'repository_sync', $3, $4, $5, $6, $7, $8, $9, NOW(), NULL
+		)
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		newUUID(),
+		parseUUID(params.RepositoryID),
+		StatusPending,
+		0,
+		textPointerValue(params.IdempotencyKey),
+		nullableUUID(params.TriggeredBy),
+		pgtype.Text{},
+		pgtype.Timestamptz{},
+		pgtype.Timestamptz{},
+	)
+
+	var created sqlcgen.CreateSyncJobRow
+	if err := row.Scan(
+		&created.ID,
+		&created.RepositoryID,
+		&created.Status,
+		&created.Progress,
+		&created.TriggeredBy,
+		&created.ErrorMessage,
+		&created.StartedAt,
+		&created.FinishedAt,
+		&created.CreatedAt,
+		&created.UpdatedAt,
+	); err != nil {
+		if params.IdempotencyKey != nil && strings.TrimSpace(*params.IdempotencyKey) != "" {
+			job, lookupErr := r.getByIdempotencyKey(ctx, strings.TrimSpace(*params.IdempotencyKey))
+			if lookupErr == nil && job != nil {
+				return *job, nil
+			}
+		}
 		return SyncJobResponse{}, fmt.Errorf("create sync job: %w", err)
 	}
-	return syncJobResponseFromCreateRow(row), nil
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'syncing',
+		    sync_error_message = NULL,
+		    initial_sync_completed_at = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(params.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository syncing: %w", err)
+	}
+	return syncJobResponseFromCreateRow(created), nil
 }
 
 func (r *Repository) GetByID(ctx context.Context, id string) (SyncJobResponse, error) {
@@ -117,6 +163,101 @@ func (r *Repository) ListByRepository(ctx context.Context, params ListParams) (L
 	return result, nil
 }
 
+func (r *Repository) Retry(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	row, err := r.db.Pool().Query(ctx, `
+		UPDATE sync_jobs
+		SET status = 'pending',
+		    progress = 0,
+		    error_message = NULL,
+		    started_at = NULL,
+		    finished_at = NULL,
+		    updated_at = $2
+		WHERE id = $1
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		parseUUID(id),
+		toNullableTimestamp(&at),
+	)
+	if err != nil {
+		return SyncJobResponse{}, fmt.Errorf("retry sync job: %w", err)
+	}
+	defer row.Close()
+
+	if !row.Next() {
+		return SyncJobResponse{}, ErrSyncJobNotFound
+	}
+
+	var job SyncJobResponse
+	var jobID, repositoryID, triggeredBy pgtype.UUID
+	var errorMessage pgtype.Text
+	var startedAt, finishedAt, createdAt, updatedAt pgtype.Timestamptz
+	var status string
+	var progress int32
+	if err := row.Scan(&jobID, &repositoryID, &status, &progress, &triggeredBy, &errorMessage, &startedAt, &finishedAt, &createdAt, &updatedAt); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("scan retried sync job: %w", err)
+	}
+	job = buildSyncJobResponse(jobID, repositoryID, status, progress, triggeredBy, errorMessage, startedAt, finishedAt, createdAt, updatedAt)
+
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'syncing',
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository syncing after retry: %w", err)
+	}
+
+	return job, nil
+}
+
+func (r *Repository) Cancel(ctx context.Context, id string, at time.Time) (SyncJobResponse, error) {
+	job, err := r.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
+	row := r.db.Pool().QueryRow(ctx, `
+		UPDATE sync_jobs
+		SET status = 'canceled',
+		    error_message = NULL,
+		    finished_at = $2,
+		    updated_at = $2
+		WHERE id = $1
+		RETURNING id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at`,
+		parseUUID(id),
+		toNullableTimestamp(&at),
+	)
+
+	var canceled sqlcgen.GetSyncJobByIDRow
+	if err := row.Scan(
+		&canceled.ID,
+		&canceled.RepositoryID,
+		&canceled.Status,
+		&canceled.Progress,
+		&canceled.TriggeredBy,
+		&canceled.ErrorMessage,
+		&canceled.StartedAt,
+		&canceled.FinishedAt,
+		&canceled.CreatedAt,
+		&canceled.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SyncJobResponse{}, ErrSyncJobNotFound
+		}
+		return SyncJobResponse{}, fmt.Errorf("cancel sync job: %w", err)
+	}
+
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'selected',
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID)); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository canceled sync state: %w", err)
+	}
+
+	return syncJobResponseFromGetRow(canceled), nil
+}
+
 func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID string) (repositoryTarget, error) {
 	row, err := r.queries.GetSyncJobRepositoryTarget(ctx, parseUUID(repositoryID))
 	if err != nil {
@@ -127,10 +268,26 @@ func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID strin
 	}
 
 	return repositoryTarget{
-		ID:           row.ID.String(),
-		FullName:     row.FullName,
-		LastSyncedAt: optionalTimeValue(row.LastSyncedAt),
+		ID:                           row.ID.String(),
+		FullName:                     row.FullName,
+		LastSyncedAt:                 optionalTimeValue(row.LastSyncedAt),
+		GitHubInstallationRepository: optionalUUIDText(row.GithubInstallationRepositoryID),
+		IsActive:                     row.IsActive,
+		InstallationID:               optionalInt64Value(row.InstallationID),
+		InstallationStatus:           optionalTextValue(row.InstallationStatus),
 	}, nil
+}
+
+func (r *Repository) GetRepositoryOrganizationID(ctx context.Context, repositoryID string) (string, error) {
+	var organizationID string
+	err := r.db.Pool().QueryRow(ctx, `SELECT organization_id::text FROM repositories WHERE id = $1`, parseUUID(repositoryID)).Scan(&organizationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrRepositoryNotFound
+		}
+		return "", fmt.Errorf("get repository organization id: %w", err)
+	}
+	return organizationID, nil
 }
 
 func (r *Repository) MarkRunning(ctx context.Context, id string, progress int, at time.Time) (SyncJobResponse, error) {
@@ -158,6 +315,11 @@ func (r *Repository) UpdateProgress(ctx context.Context, id string, progress int
 }
 
 func (r *Repository) MarkFailed(ctx context.Context, id string, message string, at time.Time) (SyncJobResponse, error) {
+	job, err := r.GetByID(ctx, id)
+	if err != nil {
+		return SyncJobResponse{}, err
+	}
+
 	row, err := r.queries.UpdateSyncJobFailed(ctx, sqlcgen.UpdateSyncJobFailedParams{
 		ID:           parseUUID(id),
 		ErrorMessage: pgtype.Text{String: message, Valid: true},
@@ -165,6 +327,14 @@ func (r *Repository) MarkFailed(ctx context.Context, id string, message string, 
 	})
 	if err != nil {
 		return SyncJobResponse{}, fmt.Errorf("mark sync job failed: %w", err)
+	}
+	if _, err := r.db.Pool().Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'sync_failed',
+		    sync_error_message = $2,
+		    updated_at = NOW()
+		WHERE id = $1`, parseUUID(job.RepositoryID), message); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("mark repository sync failed: %w", err)
 	}
 	return syncJobResponseFromFailedRow(row), nil
 }
@@ -235,6 +405,167 @@ func (r *Repository) UpsertPullRequestBundle(ctx context.Context, pullRequest pu
 	return nil
 }
 
+func (r *Repository) ReplacePullRequestFiles(ctx context.Context, repositoryID string, githubPRID int64, files []fileChangeInput) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin file changes transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var pullRequestID pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM pull_requests WHERE repository_id = $1 AND github_pr_id = $2`, parseUUID(repositoryID), githubPRID).Scan(&pullRequestID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("find pull request for file changes: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM file_changes WHERE pull_request_id = $1`, pullRequestID); err != nil {
+		return fmt.Errorf("clear file changes: %w", err)
+	}
+
+	if len(files) > 0 {
+		rows := make([][]any, 0, len(files))
+		for _, file := range files {
+			rows = append(rows, []any{
+				newUUID(),
+				pullRequestID,
+				file.FilePath,
+				file.Additions,
+				file.Deletions,
+				file.CommitCount,
+			})
+		}
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"file_changes"}, []string{"id", "pull_request_id", "file_path", "additions", "deletions", "commit_count"}, pgx.CopyFromRows(rows)); err != nil {
+			return fmt.Errorf("copy file changes: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit file changes transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) UpsertCommitEvents(ctx context.Context, repositoryID string, commits []commitEventInput) error {
+	if len(commits) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, commit := range commits {
+		batch.Queue(`
+		INSERT INTO commit_events (
+			id, repository_id, github_commit_sha, author, author_email, message, authored_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, NOW(), NOW()
+		)
+		ON CONFLICT (github_commit_sha) DO UPDATE SET
+			author = EXCLUDED.author,
+			author_email = EXCLUDED.author_email,
+			message = EXCLUDED.message,
+			authored_at = EXCLUDED.authored_at,
+			updated_at = NOW()`,
+			newUUID(),
+			repoUUID,
+			commit.GitHubCommitSHA,
+			commit.Author,
+			nullableString(commit.AuthorEmail),
+			commit.Message,
+			toNullableTimestamp(&commit.AuthoredAt),
+		)
+	}
+	return execBatch(ctx, r.db.Pool(), batch, "upsert commit events")
+}
+
+func (r *Repository) UpsertWorkflowRuns(ctx context.Context, repositoryID string, runs []workflowRunInput) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, run := range runs {
+		batch.Queue(`
+		INSERT INTO workflow_events (
+			id, repository_id, github_workflow_run_id, workflow_name, status, conclusion, started_at, completed_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+		)
+		ON CONFLICT (github_workflow_run_id) DO UPDATE SET
+			workflow_name = EXCLUDED.workflow_name,
+			status = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.status
+				ELSE EXCLUDED.status
+			END,
+			conclusion = CASE
+				WHEN workflow_events.completed_at IS NOT NULL
+				     AND COALESCE(EXCLUDED.completed_at, EXCLUDED.started_at) < COALESCE(workflow_events.completed_at, workflow_events.started_at)
+				THEN workflow_events.conclusion
+				ELSE EXCLUDED.conclusion
+			END,
+			started_at = COALESCE(LEAST(workflow_events.started_at, EXCLUDED.started_at), workflow_events.started_at, EXCLUDED.started_at),
+			completed_at = COALESCE(GREATEST(workflow_events.completed_at, EXCLUDED.completed_at), workflow_events.completed_at, EXCLUDED.completed_at),
+			updated_at = NOW()`,
+			newUUID(),
+			repoUUID,
+			run.GitHubWorkflowRunID,
+			run.WorkflowName,
+			run.Status,
+			nullableString(run.Conclusion),
+			toNullableTimestamp(run.StartedAt),
+			toNullableTimestamp(run.CompletedAt),
+		)
+	}
+	return execBatch(ctx, r.db.Pool(), batch, "upsert workflow runs")
+}
+
+func (r *Repository) UpsertDeployments(ctx context.Context, repositoryID string, deployments []deploymentInput) error {
+	if len(deployments) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	repoUUID := parseUUID(repositoryID)
+	for _, deployment := range deployments {
+		batch.Queue(`
+		INSERT INTO deployments (
+			id, repository_id, github_deployment_id, environment, status, deployed_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6
+		)
+		ON CONFLICT (github_deployment_id) WHERE github_deployment_id IS NOT NULL DO UPDATE SET
+			environment = EXCLUDED.environment,
+			status = CASE
+				WHEN EXCLUDED.deployed_at >= deployments.deployed_at THEN EXCLUDED.status
+				ELSE deployments.status
+			END,
+			deployed_at = GREATEST(deployments.deployed_at, EXCLUDED.deployed_at)`,
+			newUUID(),
+			repoUUID,
+			deployment.GitHubDeploymentID,
+			deployment.Environment,
+			deployment.Status,
+			toNullableTimestamp(&deployment.DeployedAt),
+		)
+	}
+	return execBatch(ctx, r.db.Pool(), batch, "upsert deployments")
+}
+
+func execBatch(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch, label string) error {
+	results := pool.SendBatch(ctx, batch)
+	for i := 0; i < batch.Len(); i++ {
+		if _, err := results.Exec(); err != nil {
+			_ = results.Close()
+			return fmt.Errorf("%s: %w", label, err)
+		}
+	}
+	if err := results.Close(); err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	return nil
+}
+
 func (r *Repository) Complete(ctx context.Context, id string, repositoryID string, at time.Time) (SyncJobResponse, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -248,6 +579,18 @@ func (r *Repository) Complete(ctx context.Context, id string, repositoryID strin
 		LastSyncedAt: toNullableTimestamp(&at),
 	}); err != nil {
 		return SyncJobResponse{}, fmt.Errorf("update repository last synced at: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE repositories
+		SET initial_sync_status = 'synced',
+		    initial_sync_completed_at = $2,
+		    sync_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1`,
+		parseUUID(repositoryID),
+		toNullableTimestamp(&at),
+	); err != nil {
+		return SyncJobResponse{}, fmt.Errorf("update repository initial sync state: %w", err)
 	}
 
 	row, err := queries.UpdateSyncJobCompleted(ctx, sqlcgen.UpdateSyncJobCompletedParams{
@@ -263,6 +606,91 @@ func (r *Repository) Complete(ctx context.Context, id string, repositoryID strin
 	}
 
 	return syncJobResponseFromCompletedRow(row), nil
+}
+
+func (r *Repository) GetCheckpoint(ctx context.Context, jobID string, resourceType string, key string) (*checkpointRecord, error) {
+	row := r.db.Pool().QueryRow(ctx, `
+		SELECT checkpoint_value, status, last_processed_at
+		FROM sync_checkpoints
+		WHERE sync_job_id = $1 AND resource_type = $2 AND checkpoint_key = $3`,
+		parseUUID(jobID),
+		resourceType,
+		key,
+	)
+
+	var value pgtype.Text
+	var status string
+	var lastProcessedAt pgtype.Timestamptz
+	if err := row.Scan(&value, &status, &lastProcessedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sync checkpoint: %w", err)
+	}
+
+	return &checkpointRecord{
+		Value:           optionalTextPtr(value),
+		Status:          status,
+		LastProcessedAt: optionalTimeValue(lastProcessedAt),
+	}, nil
+}
+
+func (r *Repository) UpsertCheckpoint(ctx context.Context, jobID string, repositoryID string, resourceType string, key string, value *string, status string, lastProcessedAt *time.Time) error {
+	if strings.TrimSpace(repositoryID) == "" {
+		job, err := r.GetByID(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		repositoryID = job.RepositoryID
+	}
+
+	_, err := r.db.Pool().Exec(ctx, `
+		INSERT INTO sync_checkpoints (
+			id, sync_job_id, repository_id, resource_type, checkpoint_key, checkpoint_value, status, last_processed_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+		)
+		ON CONFLICT (sync_job_id, resource_type, checkpoint_key) DO UPDATE SET
+			checkpoint_value = EXCLUDED.checkpoint_value,
+			status = EXCLUDED.status,
+			last_processed_at = EXCLUDED.last_processed_at,
+			updated_at = NOW()`,
+		newUUID(),
+		parseUUID(jobID),
+		parseUUID(repositoryID),
+		resourceType,
+		key,
+		textPointerValue(value),
+		status,
+		toNullableTimestamp(lastProcessedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert sync checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) getByIdempotencyKey(ctx context.Context, key string) (*SyncJobResponse, error) {
+	row := r.db.Pool().QueryRow(ctx, `
+		SELECT id, repository_id, status, progress, triggered_by, error_message, started_at, finished_at, created_at, updated_at
+		FROM sync_jobs
+		WHERE idempotency_key = $1
+		LIMIT 1`, key)
+
+	var jobID, repositoryID, triggeredBy pgtype.UUID
+	var errorMessage pgtype.Text
+	var startedAt, finishedAt, createdAt, updatedAt pgtype.Timestamptz
+	var status string
+	var progress int32
+	if err := row.Scan(&jobID, &repositoryID, &status, &progress, &triggeredBy, &errorMessage, &startedAt, &finishedAt, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sync job by idempotency key: %w", err)
+	}
+
+	job := buildSyncJobResponse(jobID, repositoryID, status, progress, triggeredBy, errorMessage, startedAt, finishedAt, createdAt, updatedAt)
+	return &job, nil
 }
 
 func buildSyncJobResponse(
@@ -331,6 +759,30 @@ func parseUUID(value string) pgtype.UUID {
 	return id
 }
 
+func optionalUUIDText(value pgtype.UUID) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String()
+	return &result
+}
+
+func optionalTextValue(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String
+	return &result
+}
+
+func optionalInt64Value(value pgtype.Int8) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
+}
+
 func nullableUUID(value *string) pgtype.UUID {
 	if value == nil {
 		return pgtype.UUID{}
@@ -343,6 +795,13 @@ func textPointerValue(value *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *value, Valid: true}
+}
+
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
 }
 
 func optionalTextPtr(value pgtype.Text) *string {

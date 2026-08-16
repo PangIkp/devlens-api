@@ -11,9 +11,8 @@ type repository interface {
 	List(context.Context, string) ([]MemberResponse, error)
 	Create(context.Context, CreateParams) (MemberResponse, error)
 	GetByID(context.Context, string) (MemberResponse, error)
-	UpdateRole(context.Context, UpdateParams) (MemberResponse, error)
-	Delete(context.Context, string) error
-	CountOwners(context.Context, string) (int64, error)
+	UpdateRoleWithOwnerGuard(ctx context.Context, params UpdateParams, organizationID string, currentRole string) (MemberResponse, error)
+	DeleteWithOwnerGuard(ctx context.Context, organizationID string, memberID string, currentRole string) error
 }
 
 type Service struct {
@@ -62,10 +61,10 @@ func (s *Service) Update(ctx context.Context, organizationID string, memberID st
 	if current.OrganizationID != organizationID {
 		return MemberResponse{}, ErrMemberNotFound
 	}
-	return s.repository.UpdateRole(ctx, UpdateParams{
+	return s.repository.UpdateRoleWithOwnerGuard(ctx, UpdateParams{
 		ID:   memberID,
 		Role: strings.TrimSpace(*req.Role),
-	})
+	}, organizationID, current.Role)
 }
 
 func (s *Service) Delete(ctx context.Context, organizationID string, memberID string) error {
@@ -79,16 +78,7 @@ func (s *Service) Delete(ctx context.Context, organizationID string, memberID st
 	if current.OrganizationID != organizationID {
 		return ErrMemberNotFound
 	}
-	if current.Role == string(RoleOwner) {
-		owners, err := s.repository.CountOwners(ctx, organizationID)
-		if err != nil {
-			return err
-		}
-		if owners <= 1 {
-			return ErrLastOwnerConflict
-		}
-	}
-	return s.repository.Delete(ctx, memberID)
+	return s.repository.DeleteWithOwnerGuard(ctx, organizationID, memberID, current.Role)
 }
 
 func validateCreateRequest(req CreateOrganizationMemberRequest) error {

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
 	"github.com/go-chi/chi/v5"
 )
@@ -17,18 +20,32 @@ type OrganizationMemberService interface {
 }
 
 type OrganizationMemberHandler struct {
-	service OrganizationMemberService
+	service    OrganizationMemberService
+	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewOrganizationMemberHandler(service OrganizationMemberService) *OrganizationMemberHandler {
-	return &OrganizationMemberHandler{service: service}
+func NewOrganizationMemberHandler(service OrganizationMemberService, deps ...any) *OrganizationMemberHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &OrganizationMemberHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *OrganizationMemberHandler) RegisterRoutes(r chi.Router) {
-	r.Get("/organizations/{organizationId}/members", h.list)
-	r.Post("/organizations/{organizationId}/members", h.create)
-	r.Patch("/organizations/{organizationId}/members/{memberId}", h.update)
-	r.Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+	if h.authorizer == nil {
+		r.Get("/organizations/{organizationId}/members", h.list)
+		r.Post("/organizations/{organizationId}/members", h.create)
+		r.Patch("/organizations/{organizationId}/members/{memberId}", h.update)
+		r.Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/members", h.list)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/members", h.create)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Patch("/organizations/{organizationId}/members/{memberId}", h.update)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Delete("/organizations/{organizationId}/members/{memberId}", h.delete)
+	})
 }
 
 func (h *OrganizationMemberHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +84,18 @@ func (h *OrganizationMemberHandler) create(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.create",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"userId": item.UserID,
+			"role":   item.Role,
+		},
+	})
 	WriteData(w, http.StatusCreated, item)
 }
 
@@ -93,6 +122,18 @@ func (h *OrganizationMemberHandler) update(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.update",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"userId": item.UserID,
+			"role":   item.Role,
+		},
+	})
 	WriteData(w, http.StatusOK, item)
 }
 
@@ -112,6 +153,14 @@ func (h *OrganizationMemberHandler) delete(w http.ResponseWriter, r *http.Reques
 		writeOrganizationMemberError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization_member.delete",
+		ResourceType:   "organization_member",
+		ResourceID:     stringRef(memberID),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

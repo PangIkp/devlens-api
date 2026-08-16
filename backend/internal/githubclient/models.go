@@ -47,6 +47,41 @@ type Commit struct {
 	Commit CommitDetail `json:"commit"`
 }
 
+type PullRequestFile struct {
+	Filename  string `json:"filename"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Changes   int    `json:"changes"`
+}
+
+type WorkflowRun struct {
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Status       string     `json:"status"`
+	Conclusion   string     `json:"conclusion"`
+	RunStartedAt *time.Time `json:"run_started_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type WorkflowRunList struct {
+	WorkflowRuns []WorkflowRun `json:"workflow_runs"`
+}
+
+type Deployment struct {
+	ID          int64     `json:"id"`
+	Environment string    `json:"environment"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type DeploymentStatus struct {
+	ID        int64     `json:"id"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type CommitDetail struct {
 	Message string       `json:"message"`
 	Author  CommitAuthor `json:"author"`

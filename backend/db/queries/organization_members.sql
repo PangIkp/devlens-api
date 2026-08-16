@@ -2,7 +2,8 @@
 SELECT id, organization_id, user_id, role
 FROM organization_members
 WHERE organization_id = $1
-ORDER BY id ASC;
+ORDER BY id ASC
+LIMIT 1000;
 
 -- name: GetOrganizationMemberByID :one
 SELECT id, organization_id, user_id, role
@@ -38,6 +39,13 @@ SELECT COUNT(*)::bigint
 FROM organization_members
 WHERE organization_id = $1
   AND role = 'owner';
+
+-- name: LockOrganizationOwnerRows :many
+SELECT id
+FROM organization_members
+WHERE organization_id = $1
+  AND role = 'owner'
+FOR UPDATE;
 
 -- name: OrganizationExists :one
 SELECT EXISTS (

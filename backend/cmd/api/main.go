@@ -6,19 +6,23 @@ import (
 	"os"
 
 	"github.com/PangIkp/devlens/backend/internal/app"
+	"github.com/PangIkp/devlens/backend/internal/buildinfo"
 	"github.com/PangIkp/devlens/backend/internal/config"
 )
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("load config", "error", err)
+		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("load config", "error", err)
 		os.Exit(1)
 	}
 
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	logger.Info("build info", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
+
 	application, err := app.New(context.Background(), cfg)
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("initialize application", "error", err)
+		logger.Error("initialize application", "error", err)
 		os.Exit(1)
 	}
 

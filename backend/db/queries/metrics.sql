@@ -2,6 +2,13 @@
 WITH review_counts AS (
     SELECT pull_request_id, COUNT(*) AS review_count
     FROM pull_request_reviews
+    WHERE reviewer IS NOT NULL
+      AND btrim(reviewer) <> ''
+      AND lower(btrim(reviewer)) NOT LIKE '%[bot]'
+      AND lower(btrim(reviewer)) NOT LIKE 'dependabot%'
+      AND lower(btrim(reviewer)) NOT LIKE '%-bot'
+      AND lower(btrim(reviewer)) <> 'github-actions'
+      AND lower(btrim(reviewer)) <> 'web-flow'
     GROUP BY pull_request_id
 )
 SELECT DATE(pr.created_at AT TIME ZONE 'UTC') AS metric_date,
@@ -16,6 +23,7 @@ WHERE pr.repository_id = $1
   AND pr.created_at >= $2
   AND pr.created_at < $3
   AND pr.is_draft = FALSE
+  AND pr.created_at IS NOT NULL
 GROUP BY DATE(pr.created_at AT TIME ZONE 'UTC')
 ORDER BY metric_date;
 
@@ -29,6 +37,8 @@ WHERE pr.repository_id = $1
   AND pr.merged_at >= $2
   AND pr.merged_at < $3
   AND pr.is_draft = FALSE
+  AND pr.created_at IS NOT NULL
+  AND pr.merged_at >= pr.created_at
 GROUP BY DATE(pr.merged_at AT TIME ZONE 'UTC')
 ORDER BY metric_date;
 
@@ -37,18 +47,54 @@ SELECT DATE(pr.created_at AT TIME ZONE 'UTC') AS metric_date,
        COUNT(*) FILTER (
            WHERE rev.review_requested_at IS NOT NULL
              AND rev.first_review_at IS NOT NULL
+             AND rev.first_review_at >= rev.review_requested_at
+             AND rev.review_requested_at >= pr.created_at
+             AND rev.reviewer IS NOT NULL
+             AND btrim(rev.reviewer) <> ''
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%[bot]'
+             AND lower(btrim(rev.reviewer)) NOT LIKE 'dependabot%'
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%-bot'
+             AND lower(btrim(rev.reviewer)) <> 'github-actions'
+             AND lower(btrim(rev.reviewer)) <> 'web-flow'
        )::bigint AS review_wait_sample_count,
        COALESCE(AVG(EXTRACT(EPOCH FROM (rev.first_review_at - rev.review_requested_at)) / 60.0) FILTER (
            WHERE rev.review_requested_at IS NOT NULL
              AND rev.first_review_at IS NOT NULL
+             AND rev.first_review_at >= rev.review_requested_at
+             AND rev.review_requested_at >= pr.created_at
+             AND rev.reviewer IS NOT NULL
+             AND btrim(rev.reviewer) <> ''
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%[bot]'
+             AND lower(btrim(rev.reviewer)) NOT LIKE 'dependabot%'
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%-bot'
+             AND lower(btrim(rev.reviewer)) <> 'github-actions'
+             AND lower(btrim(rev.reviewer)) <> 'web-flow'
        ), 0)::double precision AS average_review_wait_minutes,
        COUNT(*) FILTER (
            WHERE rev.review_requested_at IS NOT NULL
              AND rev.review_submitted_at IS NOT NULL
+             AND rev.review_submitted_at >= rev.review_requested_at
+             AND rev.review_requested_at >= pr.created_at
+             AND rev.reviewer IS NOT NULL
+             AND btrim(rev.reviewer) <> ''
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%[bot]'
+             AND lower(btrim(rev.reviewer)) NOT LIKE 'dependabot%'
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%-bot'
+             AND lower(btrim(rev.reviewer)) <> 'github-actions'
+             AND lower(btrim(rev.reviewer)) <> 'web-flow'
        )::bigint AS review_time_sample_count,
        COALESCE(AVG(EXTRACT(EPOCH FROM (rev.review_submitted_at - rev.review_requested_at)) / 60.0) FILTER (
            WHERE rev.review_requested_at IS NOT NULL
              AND rev.review_submitted_at IS NOT NULL
+             AND rev.review_submitted_at >= rev.review_requested_at
+             AND rev.review_requested_at >= pr.created_at
+             AND rev.reviewer IS NOT NULL
+             AND btrim(rev.reviewer) <> ''
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%[bot]'
+             AND lower(btrim(rev.reviewer)) NOT LIKE 'dependabot%'
+             AND lower(btrim(rev.reviewer)) NOT LIKE '%-bot'
+             AND lower(btrim(rev.reviewer)) <> 'github-actions'
+             AND lower(btrim(rev.reviewer)) <> 'web-flow'
        ), 0)::double precision AS average_review_minutes
 FROM pull_requests pr
 LEFT JOIN pull_request_reviews rev ON rev.pull_request_id = pr.id
@@ -56,6 +102,7 @@ WHERE pr.repository_id = $1
   AND pr.created_at >= $2
   AND pr.created_at < $3
   AND pr.is_draft = FALSE
+  AND pr.created_at IS NOT NULL
 GROUP BY DATE(pr.created_at AT TIME ZONE 'UTC')
 ORDER BY metric_date;
 
@@ -100,6 +147,6 @@ SELECT fc.id, fc.pull_request_id, fc.file_path, fc.additions, fc.deletions, fc.c
 FROM file_changes fc
 INNER JOIN pull_requests pr ON pr.id = fc.pull_request_id
 WHERE pr.repository_id = $1
-  AND pr.created_at >= $2
   AND pr.created_at < $3
+  AND (pr.merged_at IS NULL OR pr.merged_at >= $2 OR pr.created_at >= $2)
 ORDER BY fc.id ASC;

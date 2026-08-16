@@ -5,33 +5,51 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type OrganizationService interface {
-	Create(context.Context, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
+	Create(context.Context, string, organization.CreateOrganizationRequest) (organization.OrganizationResponse, error)
 	GetByID(context.Context, string) (organization.OrganizationResponse, error)
-	List(context.Context, organization.ListParams) (organization.ListResult, error)
+	List(context.Context, string, organization.ListParams) (organization.ListResult, error)
 	Update(context.Context, string, organization.UpdateOrganizationRequest) (organization.OrganizationResponse, error)
 	SoftDelete(context.Context, string) error
 }
 
 type OrganizationHandler struct {
-	service OrganizationService
+	service    OrganizationService
+	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewOrganizationHandler(service OrganizationService) *OrganizationHandler {
-	return &OrganizationHandler{service: service}
+func NewOrganizationHandler(service OrganizationService, deps ...any) *OrganizationHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &OrganizationHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *OrganizationHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/organizations", h.create)
-	r.Get("/organizations", h.list)
-	r.Get("/organizations/{organizationId}", h.get)
-	r.Patch("/organizations/{organizationId}", h.update)
-	r.Delete("/organizations/{organizationId}", h.softDelete)
+	if h.authorizer == nil {
+		r.Post("/organizations", h.create)
+		r.Get("/organizations", h.list)
+		r.Get("/organizations/{organizationId}", h.get)
+		r.Patch("/organizations/{organizationId}", h.update)
+		r.Delete("/organizations/{organizationId}", h.softDelete)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.Post("/organizations", h.create)
+		r.Get("/organizations", h.list)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}", h.get)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Patch("/organizations/{organizationId}", h.update)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleOwner)).Delete("/organizations/{organizationId}", h.softDelete)
+	})
 }
 
 func (h *OrganizationHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -41,12 +59,32 @@ func (h *OrganizationHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := h.service.Create(r.Context(), req)
+	userID, ok := currentUserID(r)
+	if !ok {
+		if h.authorizer != nil {
+			WriteError(w, r, http.StatusUnauthorized, NewUnauthorizedError("Authentication required"))
+			return
+		}
+	}
+
+	org, err := h.service.Create(r.Context(), userID, req)
 	if err != nil {
 		writeOrganizationError(w, r, err)
 		return
 	}
 
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(org.ID),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.create",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(org.ID),
+		Metadata: map[string]any{
+			"githubId": org.GithubID,
+			"slug":     org.Slug,
+			"name":     org.Name,
+		},
+	})
 	WriteData(w, http.StatusCreated, org)
 }
 
@@ -57,7 +95,15 @@ func (h *OrganizationHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.service.List(r.Context(), organization.ListParams{
+	userID, ok := currentUserID(r)
+	if !ok {
+		if h.authorizer != nil {
+			WriteError(w, r, http.StatusUnauthorized, NewUnauthorizedError("Authentication required"))
+			return
+		}
+	}
+
+	result, err := h.service.List(r.Context(), userID, organization.ListParams{
 		Page:     page.Page,
 		PageSize: page.PageSize,
 	})
@@ -104,6 +150,18 @@ func (h *OrganizationHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(id),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.update",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(id),
+		Metadata: map[string]any{
+			"slug": org.Slug,
+			"name": org.Name,
+		},
+	})
 	WriteData(w, http.StatusOK, org)
 }
 
@@ -119,6 +177,14 @@ func (h *OrganizationHandler) softDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(id),
+		ActorUserID:    stringRef(userID),
+		Action:         "organization.delete",
+		ResourceType:   "organization",
+		ResourceID:     stringRef(id),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

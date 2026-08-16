@@ -11,14 +11,18 @@ import (
 )
 
 type Config struct {
-	AppEnv     string
-	LogLevel   slog.Level
-	HTTP       HTTPConfig
-	Postgres   PostgresConfig
-	ClickHouse ClickHouseConfig
-	GitHub     GitHubConfig
-	NATS       NATSConfig
-	Sync       SyncConfig
+	AppEnv        string
+	LogLevel      slog.Level
+	HTTP          HTTPConfig
+	Postgres      PostgresConfig
+	ClickHouse    ClickHouseConfig
+	GitHub        GitHubConfig
+	NATS          NATSConfig
+	Sync          SyncConfig
+	Metrics       MetricsConfig
+	Insights      InsightsConfig
+	DataLifecycle DataLifecycleConfig
+	Tracing       TracingConfig
 }
 
 type HTTPConfig struct {
@@ -27,6 +31,13 @@ type HTTPConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+	AllowedOrigins  []string
+	RateLimit       RateLimitConfig
+}
+
+type RateLimitConfig struct {
+	Requests int
+	Window   time.Duration
 }
 
 type PostgresConfig struct {
@@ -64,6 +75,13 @@ type GitHubConfig struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	App            GitHubAppConfig
+}
+
+type GitHubAppConfig struct {
+	AppID      int64
+	InstallURL string
+	PrivateKey string
 }
 
 type NATSConfig struct {
@@ -71,7 +89,68 @@ type NATSConfig struct {
 }
 
 type SyncConfig struct {
-	WorkerPollInterval time.Duration
+	WorkerPollInterval       time.Duration
+	WorkerBatchSize          int
+	WorkerConcurrency        int
+	JobTimeout               time.Duration
+	WebhookRetryInterval     time.Duration
+	WebhookRetryBatchSize    int
+	WebhookRetryConcurrency  int
+	WebhookRetryTimeout      time.Duration
+	GitHubRateLimitRemaining int
+}
+
+type TracingConfig struct {
+	Enabled          bool
+	ServiceName      string
+	ExporterEndpoint string
+	Insecure         bool
+	SampleRatio      float64
+}
+
+type MetricsConfig struct {
+	DefaultDayType         string
+	HotspotCommitWeight    float64
+	HotspotAdditionsWeight float64
+	HotspotDeletionsWeight float64
+}
+
+type InsightsConfig struct {
+	LargePRFilesThreshold                int
+	LargePRTotalChangesThreshold         int
+	LargePRHighSeverityFilesThreshold    int
+	LargePRHighSeverityChangesThreshold  int
+	SlowReviewWaitHoursThreshold         float64
+	SlowReviewHighSeverityWaitHours      float64
+	HotspotScoreThreshold                int
+	HotspotHighSeverityScoreThreshold    int
+	HotspotTopFilesLimit                 int
+	DeploymentMinimumCount               int
+	DeploymentFailureRateThreshold       float64
+	DeploymentHighSeverityFailureRate    float64
+	ReviewConcentrationMinimumCount      int
+	ReviewConcentrationShareThreshold    float64
+	ReviewConcentrationHighSeverityShare float64
+	BottleneckMinimumMergedCount         int
+	BottleneckAverageCycleHoursThreshold float64
+	BottleneckHighSeverityCycleHours     float64
+	BottleneckStaleOpenCountThreshold    int
+	BottleneckHighSeverityStaleOpenCount int
+	BottleneckStaleOpenAgeDays           int
+	AutoReopenOnReviewed                 bool
+	AutoReopenOnDismissed                bool
+	AutoReopenMinimumSeverity            string
+	DeduplicateEnabled                   bool
+	DeduplicateVersion                   int
+}
+
+type DataLifecycleConfig struct {
+	AnalyticsRawRetentionDays             int
+	AnalyticsAggregateRetentionDays       int
+	WebhookPayloadRetentionDays           int
+	SoftDeletedOrganizationRetentionDays  int
+	DisconnectedInstallationRetentionDays int
+	ClickHouseInsertBatchSize             int
 }
 
 func Load() (Config, error) {
@@ -96,6 +175,14 @@ func Load() (Config, error) {
 	}
 
 	shutdownTimeout, err := getDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	rateLimitWindow, err := getDuration("RATE_LIMIT_WINDOW", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	rateLimitRequests, err := getInt("RATE_LIMIT_REQUESTS", 120)
 	if err != nil {
 		return Config{}, err
 	}
@@ -159,6 +246,166 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	syncWorkerBatchSize, err := getInt("SYNC_WORKER_BATCH_SIZE", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	syncWorkerConcurrency, err := getInt("SYNC_WORKER_CONCURRENCY", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	syncJobTimeout, err := getDuration("SYNC_JOB_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryInterval, err := getDuration("WEBHOOK_RETRY_INTERVAL", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryBatchSize, err := getInt("WEBHOOK_RETRY_BATCH_SIZE", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryConcurrency, err := getInt("WEBHOOK_RETRY_CONCURRENCY", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookRetryTimeout, err := getDuration("WEBHOOK_RETRY_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	githubRateLimitRemaining, err := getInt("GITHUB_RATE_LIMIT_MIN_REMAINING", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	traceSampleRatio, err := getFloat64("OTEL_TRACE_SAMPLE_RATIO", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsHotspotCommitWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_COMMITS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsHotspotAdditionsWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_ADDITIONS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsHotspotDeletionsWeight, err := getFloat64("METRICS_HOTSPOT_WEIGHT_DELETIONS", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRFilesThreshold, err := getInt("INSIGHTS_LARGE_PR_FILES_THRESHOLD", 25)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRTotalChangesThreshold, err := getInt("INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD", 800)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRHighSeverityFilesThreshold, err := getInt("INSIGHTS_LARGE_PR_HIGH_SEVERITY_FILES_THRESHOLD", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	insightLargePRHighSeverityChangesThreshold, err := getInt("INSIGHTS_LARGE_PR_HIGH_SEVERITY_TOTAL_CHANGES_THRESHOLD", 1600)
+	if err != nil {
+		return Config{}, err
+	}
+	insightSlowReviewWaitHoursThreshold, err := getFloat64("INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD", 24)
+	if err != nil {
+		return Config{}, err
+	}
+	insightSlowReviewHighSeverityWaitHours, err := getFloat64("INSIGHTS_SLOW_REVIEW_HIGH_SEVERITY_WAIT_HOURS", 72)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotScoreThreshold, err := getInt("INSIGHTS_HOTSPOT_SCORE_THRESHOLD", 150)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotHighSeverityScoreThreshold, err := getInt("INSIGHTS_HOTSPOT_HIGH_SEVERITY_SCORE_THRESHOLD", 300)
+	if err != nil {
+		return Config{}, err
+	}
+	insightHotspotTopFilesLimit, err := getInt("INSIGHTS_HOTSPOT_TOP_FILES_LIMIT", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentMinimumCount, err := getInt("INSIGHTS_DEPLOYMENT_MINIMUM_COUNT", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentFailureRateThreshold, err := getFloat64("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD", 0.30)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeploymentHighSeverityFailureRate, err := getFloat64("INSIGHTS_DEPLOYMENT_HIGH_SEVERITY_FAILURE_RATE", 0.50)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationMinimumCount, err := getInt("INSIGHTS_REVIEW_CONCENTRATION_MINIMUM_COUNT", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationShareThreshold, err := getFloat64("INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD", 0.60)
+	if err != nil {
+		return Config{}, err
+	}
+	insightReviewConcentrationHighSeverityShare, err := getFloat64("INSIGHTS_REVIEW_CONCENTRATION_HIGH_SEVERITY_SHARE", 0.75)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckMinimumMergedCount, err := getInt("INSIGHTS_BOTTLENECK_MINIMUM_MERGED_COUNT", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckAverageCycleHoursThreshold, err := getFloat64("INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD", 72)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckHighSeverityCycleHours, err := getFloat64("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_CYCLE_HOURS", 120)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckStaleOpenCountThreshold, err := getInt("INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckHighSeverityStaleOpenCount, err := getInt("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_STALE_OPEN_COUNT", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	insightBottleneckStaleOpenAgeDays, err := getInt("INSIGHTS_BOTTLENECK_STALE_OPEN_AGE_DAYS", 7)
+	if err != nil {
+		return Config{}, err
+	}
+	insightDeduplicateVersion, err := getInt("INSIGHTS_DEDUPLICATE_VERSION", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	analyticsRawRetentionDays, err := getInt("ANALYTICS_RAW_RETENTION_DAYS", 180)
+	if err != nil {
+		return Config{}, err
+	}
+	analyticsAggregateRetentionDays, err := getInt("ANALYTICS_AGGREGATE_RETENTION_DAYS", 365)
+	if err != nil {
+		return Config{}, err
+	}
+	webhookPayloadRetentionDays, err := getInt("WEBHOOK_PAYLOAD_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	softDeletedOrganizationRetentionDays, err := getInt("SOFT_DELETED_ORGANIZATION_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	disconnectedInstallationRetentionDays, err := getInt("DISCONNECTED_INSTALLATION_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	clickhouseInsertBatchSize, err := getInt("CLICKHOUSE_INSERT_BATCH_SIZE", 500)
+	if err != nil {
+		return Config{}, err
+	}
 
 	httpCfg := HTTPConfig{
 		Addr:            getEnv("HTTP_ADDR", ":8080"),
@@ -166,6 +413,11 @@ func Load() (Config, error) {
 		WriteTimeout:    writeTimeout,
 		IdleTimeout:     idleTimeout,
 		ShutdownTimeout: shutdownTimeout,
+		AllowedOrigins:  splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")),
+		RateLimit: RateLimitConfig{
+			Requests: rateLimitRequests,
+			Window:   rateLimitWindow,
+		},
 	}
 
 	cfg := Config{
@@ -205,17 +457,88 @@ func Load() (Config, error) {
 			MaxRetries:     githubMaxRetries,
 			InitialBackoff: githubInitialBackoff,
 			MaxBackoff:     githubMaxBackoff,
+			App: GitHubAppConfig{
+				AppID:      getInt64Value("GITHUB_APP_ID"),
+				InstallURL: strings.TrimSpace(getEnv("GITHUB_APP_INSTALL_URL", "")),
+				PrivateKey: getEnv("GITHUB_APP_PRIVATE_KEY", ""),
+			},
 		},
 		NATS: NATSConfig{
 			URL: getEnv("NATS_URL", "nats://localhost:4222"),
 		},
 		Sync: SyncConfig{
-			WorkerPollInterval: syncWorkerPollInterval,
+			WorkerPollInterval:       syncWorkerPollInterval,
+			WorkerBatchSize:          syncWorkerBatchSize,
+			WorkerConcurrency:        syncWorkerConcurrency,
+			JobTimeout:               syncJobTimeout,
+			WebhookRetryInterval:     webhookRetryInterval,
+			WebhookRetryBatchSize:    webhookRetryBatchSize,
+			WebhookRetryConcurrency:  webhookRetryConcurrency,
+			WebhookRetryTimeout:      webhookRetryTimeout,
+			GitHubRateLimitRemaining: githubRateLimitRemaining,
+		},
+		Metrics: MetricsConfig{
+			DefaultDayType:         strings.TrimSpace(strings.ToLower(getEnv("METRICS_DEFAULT_DAY_TYPE", "calendar"))),
+			HotspotCommitWeight:    metricsHotspotCommitWeight,
+			HotspotAdditionsWeight: metricsHotspotAdditionsWeight,
+			HotspotDeletionsWeight: metricsHotspotDeletionsWeight,
+		},
+		Insights: InsightsConfig{
+			LargePRFilesThreshold:                insightLargePRFilesThreshold,
+			LargePRTotalChangesThreshold:         insightLargePRTotalChangesThreshold,
+			LargePRHighSeverityFilesThreshold:    insightLargePRHighSeverityFilesThreshold,
+			LargePRHighSeverityChangesThreshold:  insightLargePRHighSeverityChangesThreshold,
+			SlowReviewWaitHoursThreshold:         insightSlowReviewWaitHoursThreshold,
+			SlowReviewHighSeverityWaitHours:      insightSlowReviewHighSeverityWaitHours,
+			HotspotScoreThreshold:                insightHotspotScoreThreshold,
+			HotspotHighSeverityScoreThreshold:    insightHotspotHighSeverityScoreThreshold,
+			HotspotTopFilesLimit:                 insightHotspotTopFilesLimit,
+			DeploymentMinimumCount:               insightDeploymentMinimumCount,
+			DeploymentFailureRateThreshold:       insightDeploymentFailureRateThreshold,
+			DeploymentHighSeverityFailureRate:    insightDeploymentHighSeverityFailureRate,
+			ReviewConcentrationMinimumCount:      insightReviewConcentrationMinimumCount,
+			ReviewConcentrationShareThreshold:    insightReviewConcentrationShareThreshold,
+			ReviewConcentrationHighSeverityShare: insightReviewConcentrationHighSeverityShare,
+			BottleneckMinimumMergedCount:         insightBottleneckMinimumMergedCount,
+			BottleneckAverageCycleHoursThreshold: insightBottleneckAverageCycleHoursThreshold,
+			BottleneckHighSeverityCycleHours:     insightBottleneckHighSeverityCycleHours,
+			BottleneckStaleOpenCountThreshold:    insightBottleneckStaleOpenCountThreshold,
+			BottleneckHighSeverityStaleOpenCount: insightBottleneckHighSeverityStaleOpenCount,
+			BottleneckStaleOpenAgeDays:           insightBottleneckStaleOpenAgeDays,
+			AutoReopenOnReviewed:                 getBool("INSIGHTS_AUTO_REOPEN_ON_REVIEWED", true),
+			AutoReopenOnDismissed:                getBool("INSIGHTS_AUTO_REOPEN_ON_DISMISSED", true),
+			AutoReopenMinimumSeverity:            strings.TrimSpace(strings.ToLower(getEnv("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY", "low"))),
+			DeduplicateEnabled:                   getBool("INSIGHTS_DEDUPLICATE_ENABLED", true),
+			DeduplicateVersion:                   insightDeduplicateVersion,
+		},
+		DataLifecycle: DataLifecycleConfig{
+			AnalyticsRawRetentionDays:             analyticsRawRetentionDays,
+			AnalyticsAggregateRetentionDays:       analyticsAggregateRetentionDays,
+			WebhookPayloadRetentionDays:           webhookPayloadRetentionDays,
+			SoftDeletedOrganizationRetentionDays:  softDeletedOrganizationRetentionDays,
+			DisconnectedInstallationRetentionDays: disconnectedInstallationRetentionDays,
+			ClickHouseInsertBatchSize:             clickhouseInsertBatchSize,
+		},
+		Tracing: TracingConfig{
+			Enabled:          getBool("OTEL_ENABLED", false),
+			ServiceName:      strings.TrimSpace(getEnv("OTEL_SERVICE_NAME", "devlens-api")),
+			ExporterEndpoint: strings.TrimSpace(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")),
+			Insecure:         getBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+			SampleRatio:      traceSampleRatio,
 		},
 	}
 
 	if strings.TrimSpace(cfg.HTTP.Addr) == "" {
 		return Config{}, fmt.Errorf("HTTP_ADDR must not be empty")
+	}
+	if cfg.HTTP.RateLimit.Requests < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_REQUESTS must be greater than or equal to 0")
+	}
+	if cfg.Tracing.SampleRatio <= 0 || cfg.Tracing.SampleRatio > 1 {
+		return Config{}, fmt.Errorf("OTEL_TRACE_SAMPLE_RATIO must be greater than 0 and less than or equal to 1")
+	}
+	if cfg.HTTP.RateLimit.Requests > 0 && cfg.HTTP.RateLimit.Window <= 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_WINDOW must be greater than 0 when rate limiting is enabled")
 	}
 
 	if strings.TrimSpace(cfg.Postgres.Host) == "" && strings.TrimSpace(cfg.Postgres.DSN) == "" {
@@ -262,12 +585,154 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("GITHUB_INITIAL_BACKOFF must be less than or equal to GITHUB_MAX_BACKOFF")
 	}
 
+	if cfg.GitHub.App.AppID < 0 {
+		return Config{}, fmt.Errorf("GITHUB_APP_ID must be greater than or equal to 0")
+	}
+
+	if cfg.GitHub.App.InstallURL != "" {
+		if _, err := url.ParseRequestURI(cfg.GitHub.App.InstallURL); err != nil {
+			return Config{}, fmt.Errorf("GITHUB_APP_INSTALL_URL must be a valid URL: %w", err)
+		}
+	}
+
 	if cfg.Sync.WorkerPollInterval <= 0 {
 		return Config{}, fmt.Errorf("SYNC_WORKER_POLL_INTERVAL must be greater than 0")
+	}
+	if cfg.Sync.WorkerBatchSize <= 0 {
+		return Config{}, fmt.Errorf("SYNC_WORKER_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.Sync.WorkerConcurrency <= 0 {
+		return Config{}, fmt.Errorf("SYNC_WORKER_CONCURRENCY must be greater than 0")
+	}
+	if cfg.Sync.JobTimeout <= 0 {
+		return Config{}, fmt.Errorf("SYNC_JOB_TIMEOUT must be greater than 0")
+	}
+
+	if cfg.Sync.WebhookRetryInterval <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_INTERVAL must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryBatchSize <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_BATCH_SIZE must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryConcurrency <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_CONCURRENCY must be greater than 0")
+	}
+	if cfg.Sync.WebhookRetryTimeout <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_RETRY_TIMEOUT must be greater than 0")
+	}
+	if cfg.Sync.GitHubRateLimitRemaining < 0 {
+		return Config{}, fmt.Errorf("GITHUB_RATE_LIMIT_MIN_REMAINING must be greater than or equal to 0")
 	}
 
 	if cfg.ClickHouse.Timeout <= 0 {
 		return Config{}, fmt.Errorf("CLICKHOUSE_HTTP_TIMEOUT must be greater than 0")
+	}
+	if cfg.Metrics.DefaultDayType != "calendar" && cfg.Metrics.DefaultDayType != "business" {
+		return Config{}, fmt.Errorf("METRICS_DEFAULT_DAY_TYPE must be one of calendar, business")
+	}
+	if cfg.Metrics.HotspotCommitWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_COMMITS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotAdditionsWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_ADDITIONS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotDeletionsWeight < 0 {
+		return Config{}, fmt.Errorf("METRICS_HOTSPOT_WEIGHT_DELETIONS must be greater than or equal to 0")
+	}
+	if cfg.Metrics.HotspotCommitWeight == 0 && cfg.Metrics.HotspotAdditionsWeight == 0 && cfg.Metrics.HotspotDeletionsWeight == 0 {
+		return Config{}, fmt.Errorf("at least one hotspot metric weight must be greater than 0")
+	}
+	if cfg.Insights.LargePRFilesThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_FILES_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.LargePRTotalChangesThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.LargePRHighSeverityFilesThreshold < cfg.Insights.LargePRFilesThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_HIGH_SEVERITY_FILES_THRESHOLD must be greater than or equal to INSIGHTS_LARGE_PR_FILES_THRESHOLD")
+	}
+	if cfg.Insights.LargePRHighSeverityChangesThreshold < cfg.Insights.LargePRTotalChangesThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_LARGE_PR_HIGH_SEVERITY_TOTAL_CHANGES_THRESHOLD must be greater than or equal to INSIGHTS_LARGE_PR_TOTAL_CHANGES_THRESHOLD")
+	}
+	if cfg.Insights.SlowReviewWaitHoursThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.SlowReviewHighSeverityWaitHours < cfg.Insights.SlowReviewWaitHoursThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_SLOW_REVIEW_HIGH_SEVERITY_WAIT_HOURS must be greater than or equal to INSIGHTS_SLOW_REVIEW_WAIT_HOURS_THRESHOLD")
+	}
+	if cfg.Insights.HotspotScoreThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_SCORE_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.HotspotHighSeverityScoreThreshold < cfg.Insights.HotspotScoreThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_HIGH_SEVERITY_SCORE_THRESHOLD must be greater than or equal to INSIGHTS_HOTSPOT_SCORE_THRESHOLD")
+	}
+	if cfg.Insights.HotspotTopFilesLimit <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_HOTSPOT_TOP_FILES_LIMIT must be greater than 0")
+	}
+	if cfg.Insights.DeploymentMinimumCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_MINIMUM_COUNT must be greater than 0")
+	}
+	if cfg.Insights.DeploymentFailureRateThreshold <= 0 || cfg.Insights.DeploymentFailureRateThreshold > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD must be greater than 0 and less than or equal to 1")
+	}
+	if cfg.Insights.DeploymentHighSeverityFailureRate < cfg.Insights.DeploymentFailureRateThreshold || cfg.Insights.DeploymentHighSeverityFailureRate > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEPLOYMENT_HIGH_SEVERITY_FAILURE_RATE must be greater than or equal to INSIGHTS_DEPLOYMENT_FAILURE_RATE_THRESHOLD and less than or equal to 1")
+	}
+	if cfg.Insights.ReviewConcentrationMinimumCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_MINIMUM_COUNT must be greater than 0")
+	}
+	if cfg.Insights.ReviewConcentrationShareThreshold <= 0 || cfg.Insights.ReviewConcentrationShareThreshold > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD must be greater than 0 and less than or equal to 1")
+	}
+	if cfg.Insights.ReviewConcentrationHighSeverityShare < cfg.Insights.ReviewConcentrationShareThreshold || cfg.Insights.ReviewConcentrationHighSeverityShare > 1 {
+		return Config{}, fmt.Errorf("INSIGHTS_REVIEW_CONCENTRATION_HIGH_SEVERITY_SHARE must be greater than or equal to INSIGHTS_REVIEW_CONCENTRATION_SHARE_THRESHOLD and less than or equal to 1")
+	}
+	if cfg.Insights.BottleneckMinimumMergedCount <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_MINIMUM_MERGED_COUNT must be greater than 0")
+	}
+	if cfg.Insights.BottleneckAverageCycleHoursThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.BottleneckHighSeverityCycleHours < cfg.Insights.BottleneckAverageCycleHoursThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_CYCLE_HOURS must be greater than or equal to INSIGHTS_BOTTLENECK_AVERAGE_CYCLE_HOURS_THRESHOLD")
+	}
+	if cfg.Insights.BottleneckStaleOpenCountThreshold <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD must be greater than 0")
+	}
+	if cfg.Insights.BottleneckHighSeverityStaleOpenCount < cfg.Insights.BottleneckStaleOpenCountThreshold {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_HIGH_SEVERITY_STALE_OPEN_COUNT must be greater than or equal to INSIGHTS_BOTTLENECK_STALE_OPEN_COUNT_THRESHOLD")
+	}
+	if cfg.Insights.BottleneckStaleOpenAgeDays <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_BOTTLENECK_STALE_OPEN_AGE_DAYS must be greater than 0")
+	}
+	switch cfg.Insights.AutoReopenMinimumSeverity {
+	case "low", "medium", "high", "critical":
+	default:
+		return Config{}, fmt.Errorf("INSIGHTS_AUTO_REOPEN_MINIMUM_SEVERITY must be one of low, medium, high, critical")
+	}
+	if cfg.Insights.DeduplicateVersion <= 0 {
+		return Config{}, fmt.Errorf("INSIGHTS_DEDUPLICATE_VERSION must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsRawRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("ANALYTICS_RAW_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsAggregateRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("ANALYTICS_AGGREGATE_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.AnalyticsAggregateRetentionDays < cfg.DataLifecycle.AnalyticsRawRetentionDays {
+		return Config{}, fmt.Errorf("ANALYTICS_AGGREGATE_RETENTION_DAYS must be greater than or equal to ANALYTICS_RAW_RETENTION_DAYS")
+	}
+	if cfg.DataLifecycle.WebhookPayloadRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("WEBHOOK_PAYLOAD_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.SoftDeletedOrganizationRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("SOFT_DELETED_ORGANIZATION_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.DisconnectedInstallationRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("DISCONNECTED_INSTALLATION_RETENTION_DAYS must be greater than 0")
+	}
+	if cfg.DataLifecycle.ClickHouseInsertBatchSize <= 0 {
+		return Config{}, fmt.Errorf("CLICKHOUSE_INSERT_BATCH_SIZE must be greater than 0")
 	}
 
 	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
@@ -317,6 +782,21 @@ func getDuration(key string, fallback time.Duration) (time.Duration, error) {
 	return value, nil
 }
 
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
+}
+
 func getInt32(key string, fallback int32) (int32, error) {
 	raw, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(raw) == "" {
@@ -343,6 +823,48 @@ func getInt(key string, fallback int) (int, error) {
 	}
 
 	return value, nil
+}
+
+func getFloat64(key string, fallback float64) (float64, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid float for %s: %w", key, err)
+	}
+
+	return value, nil
+}
+
+func getInt64Value(key string) int64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return -1
+	}
+
+	return value
+}
+
+func getBool(key string, fallback bool) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+
+	return value
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auth"
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 )
 
@@ -56,6 +58,9 @@ func TestHealthHandlerSuccess(t *testing.T) {
 
 	if body.Dependencies.Postgres.Status != "ok" {
 		t.Fatalf("expected postgres status ok, got %q", body.Dependencies.Postgres.Status)
+	}
+	if body.Dependencies.NATS != nil {
+		t.Fatalf("expected nats dependency to be omitted for liveness, got %+v", *body.Dependencies.NATS)
 	}
 
 	if time.Since(body.Timestamp) > time.Minute {
@@ -104,8 +109,8 @@ func TestHealthHandlerDegradedClickHouse(t *testing.T) {
 
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
 	}
 
 	var body HealthResponse
@@ -119,6 +124,94 @@ func TestHealthHandlerDegradedClickHouse(t *testing.T) {
 
 	if body.Dependencies.ClickHouse.Status != "unavailable" {
 		t.Fatalf("expected unavailable clickhouse status, got %q", body.Dependencies.ClickHouse.Status)
+	}
+}
+
+func TestReadinessHandlerSuccess(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "ok" {
+		t.Fatalf("expected status ok, got %q", body.Status)
+	}
+	if body.Dependencies.NATS == nil {
+		t.Fatal("expected readiness to include nats dependency")
+	}
+	if body.Dependencies.NATS.Status != "ok" {
+		t.Fatalf("expected nats status ok, got %q", body.Dependencies.NATS.Status)
+	}
+}
+
+func TestReadinessHandlerUnavailableClickHouse(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{err: errors.New("clickhouse unavailable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Status != "degraded" {
+		t.Fatalf("expected degraded status, got %q", body.Status)
+	}
+}
+
+func TestReadinessHandlerUnavailableNATS(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:   stubHealthChecker{},
+		ClickHouse: stubHealthChecker{},
+		NATS:       stubHealthChecker{err: errors.New("nats unavailable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/readiness", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+
+	var body HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Dependencies.NATS == nil {
+		t.Fatal("expected readiness to include nats dependency")
+	}
+	if body.Dependencies.NATS.Status != "unavailable" {
+		t.Fatalf("expected unavailable nats status, got %q", body.Dependencies.NATS.Status)
 	}
 }
 
@@ -201,5 +294,178 @@ func TestNotFoundReturnsJSONError(t *testing.T) {
 
 	if body.Error.Code != "NOT_FOUND" {
 		t.Fatalf("expected NOT_FOUND, got %q", body.Error.Code)
+	}
+}
+
+func TestCORSPreflightAllowedOrigin(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:       stubHealthChecker{},
+		AllowedOrigins: []string{"http://localhost:5173"},
+	})
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("unexpected allow origin %q", got)
+	}
+}
+
+func TestCORSOmitsHeadersForDisallowedOrigin(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:       stubHealthChecker{},
+		AllowedOrigins: []string{"http://localhost:5173"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected empty allow origin, got %q", got)
+	}
+}
+
+func TestRouterSetsTraceIDHeader(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("X-Trace-Id", "trace-abc")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Trace-Id"); got != "trace-abc" {
+		t.Fatalf("unexpected trace id %q", got)
+	}
+}
+
+func TestRouterSetsNoStoreCacheHeaders(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected cache control %q", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("unexpected pragma %q", got)
+	}
+	if got := rec.Header().Get("Expires"); got != "0" {
+		t.Fatalf("unexpected expires %q", got)
+	}
+}
+
+func TestMetricsEndpointIncludesRecordedRequest(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres: stubHealthChecker{},
+	})
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	healthRec := httptest.NewRecorder()
+	router.ServeHTTP(healthRec, healthReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; version=0.0.4" {
+		t.Fatalf("unexpected metrics content type %q", got)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `devlens_http_requests_total{method="GET",path="/api/v1/health",status="200"} 1`) {
+		t.Fatalf("unexpected metrics body %q", body)
+	}
+}
+
+func TestRateLimitReturnsTooManyRequests(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		RateLimitRequests: 1,
+		RateLimitWindow:   time.Minute,
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req1.RemoteAddr = "127.0.0.1:5000"
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req2.RemoteAddr = "127.0.0.1:5000"
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req3.RemoteAddr = "127.0.0.1:5000"
+	rec3 := httptest.NewRecorder()
+	router.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", rec3.Code)
+	}
+
+	var body ErrorResponse
+	if err := json.Unmarshal(rec3.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.Error.Code != ErrorCodeTooManyRequests {
+		t.Fatalf("expected %s, got %s", ErrorCodeTooManyRequests, body.Error.Code)
+	}
+}
+
+func TestRateLimitUsesAuthenticatedUserKey(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		Postgres:          stubHealthChecker{},
+		RateLimitRequests: 1,
+		RateLimitWindow:   time.Minute,
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req1.RemoteAddr = "127.0.0.1:5000"
+	req1 = req1.WithContext(auth.WithPrincipal(req1.Context(), auth.SessionPrincipal{User: auth.User{ID: "user-1"}}))
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
+	req2.RemoteAddr = "127.0.0.1:5000"
+	req2 = req2.WithContext(auth.WithPrincipal(req2.Context(), auth.SessionPrincipal{User: auth.User{ID: "user-2"}}))
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec2.Code)
 	}
 }

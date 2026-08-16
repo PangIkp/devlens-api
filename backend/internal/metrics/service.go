@@ -17,13 +17,90 @@ import (
 
 var ErrRepositoryNotFound = errors.New("repository not found")
 
+const clickhouseInsertBatchSize = 500
+
 type Service struct {
-	pg *postgres.DB
-	ch *clickhouse.DB
+	pg           *postgres.DB
+	ch           *clickhouse.DB
+	defaultRules RuleConfig
+	resolver     ruleConfigResolver
 }
 
-func NewService(pg *postgres.DB, ch *clickhouse.DB) *Service {
-	return &Service{pg: pg, ch: ch}
+// ruleConfigResolver resolves per-organization metric rule overrides. When
+// nil or when resolution fails, the service falls back to defaultRules.
+type ruleConfigResolver interface {
+	ResolveMetricsRules(ctx context.Context, organizationID string) (RuleConfig, error)
+}
+
+type RuleConfig struct {
+	DefaultDayType         string
+	HotspotCommitWeight    float64
+	HotspotAdditionsWeight float64
+	HotspotDeletionsWeight float64
+}
+
+func DefaultRuleConfig() RuleConfig {
+	return RuleConfig{
+		DefaultDayType:         DayTypeCalendar,
+		HotspotCommitWeight:    1,
+		HotspotAdditionsWeight: 1,
+		HotspotDeletionsWeight: 1,
+	}
+}
+
+func normalizeRuleConfig(cfg RuleConfig) RuleConfig {
+	defaults := DefaultRuleConfig()
+	if cfg.DefaultDayType != DayTypeBusiness && cfg.DefaultDayType != DayTypeCalendar {
+		cfg.DefaultDayType = defaults.DefaultDayType
+	}
+	if cfg.HotspotCommitWeight < 0 {
+		cfg.HotspotCommitWeight = defaults.HotspotCommitWeight
+	}
+	if cfg.HotspotAdditionsWeight < 0 {
+		cfg.HotspotAdditionsWeight = defaults.HotspotAdditionsWeight
+	}
+	if cfg.HotspotDeletionsWeight < 0 {
+		cfg.HotspotDeletionsWeight = defaults.HotspotDeletionsWeight
+	}
+	if cfg.HotspotCommitWeight == 0 && cfg.HotspotAdditionsWeight == 0 && cfg.HotspotDeletionsWeight == 0 {
+		cfg.HotspotCommitWeight = defaults.HotspotCommitWeight
+		cfg.HotspotAdditionsWeight = defaults.HotspotAdditionsWeight
+		cfg.HotspotDeletionsWeight = defaults.HotspotDeletionsWeight
+	}
+	return cfg
+}
+
+func NewService(pg *postgres.DB, ch *clickhouse.DB, rules ...RuleConfig) *Service {
+	cfg := DefaultRuleConfig()
+	if len(rules) > 0 {
+		cfg = normalizeRuleConfig(rules[0])
+	}
+	return &Service{pg: pg, ch: ch, defaultRules: cfg}
+}
+
+// SetRuleConfigResolver wires a per-organization rule override resolver.
+// Left unset, the service always uses the boot-time default rules.
+func (s *Service) SetRuleConfigResolver(resolver ruleConfigResolver) {
+	s.resolver = resolver
+}
+
+func (s *Service) resolveRules(ctx context.Context, repositoryID string) RuleConfig {
+	if s.resolver == nil {
+		return s.defaultRules
+	}
+	id := parseUUID(repositoryID)
+	if !id.Valid {
+		return s.defaultRules
+	}
+	row, err := s.pg.Queries().GetRepositoryByID(ctx, id)
+	if err != nil {
+		return s.defaultRules
+	}
+	rules, err := s.resolver.ResolveMetricsRules(ctx, row.OrganizationID.String())
+	if err != nil {
+		return s.defaultRules
+	}
+	return rules
 }
 
 func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID string, req CalculationRequest) error {
@@ -31,6 +108,7 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 		return err
 	}
 
+	req = normalizeCalculationRequest(req)
 	bounds, err := normalizeBounds(req.From, req.To)
 	if err != nil {
 		return err
@@ -53,10 +131,10 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 
 	payload := make([]metricsDailyRecord, 0, len(rows))
 	for _, row := range rows {
-		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt))
+		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt, req.MetricVersion))
 	}
 
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO metrics_daily", payload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO metrics_daily", payload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("insert metrics_daily rows: %w", err)
 	}
 
@@ -72,6 +150,10 @@ func (s *Service) GetDashboardSummary(ctx context.Context, repositoryID string, 
 	if err != nil {
 		return DashboardSummary{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return DashboardSummary{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return DashboardSummary{}, err
@@ -82,7 +164,7 @@ func (s *Service) GetDashboardSummary(ctx context.Context, repositoryID string, 
 		return DashboardSummary{}, err
 	}
 
-	summary := aggregateSummary(repositoryID, bounds, rows)
+	summary := aggregateSummary(repositoryID, bounds, dayType, rows)
 	return summary, nil
 }
 
@@ -100,6 +182,10 @@ func (s *Service) GetPullRequestMetrics(ctx context.Context, repositoryID string
 	if err != nil {
 		return PullRequestMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return PullRequestMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return PullRequestMetrics{}, err
@@ -110,7 +196,7 @@ func (s *Service) GetPullRequestMetrics(ctx context.Context, repositoryID string
 		return PullRequestMetrics{}, err
 	}
 
-	return aggregatePullRequestMetrics(bounds, interval, rows), nil
+	return aggregatePullRequestMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, params QueryParams) (ReviewMetrics, error) {
@@ -127,6 +213,10 @@ func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, par
 	if err != nil {
 		return ReviewMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return ReviewMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return ReviewMetrics{}, err
@@ -137,7 +227,7 @@ func (s *Service) GetReviewMetrics(ctx context.Context, repositoryID string, par
 		return ReviewMetrics{}, err
 	}
 
-	return aggregateReviewMetrics(bounds, interval, rows), nil
+	return aggregateReviewMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string, params DeploymentQueryParams) (DeploymentMetrics, error) {
@@ -154,6 +244,10 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 	if err != nil {
 		return DeploymentMetrics{}, err
 	}
+	dayType, err := normalizeDayType(params.DayType)
+	if err != nil {
+		return DeploymentMetrics{}, err
+	}
 
 	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
 		return DeploymentMetrics{}, err
@@ -164,7 +258,7 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 		if err != nil {
 			return DeploymentMetrics{}, err
 		}
-		return aggregateDeploymentMetricsFromRaw(bounds, interval, deployments), nil
+		return aggregateDeploymentMetricsFromRaw(bounds, interval, dayType, deployments), nil
 	}
 
 	rows, err := s.listMetricsDaily(ctx, repositoryID, bounds)
@@ -172,7 +266,7 @@ func (s *Service) GetDeploymentMetrics(ctx context.Context, repositoryID string,
 		return DeploymentMetrics{}, err
 	}
 
-	return aggregateDeploymentMetrics(bounds, interval, rows), nil
+	return aggregateDeploymentMetrics(bounds, interval, dayType, rows), nil
 }
 
 func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params HotspotQueryParams) (HotspotResult, error) {
@@ -211,12 +305,9 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 		return HotspotResult{}, err
 	}
 
-	files := aggregateHotspots(rows)
+	files := aggregateHotspots(rows, s.resolveRules(ctx, repositoryID))
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].HotspotScore == files[j].HotspotScore {
-			if order == "asc" {
-				return files[i].FilePath < files[j].FilePath
-			}
 			return files[i].FilePath < files[j].FilePath
 		}
 		if order == "asc" {
@@ -237,6 +328,335 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 	}
 
 	return HotspotResult{Items: files[start:end], TotalItems: totalItems}, nil
+}
+
+func (s *Service) GetRepositoryMetrics(ctx context.Context, repositoryID string, params DeploymentQueryParams) (RepositoryMetrics, error) {
+	summary, err := s.GetDashboardSummary(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	pullRequests, err := s.GetPullRequestMetrics(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	reviews, err := s.GetReviewMetrics(ctx, repositoryID, params.QueryParams)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	deployments, err := s.GetDeploymentMetrics(ctx, repositoryID, params)
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	hotspots, err := s.GetHotspots(ctx, repositoryID, HotspotQueryParams{
+		From:      params.From,
+		To:        params.To,
+		Page:      1,
+		PageSize:  10,
+		SortOrder: "desc",
+	})
+	if err != nil {
+		return RepositoryMetrics{}, err
+	}
+
+	interval := params.Interval
+	if strings.TrimSpace(interval) == "" {
+		interval = IntervalDay
+	}
+
+	return RepositoryMetrics{
+		MetricVersion: CurrentMetricVersion,
+		DayType:       s.normalizeDayTypeOrDefault(ctx, repositoryID, params.DayType),
+		RepositoryID:  repositoryID,
+		From:          params.From.UTC().Format("2006-01-02"),
+		To:            params.To.UTC().Format("2006-01-02"),
+		Interval:      interval,
+		Summary:       summary,
+		PullRequests:  pullRequests,
+		Reviews:       reviews,
+		Deployments:   deployments,
+		Hotspots:      hotspots.Items,
+	}, nil
+}
+
+func (s *Service) GetWorkloadDistribution(ctx context.Context, repositoryID string, params QueryParams) (WorkloadDistribution, error) {
+	if s.pg == nil {
+		return WorkloadDistribution{}, fmt.Errorf("metrics postgres dependency is not configured")
+	}
+
+	bounds, err := normalizeBounds(params.From, params.To)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	contributors, err := s.listContributorDistribution(ctx, repositoryID, bounds)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	reviewers, err := s.listReviewerDistribution(ctx, repositoryID, bounds)
+	if err != nil {
+		return WorkloadDistribution{}, err
+	}
+
+	totalPullRequests := 0
+	topContributorShare := 0.0
+	for _, item := range contributors {
+		totalPullRequests += item.PullRequestCount
+		if item.Share > topContributorShare {
+			topContributorShare = item.Share
+		}
+	}
+
+	totalReviews := 0
+	topReviewerShare := 0.0
+	for _, item := range reviewers {
+		totalReviews += item.ReviewCount
+		if item.Share > topReviewerShare {
+			topReviewerShare = item.Share
+		}
+	}
+
+	return WorkloadDistribution{
+		Summary: WorkloadDistributionSummary{
+			RepositoryID:        repositoryID,
+			From:                bounds.From.Format("2006-01-02"),
+			To:                  bounds.ToInclusive.Format("2006-01-02"),
+			TotalPullRequests:   totalPullRequests,
+			TotalReviews:        totalReviews,
+			TopContributorShare: topContributorShare,
+			TopReviewerShare:    topReviewerShare,
+		},
+		Contributors: contributors,
+		Reviewers:    reviewers,
+	}, nil
+}
+
+func normalizeCalculationRequest(req CalculationRequest) CalculationRequest {
+	if req.MetricVersion < 1 {
+		req.MetricVersion = CurrentMetricVersion
+	}
+	return req
+}
+
+func (s *Service) GetReviewQueue(ctx context.Context, repositoryID string, params HotspotQueryParams) (ReviewQueueResult, error) {
+	if s.pg == nil {
+		return ReviewQueueResult{}, fmt.Errorf("metrics postgres dependency is not configured")
+	}
+	if _, err := s.ensureRepositoryExists(ctx, repositoryID); err != nil {
+		return ReviewQueueResult{}, err
+	}
+	if params.Page < 1 || params.PageSize < 1 {
+		return ReviewQueueResult{}, &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "page", Message: "must be greater than or equal to 1"}},
+		}
+	}
+
+	toExclusive := params.To.UTC().Add(24 * time.Hour)
+	query := `
+WITH review_queue AS (
+    SELECT pr.id::text AS pull_request_id,
+           pr.number,
+           pr.title,
+           pr.author,
+           MIN(prr.review_requested_at) AS review_requested_at
+    FROM pull_requests pr
+    LEFT JOIN pull_request_reviews prr ON prr.pull_request_id = pr.id
+    WHERE pr.repository_id = $1
+      AND pr.state = 'open'
+      AND pr.created_at >= $2
+      AND pr.created_at < $3
+      AND pr.is_draft = FALSE
+    GROUP BY pr.id, pr.number, pr.title, pr.author
+)
+SELECT pull_request_id,
+       number,
+       title,
+       author,
+       review_requested_at,
+       CASE
+           WHEN review_requested_at IS NULL THEN EXTRACT(EPOCH FROM (NOW() - $2)) / 60.0
+           ELSE EXTRACT(EPOCH FROM (NOW() - review_requested_at)) / 60.0
+       END AS waiting_minutes
+FROM review_queue
+ORDER BY review_requested_at ASC NULLS FIRST, number ASC
+LIMIT $4 OFFSET $5`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), params.From.UTC(), toExclusive, params.PageSize, (params.Page-1)*params.PageSize)
+	if err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("list review queue: %w", err)
+	}
+	defer rows.Close()
+
+	result := ReviewQueueResult{Items: make([]ReviewQueueItem, 0)}
+	for rows.Next() {
+		var item ReviewQueueItem
+		var requestedAt pgtype.Timestamptz
+		if err := rows.Scan(&item.PullRequestID, &item.Number, &item.Title, &item.Author, &requestedAt, &item.WaitingMinutes); err != nil {
+			return ReviewQueueResult{}, fmt.Errorf("scan review queue item: %w", err)
+		}
+		item.ReviewRequestedAt = optionalMetricTime(requestedAt)
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("iterate review queue: %w", err)
+	}
+
+	countQuery := `
+SELECT COUNT(*)
+FROM pull_requests
+WHERE repository_id = $1
+  AND state = 'open'
+  AND created_at >= $2
+  AND created_at < $3
+  AND is_draft = FALSE`
+	if err := s.pg.Pool().QueryRow(ctx, countQuery, parseUUID(repositoryID), params.From.UTC(), toExclusive).Scan(&result.TotalItems); err != nil {
+		return ReviewQueueResult{}, fmt.Errorf("count review queue: %w", err)
+	}
+	return result, nil
+}
+
+func optionalMetricTime(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	utc := value.Time.UTC()
+	return &utc
+}
+
+func (s *Service) listContributorDistribution(ctx context.Context, repositoryID string, bounds dateBounds) ([]ContributorDistributionItem, error) {
+	toExclusive := bounds.ToInclusive.Add(24 * time.Hour)
+	query := `
+SELECT pr.author,
+       COUNT(*)::bigint AS pull_request_count
+FROM pull_requests pr
+WHERE pr.repository_id = $1
+  AND pr.created_at >= $2
+  AND pr.created_at < $3
+  AND pr.is_draft = FALSE
+  AND pr.author IS NOT NULL
+  AND btrim(pr.author) <> ''
+  AND lower(btrim(pr.author)) NOT LIKE '%[bot]'
+  AND lower(btrim(pr.author)) NOT LIKE 'dependabot%'
+  AND lower(btrim(pr.author)) NOT LIKE '%-bot'
+  AND lower(btrim(pr.author)) <> 'github-actions'
+  AND lower(btrim(pr.author)) <> 'web-flow'
+GROUP BY pr.author
+ORDER BY pull_request_count DESC, pr.author ASC`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), bounds.From.UTC(), toExclusive)
+	if err != nil {
+		return nil, fmt.Errorf("list contributor distribution: %w", err)
+	}
+	defer rows.Close()
+
+	type rawItem struct {
+		author string
+		count  int
+	}
+	raw := make([]rawItem, 0)
+	total := 0
+	for rows.Next() {
+		var item rawItem
+		var count int64
+		if err := rows.Scan(&item.author, &count); err != nil {
+			return nil, fmt.Errorf("scan contributor distribution: %w", err)
+		}
+		item.count = int(count)
+		total += item.count
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate contributor distribution: %w", err)
+	}
+
+	items := make([]ContributorDistributionItem, 0, len(raw))
+	for _, item := range raw {
+		share := 0.0
+		if total > 0 {
+			share = float64(item.count) / float64(total)
+		}
+		items = append(items, ContributorDistributionItem{
+			Author:           item.author,
+			PullRequestCount: item.count,
+			Share:            share,
+		})
+	}
+	return items, nil
+}
+
+func (s *Service) listReviewerDistribution(ctx context.Context, repositoryID string, bounds dateBounds) ([]ReviewerDistributionItem, error) {
+	toExclusive := bounds.ToInclusive.Add(24 * time.Hour)
+	query := `
+SELECT prr.reviewer,
+       COUNT(*)::bigint AS review_count,
+       COUNT(DISTINCT prr.pull_request_id)::bigint AS reviewed_pull_request_count
+FROM pull_request_reviews prr
+INNER JOIN pull_requests pr ON pr.id = prr.pull_request_id
+WHERE pr.repository_id = $1
+  AND pr.created_at >= $2
+  AND pr.created_at < $3
+  AND pr.is_draft = FALSE
+  AND prr.reviewer IS NOT NULL
+  AND btrim(prr.reviewer) <> ''
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%[bot]'
+  AND lower(btrim(prr.reviewer)) NOT LIKE 'dependabot%'
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%-bot'
+  AND lower(btrim(prr.reviewer)) <> 'github-actions'
+  AND lower(btrim(prr.reviewer)) <> 'web-flow'
+GROUP BY prr.reviewer
+ORDER BY review_count DESC, prr.reviewer ASC`
+
+	rows, err := s.pg.Pool().Query(ctx, query, parseUUID(repositoryID), bounds.From.UTC(), toExclusive)
+	if err != nil {
+		return nil, fmt.Errorf("list reviewer distribution: %w", err)
+	}
+	defer rows.Close()
+
+	type rawItem struct {
+		reviewer                 string
+		reviewCount              int
+		reviewedPullRequestCount int
+	}
+	raw := make([]rawItem, 0)
+	total := 0
+	for rows.Next() {
+		var item rawItem
+		var reviewCount, reviewedPullRequestCount int64
+		if err := rows.Scan(&item.reviewer, &reviewCount, &reviewedPullRequestCount); err != nil {
+			return nil, fmt.Errorf("scan reviewer distribution: %w", err)
+		}
+		item.reviewCount = int(reviewCount)
+		item.reviewedPullRequestCount = int(reviewedPullRequestCount)
+		total += item.reviewCount
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reviewer distribution: %w", err)
+	}
+
+	items := make([]ReviewerDistributionItem, 0, len(raw))
+	for _, item := range raw {
+		share := 0.0
+		if total > 0 {
+			share = float64(item.reviewCount) / float64(total)
+		}
+		items = append(items, ReviewerDistributionItem{
+			Reviewer:                 item.reviewer,
+			ReviewCount:              item.reviewCount,
+			ReviewedPullRequestCount: item.reviewedPullRequestCount,
+			Share:                    share,
+		})
+	}
+	return items, nil
 }
 
 func (s *Service) ensureReady() error {
@@ -314,6 +734,31 @@ func normalizeInterval(value string) (string, error) {
 	}
 }
 
+func normalizeDayType(value string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if trimmed == "" {
+		return DayTypeCalendar, nil
+	}
+
+	switch trimmed {
+	case DayTypeCalendar, DayTypeBusiness:
+		return trimmed, nil
+	default:
+		return "", &ValidationError{
+			Message: "request validation failed",
+			Details: []ValidationIssue{{Field: "dayType", Message: "must be one of calendar, business"}},
+		}
+	}
+}
+
+func (s *Service) normalizeDayTypeOrDefault(ctx context.Context, repositoryID string, value string) string {
+	dayType, err := normalizeDayType(value)
+	if err != nil {
+		return s.resolveRules(ctx, repositoryID).DefaultDayType
+	}
+	return dayType
+}
+
 func parseUUID(value string) pgtype.UUID {
 	var id pgtype.UUID
 	_ = id.Scan(value)
@@ -329,6 +774,22 @@ type dateBounds struct {
 	ToInclusive   time.Time
 	ToExclusive   time.Time
 	DaysInclusive int
+}
+
+func (b dateBounds) dayCount(dayType string) int {
+	switch dayType {
+	case DayTypeBusiness:
+		count := 0
+		for day := b.From; !day.After(b.ToInclusive); day = day.AddDate(0, 0, 1) {
+			weekday := day.Weekday()
+			if weekday != time.Saturday && weekday != time.Sunday {
+				count++
+			}
+		}
+		return count
+	default:
+		return b.DaysInclusive
+	}
 }
 
 type dailyMetric struct {
@@ -351,8 +812,9 @@ type dailyMetric struct {
 	FailedDeploymentCount     int64
 }
 
-func (d dailyMetric) toClickHouseRecord(repositoryID string, calculatedAt time.Time) metricsDailyRecord {
+func (d dailyMetric) toClickHouseRecord(repositoryID string, calculatedAt time.Time, metricVersion int) metricsDailyRecord {
 	return metricsDailyRecord{
+		MetricVersion:             int64(metricVersion),
 		RepositoryID:              repositoryID,
 		MetricDate:                formatDate(d.Date),
 		PRCycleTimeMinutes:        d.PRCycleTimeMinutes,

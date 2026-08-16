@@ -51,6 +51,29 @@ type deploymentRecord struct {
 	SyncedAt     string `json:"synced_at"`
 }
 
+type commitEventRecord struct {
+	ID              string  `json:"id"`
+	RepositoryID    string  `json:"repository_id"`
+	GitHubCommitSHA string  `json:"github_commit_sha"`
+	Author          string  `json:"author"`
+	AuthorEmail     *string `json:"author_email"`
+	Message         string  `json:"message"`
+	AuthoredAt      string  `json:"authored_at"`
+	SyncedAt        string  `json:"synced_at"`
+}
+
+type workflowEventRecord struct {
+	ID                string  `json:"id"`
+	RepositoryID      string  `json:"repository_id"`
+	GithubWorkflowRun int64   `json:"github_workflow_run_id"`
+	WorkflowName      string  `json:"workflow_name"`
+	Status            string  `json:"status"`
+	Conclusion        *string `json:"conclusion"`
+	StartedAt         *string `json:"started_at"`
+	CompletedAt       *string `json:"completed_at"`
+	SyncedAt          string  `json:"synced_at"`
+}
+
 type fileChangeRecord struct {
 	ID            string `json:"id"`
 	PullRequestID string `json:"pull_request_id"`
@@ -62,6 +85,7 @@ type fileChangeRecord struct {
 }
 
 type metricsDailyRecord struct {
+	MetricVersion             int64   `json:"metric_version"`
 	RepositoryID              string  `json:"repository_id"`
 	MetricDate                string  `json:"metric_date"`
 	PRCycleTimeMinutes        float64 `json:"pr_cycle_time_minutes"`
@@ -120,7 +144,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:     formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO pull_requests", prPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO pull_requests", prPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse pull_requests: %w", err)
 	}
 
@@ -147,7 +171,7 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:          formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO pull_request_reviews", reviewPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO pull_request_reviews", reviewPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse pull_request_reviews: %w", err)
 	}
 
@@ -171,14 +195,59 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:     formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO deployments", deploymentPayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO deployments", deploymentPayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse deployments: %w", err)
+	}
+
+	commitRows, err := s.listCommitEventsForAnalytics(ctx, repositoryID, bounds)
+	if err != nil {
+		return err
+	}
+
+	commitPayload := make([]commitEventRecord, 0, len(commitRows))
+	for _, item := range commitRows {
+		commitPayload = append(commitPayload, commitEventRecord{
+			ID:              item.ID.String(),
+			RepositoryID:    item.RepositoryID.String(),
+			GitHubCommitSHA: item.GithubCommitSHA,
+			Author:          item.Author,
+			AuthorEmail:     nullableText(item.AuthorEmail),
+			Message:         item.Message,
+			AuthoredAt:      formatTimestamp(item.AuthoredAt.Time),
+			SyncedAt:        formatTimestamp(syncedAt),
+		})
+	}
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO commit_events", commitPayload, clickhouseInsertBatchSize); err != nil {
+		return fmt.Errorf("sync clickhouse commit_events: %w", err)
+	}
+
+	workflowRows, err := s.listWorkflowEventsForAnalytics(ctx, repositoryID, bounds)
+	if err != nil {
+		return err
+	}
+
+	workflowPayload := make([]workflowEventRecord, 0, len(workflowRows))
+	for _, item := range workflowRows {
+		workflowPayload = append(workflowPayload, workflowEventRecord{
+			ID:                item.ID.String(),
+			RepositoryID:      item.RepositoryID.String(),
+			GithubWorkflowRun: item.GithubWorkflowRunID,
+			WorkflowName:      item.WorkflowName,
+			Status:            item.Status,
+			Conclusion:        nullableText(item.Conclusion),
+			StartedAt:         nullableTimestamp(item.StartedAt),
+			CompletedAt:       nullableTimestamp(item.CompletedAt),
+			SyncedAt:          formatTimestamp(syncedAt),
+		})
+	}
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO workflow_events", workflowPayload, clickhouseInsertBatchSize); err != nil {
+		return fmt.Errorf("sync clickhouse workflow_events: %w", err)
 	}
 
 	fileChanges, err := s.pg.Queries().ListFileChangesForAnalytics(ctx, sqlcgen.ListFileChangesForAnalyticsParams{
 		RepositoryID: repositoryID,
-		CreatedAt:    toTimestamp(bounds.From),
-		CreatedAt_2:  toTimestamp(bounds.ToExclusive),
+		MergedAt:     toTimestamp(bounds.From),
+		CreatedAt:    toTimestamp(bounds.ToExclusive),
 	})
 	if err != nil {
 		return fmt.Errorf("list file_changes for analytics: %w", err)
@@ -196,18 +265,140 @@ func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.
 			SyncedAt:      formatTimestamp(syncedAt),
 		})
 	}
-	if err := s.ch.InsertJSONEachRow(ctx, "INSERT INTO file_changes", filePayload); err != nil {
+	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO file_changes", filePayload, clickhouseInsertBatchSize); err != nil {
 		return fmt.Errorf("sync clickhouse file_changes: %w", err)
 	}
 
 	return nil
 }
 
+type workflowEventAnalyticsRow struct {
+	ID                  pgtype.UUID
+	RepositoryID        pgtype.UUID
+	GithubWorkflowRunID int64
+	WorkflowName        string
+	Status              string
+	Conclusion          pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+}
+
+func (s *Service) listWorkflowEventsForAnalytics(ctx context.Context, repositoryID pgtype.UUID, bounds dateBounds) ([]workflowEventAnalyticsRow, error) {
+	rows, err := s.pg.Pool().Query(ctx, `
+SELECT id,
+       repository_id,
+       github_workflow_run_id,
+       workflow_name,
+       status,
+       conclusion,
+       started_at,
+       completed_at
+FROM workflow_events
+WHERE repository_id = $1
+  AND coalesce(started_at, completed_at, updated_at, created_at) >= $2
+  AND coalesce(started_at, completed_at, updated_at, created_at) < $3
+ORDER BY coalesce(started_at, completed_at, updated_at, created_at) ASC`,
+		repositoryID,
+		toTimestamp(bounds.From),
+		toTimestamp(bounds.ToExclusive),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow_events for analytics: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]workflowEventAnalyticsRow, 0)
+	for rows.Next() {
+		var item workflowEventAnalyticsRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.RepositoryID,
+			&item.GithubWorkflowRunID,
+			&item.WorkflowName,
+			&item.Status,
+			&item.Conclusion,
+			&item.StartedAt,
+			&item.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan workflow_events analytics row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflow_events analytics rows: %w", err)
+	}
+	return items, nil
+}
+
+type commitEventAnalyticsRow struct {
+	ID              pgtype.UUID
+	RepositoryID    pgtype.UUID
+	GithubCommitSHA string
+	Author          string
+	AuthorEmail     pgtype.Text
+	Message         string
+	AuthoredAt      pgtype.Timestamptz
+}
+
+func (s *Service) listCommitEventsForAnalytics(ctx context.Context, repositoryID pgtype.UUID, bounds dateBounds) ([]commitEventAnalyticsRow, error) {
+	rows, err := s.pg.Pool().Query(ctx, `
+SELECT id,
+       repository_id,
+       github_commit_sha,
+       author,
+       author_email,
+       message,
+       authored_at
+FROM commit_events
+WHERE repository_id = $1
+  AND authored_at >= $2
+  AND authored_at < $3
+ORDER BY authored_at ASC`,
+		repositoryID,
+		toTimestamp(bounds.From),
+		toTimestamp(bounds.ToExclusive),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list commit_events for analytics: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]commitEventAnalyticsRow, 0)
+	for rows.Next() {
+		var item commitEventAnalyticsRow
+		if err := rows.Scan(
+			&item.ID,
+			&item.RepositoryID,
+			&item.GithubCommitSHA,
+			&item.Author,
+			&item.AuthorEmail,
+			&item.Message,
+			&item.AuthoredAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan commit_events analytics row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate commit_events analytics rows: %w", err)
+	}
+	return items, nil
+}
+
+func nullableText(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String
+	return &result
+}
+
 func (s *Service) listMetricsDaily(ctx context.Context, repositoryID string, bounds dateBounds) ([]metricsDailyRecord, error) {
 	query := fmt.Sprintf(`
 SELECT
+  metric_version,
   repository_id,
-  toString(metric_date) AS metric_date,
+  metric_date,
   pr_cycle_time_minutes,
   review_wait_minutes,
   average_review_minutes,
@@ -217,14 +408,14 @@ SELECT
   deployment_frequency,
   change_failure_rate,
   review_coverage,
-  pr_count,
-  merged_pr_count,
-  reviewed_pr_count,
-  review_wait_sample_count,
-  review_time_sample_count,
-  successful_deployment_count,
-  failed_deployment_count,
-  toString(calculated_at) AS calculated_at
+  toInt32(pr_count) AS pr_count,
+  toInt32(merged_pr_count) AS merged_pr_count,
+  toInt32(reviewed_pr_count) AS reviewed_pr_count,
+  toInt32(review_wait_sample_count) AS review_wait_sample_count,
+  toInt32(review_time_sample_count) AS review_time_sample_count,
+  toInt32(successful_deployment_count) AS successful_deployment_count,
+  toInt32(failed_deployment_count) AS failed_deployment_count,
+  calculated_at
 FROM metrics_daily
 FINAL
 WHERE repository_id = '%s'
@@ -247,8 +438,8 @@ SELECT
   repository_id,
   environment,
   status,
-  toString(deployed_at) AS deployed_at,
-  toString(synced_at) AS synced_at
+  deployed_at,
+  synced_at
 FROM deployments
 FINAL
 WHERE repository_id = '%s'
@@ -300,11 +491,13 @@ WHERE pr.repository_id = '%s'
 	return rows, nil
 }
 
-func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDailyRecord) DashboardSummary {
+func aggregateSummary(repositoryID string, bounds dateBounds, dayType string, rows []metricsDailyRecord) DashboardSummary {
 	summary := DashboardSummary{
-		RepositoryID: repositoryID,
-		From:         formatDate(bounds.From),
-		To:           formatDate(bounds.ToInclusive),
+		MetricVersion: CurrentMetricVersion,
+		DayType:       dayType,
+		RepositoryID:  repositoryID,
+		From:          formatDate(bounds.From),
+		To:            formatDate(bounds.ToInclusive),
 	}
 
 	var totalCycleWeighted float64
@@ -333,8 +526,8 @@ func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDail
 	if totalWaitSamples > 0 {
 		summary.ReviewWaitMinutes = totalWaitWeighted / float64(totalWaitSamples)
 	}
-	if bounds.DaysInclusive > 0 {
-		summary.DeploymentFrequency = float64(totalSuccessful) / float64(bounds.DaysInclusive)
+	if dayCount := bounds.dayCount(dayType); dayCount > 0 {
+		summary.DeploymentFrequency = float64(totalSuccessful) / float64(dayCount)
 	}
 	if totalDeployments := totalSuccessful + totalFailed; totalDeployments > 0 {
 		summary.ChangeFailureRate = float64(totalFailed) / float64(totalDeployments)
@@ -346,8 +539,10 @@ func aggregateSummary(repositoryID string, bounds dateBounds, rows []metricsDail
 	return summary
 }
 
-func aggregatePullRequestMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) PullRequestMetrics {
+func aggregatePullRequestMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) PullRequestMetrics {
 	result := PullRequestMetrics{
+		MetricVersion:  CurrentMetricVersion,
+		DayType:        dayType,
 		CycleTimeTrend: make([]MetricPoint, 0),
 	}
 
@@ -387,8 +582,10 @@ func aggregatePullRequestMetrics(bounds dateBounds, interval string, rows []metr
 	return result
 }
 
-func aggregateReviewMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) ReviewMetrics {
+func aggregateReviewMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) ReviewMetrics {
 	result := ReviewMetrics{
+		MetricVersion: CurrentMetricVersion,
+		DayType:       dayType,
 		WaitTimeTrend: make([]MetricPoint, 0),
 	}
 
@@ -429,8 +626,10 @@ func aggregateReviewMetrics(bounds dateBounds, interval string, rows []metricsDa
 	return result
 }
 
-func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metricsDailyRecord) DeploymentMetrics {
+func aggregateDeploymentMetrics(bounds dateBounds, interval string, dayType string, rows []metricsDailyRecord) DeploymentMetrics {
 	result := DeploymentMetrics{
+		MetricVersion:   CurrentMetricVersion,
+		DayType:         dayType,
 		DeploymentTrend: make([]MetricPoint, 0),
 	}
 
@@ -442,8 +641,8 @@ func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metri
 	}
 
 	result.DeploymentCount = int(totalSuccessful)
-	if bounds.DaysInclusive > 0 {
-		result.DeploymentFrequency = float64(totalSuccessful) / float64(bounds.DaysInclusive)
+	if dayCount := bounds.dayCount(dayType); dayCount > 0 {
+		result.DeploymentFrequency = float64(totalSuccessful) / float64(dayCount)
 	}
 	if totalDeployments := totalSuccessful + totalFailed; totalDeployments > 0 {
 		result.ChangeFailureRate = float64(totalFailed) / float64(totalDeployments)
@@ -460,7 +659,7 @@ func aggregateDeploymentMetrics(bounds dateBounds, interval string, rows []metri
 	return result
 }
 
-func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, rows []deploymentRecord) DeploymentMetrics {
+func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, dayType string, rows []deploymentRecord) DeploymentMetrics {
 	daily := make([]metricsDailyRecord, 0, bounds.DaysInclusive)
 	byDay := make(map[string]*metricsDailyRecord, bounds.DaysInclusive)
 	for day := bounds.From; !day.After(bounds.ToInclusive); day = day.AddDate(0, 0, 1) {
@@ -486,10 +685,10 @@ func aggregateDeploymentMetricsFromRaw(bounds dateBounds, interval string, rows 
 		daily = append(daily, *byDay[formatDate(day)])
 	}
 
-	return aggregateDeploymentMetrics(bounds, interval, daily)
+	return aggregateDeploymentMetrics(bounds, interval, dayType, daily)
 }
 
-func aggregateHotspots(rows []hotspotRow) []HotspotFile {
+func aggregateHotspots(rows []hotspotRow, rules RuleConfig) []HotspotFile {
 	byFile := make(map[string]*HotspotFile)
 	for _, row := range rows {
 		item, ok := byFile[row.FilePath]
@@ -500,7 +699,9 @@ func aggregateHotspots(rows []hotspotRow) []HotspotFile {
 		item.Additions += int(row.Additions)
 		item.Deletions += int(row.Deletions)
 		item.CommitCount += int(row.CommitCount)
-		item.HotspotScore = float64(item.CommitCount + item.Additions + item.Deletions)
+		item.HotspotScore = float64(item.CommitCount)*rules.HotspotCommitWeight +
+			float64(item.Additions)*rules.HotspotAdditionsWeight +
+			float64(item.Deletions)*rules.HotspotDeletionsWeight
 	}
 
 	files := make([]HotspotFile, 0, len(byFile))

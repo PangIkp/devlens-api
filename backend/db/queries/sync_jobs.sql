@@ -6,9 +6,18 @@ SELECT EXISTS (
 );
 
 -- name: GetSyncJobRepositoryTarget :one
-SELECT id, full_name, last_synced_at
-FROM repositories
-WHERE id = $1;
+SELECT
+    r.id,
+    r.full_name,
+    r.last_synced_at,
+    r.github_installation_repository_id,
+    r.is_active,
+    gi.installation_id,
+    gi.status AS installation_status
+FROM repositories r
+LEFT JOIN github_installation_repositories gir ON gir.id = r.github_installation_repository_id
+LEFT JOIN github_installations gi ON gi.id = gir.github_installation_id
+WHERE r.id = $1;
 
 -- name: HasActiveSyncJob :one
 SELECT EXISTS (

@@ -48,10 +48,14 @@ ON CONFLICT (github_pr_id) DO UPDATE SET
     number = EXCLUDED.number,
     title = EXCLUDED.title,
     author = EXCLUDED.author,
-    state = EXCLUDED.state,
-    created_at = EXCLUDED.created_at,
-    merged_at = EXCLUDED.merged_at,
-    closed_at = EXCLUDED.closed_at,
+    state = CASE
+        WHEN pull_requests.merged_at IS NOT NULL AND EXCLUDED.merged_at IS NULL THEN pull_requests.state
+        WHEN pull_requests.closed_at IS NOT NULL AND EXCLUDED.closed_at IS NULL AND EXCLUDED.state = 'open' THEN pull_requests.state
+        ELSE EXCLUDED.state
+    END,
+    created_at = LEAST(pull_requests.created_at, EXCLUDED.created_at),
+    merged_at = COALESCE(GREATEST(pull_requests.merged_at, EXCLUDED.merged_at), pull_requests.merged_at, EXCLUDED.merged_at),
+    closed_at = COALESCE(GREATEST(pull_requests.closed_at, EXCLUDED.closed_at), pull_requests.closed_at, EXCLUDED.closed_at),
     additions = EXCLUDED.additions,
     deletions = EXCLUDED.deletions,
     files_changed = EXCLUDED.files_changed,
@@ -121,10 +125,15 @@ INSERT INTO pull_request_reviews (
 ON CONFLICT (github_review_id) DO UPDATE SET
     pull_request_id = EXCLUDED.pull_request_id,
     reviewer = EXCLUDED.reviewer,
-    review_requested_at = EXCLUDED.review_requested_at,
-    first_review_at = EXCLUDED.first_review_at,
-    review_submitted_at = EXCLUDED.review_submitted_at,
-    state = EXCLUDED.state
+    review_requested_at = COALESCE(LEAST(pull_request_reviews.review_requested_at, EXCLUDED.review_requested_at), pull_request_reviews.review_requested_at, EXCLUDED.review_requested_at),
+    first_review_at = COALESCE(LEAST(pull_request_reviews.first_review_at, EXCLUDED.first_review_at), pull_request_reviews.first_review_at, EXCLUDED.first_review_at),
+    review_submitted_at = COALESCE(GREATEST(pull_request_reviews.review_submitted_at, EXCLUDED.review_submitted_at), pull_request_reviews.review_submitted_at, EXCLUDED.review_submitted_at),
+    state = CASE
+        WHEN EXCLUDED.review_submitted_at IS NOT NULL
+             AND (pull_request_reviews.review_submitted_at IS NULL OR EXCLUDED.review_submitted_at >= pull_request_reviews.review_submitted_at)
+        THEN EXCLUDED.state
+        ELSE pull_request_reviews.state
+    END
 `
 
 type UpsertPullRequestReviewParams struct {

@@ -2,44 +2,99 @@
 
 DevLens is an Engineering Intelligence Platform for collecting GitHub workflow data and turning it into engineering metrics and insights.
 
-This repository currently contains the initial backend foundation in [`backend`](./backend) plus local development infrastructure for PostgreSQL, ClickHouse, and NATS JetStream.
+This repository contains the DevLens backend in [`backend`](./backend) plus local development infrastructure for PostgreSQL, ClickHouse, and NATS JetStream.
 
-## Current Scope
+## Implemented API Surface
 
-- Go API bootstrap
-- `/api/v1/health`
-- `POST /api/v1/organizations`
-- `GET /api/v1/organizations`
-- `GET /api/v1/organizations/{organizationId}`
-- `GET /api/v1/organizations/{organizationId}/members`
-- `POST /api/v1/organizations/{organizationId}/members`
-- `PATCH /api/v1/organizations/{organizationId}/members/{memberId}`
-- `DELETE /api/v1/organizations/{organizationId}/members/{memberId}`
-- `POST /api/v1/organizations/{organizationId}/repositories`
-- `GET /api/v1/organizations/{organizationId}/repositories`
-- `GET /api/v1/repositories/{repositoryId}`
-- `PATCH /api/v1/repositories/{repositoryId}`
-- `GET /api/v1/repositories/{repositoryId}/dashboard/summary`
-- `GET /api/v1/repositories/{repositoryId}/metrics/pull-requests`
-- `GET /api/v1/repositories/{repositoryId}/metrics/reviews`
-- `GET /api/v1/repositories/{repositoryId}/metrics/deployments`
-- `GET /api/v1/repositories/{repositoryId}/metrics/hotspots`
-- `POST /api/v1/repositories/{repositoryId}/sync`
-- `GET /api/v1/repositories/{repositoryId}/sync-jobs`
-- `GET /api/v1/sync-jobs/{syncJobId}`
-- `POST /api/v1/github/webhook`
-- GitHub REST client foundation for repository, pull request, review, and commit ingestion
-- PostgreSQL persistence for `pull_requests` and `pull_request_reviews`
-- transactional webhook delivery persistence and sync job enqueue
-- ClickHouse-backed daily metrics storage for dashboard queries
-- NATS JetStream trigger for repository metric recalculation after sync completion
-- planned GitHub App connection contract for frontend-driven installation, repository access, and initial sync state
-- PostgreSQL pool initialization with `pgxpool`
-- SQL migrations and `sqlc` foundation
-- environment-based configuration
-- structured logging with `log/slog`
-- chi router and core middleware
-- Docker Compose for local dependencies
+- Auth:
+  - `POST /api/v1/auth/login`
+  - `POST /api/v1/auth/refresh`
+  - `POST /api/v1/auth/logout`
+  - `GET /api/v1/me`
+- Health:
+  - `GET /api/v1/health`
+  - `GET /api/v1/readiness`
+- Organizations and members:
+  - `POST /api/v1/organizations`
+  - `GET /api/v1/organizations`
+  - `GET /api/v1/organizations/{organizationId}`
+  - `PATCH /api/v1/organizations/{organizationId}`
+  - `DELETE /api/v1/organizations/{organizationId}`
+  - `GET /api/v1/organizations/{organizationId}/members`
+  - `POST /api/v1/organizations/{organizationId}/members`
+  - `PATCH /api/v1/organizations/{organizationId}/members/{memberId}`
+  - `DELETE /api/v1/organizations/{organizationId}/members/{memberId}`
+- GitHub App connection:
+  - `GET /api/v1/organizations/{organizationId}/github/connection`
+  - `POST /api/v1/organizations/{organizationId}/github/installations/start`
+  - `GET /api/v1/organizations/{organizationId}/github/installations/callback`
+  - `GET /api/v1/organizations/{organizationId}/github/repositories`
+  - `POST /api/v1/organizations/{organizationId}/github/repositories/select`
+- Repositories and pull requests:
+  - `POST /api/v1/organizations/{organizationId}/repositories`
+  - `GET /api/v1/organizations/{organizationId}/repositories`
+  - `GET /api/v1/repositories/{repositoryId}`
+  - `PATCH /api/v1/repositories/{repositoryId}`
+  - `GET /api/v1/pull-requests`
+  - `GET /api/v1/pull-requests/{pullRequestId}`
+- Sync jobs:
+  - `POST /api/v1/repositories/{repositoryId}/sync`
+  - `GET /api/v1/repositories/{repositoryId}/sync-jobs`
+  - `GET /api/v1/sync-jobs/{syncJobId}`
+  - `POST /api/v1/sync-jobs/{syncJobId}/retry`
+  - `POST /api/v1/sync-jobs/{syncJobId}/cancel`
+- Webhooks:
+  - `POST /api/v1/github/webhook`
+  - `POST /api/v1/webhooks/github`
+  - `POST /api/v1/github/webhook-deliveries/{deliveryId}/retry`
+- Metrics and dashboard:
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/summary`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/pr-cycle-time`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/review-wait-time`
+  - `GET /api/v1/repositories/{repositoryId}/dashboard/review-queue`
+  - `GET /api/v1/repositories/{repositoryId}/metrics`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/pull-requests`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/reviews`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/deployments`
+  - `GET /api/v1/repositories/{repositoryId}/metrics/hotspots`
+- Insights:
+  - `GET /api/v1/organizations/{organizationId}/insights`
+  - `GET /api/v1/insights`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/review`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/dismiss`
+  - `POST /api/v1/organizations/{organizationId}/insights/{insightKey}/reopen`
+
+## Contract Notes
+
+- `docs/openapi.yaml` is the source of truth for public API contract.
+- Canonical repository collection path is organization-scoped: `GET /api/v1/organizations/{organizationId}/repositories`.
+- Canonical sync-job collection path is repository-scoped: `GET /api/v1/repositories/{repositoryId}/sync-jobs`.
+- Top-level `GET /api/v1/insights` is supported as a query-scoped alias and requires `organizationId` in the query string.
+- Top-level `GET /api/v1/repositories` and `GET /api/v1/sync-jobs` are not implemented in the current contract.
+- Webhook ingestion supports both `POST /api/v1/github/webhook` and `POST /api/v1/webhooks/github`.
+- Selected read endpoints support `ETag` and `If-None-Match`:
+  - `GET /api/v1/me`
+  - `GET /api/v1/organizations/{organizationId}/github/connection`
+  - `GET /api/v1/organizations/{organizationId}/github/repositories`
+
+## Data Readiness
+
+- Production-like now:
+  - auth/session APIs
+  - organization/member/repository CRUD
+  - GitHub App connection flow
+  - sync job APIs
+  - webhook delivery ingestion and retry
+- Backed by synced analytics data and may legitimately return empty arrays or zeroed aggregates when a repository has not been synced yet or the selected date range has no data:
+  - dashboard summary
+  - pull request metrics
+  - review metrics
+  - repository metrics
+  - review queue
+  - insights
+- Require richer raw ingestion before results become useful:
+  - deployment metrics depend on workflow/deployment data
+  - hotspots depend on file change data
 
 ## Quick Start
 
@@ -77,6 +132,44 @@ make test
 make run
 ```
 
+7. Run lightweight local load tests:
+
+```sh
+LOADTEST_REPOSITORY_ID=<repository-uuid> make load-dashboard
+GITHUB_WEBHOOK_SECRET=<your-webhook-secret> make load-webhook
+```
+
+8. Backup and restore PostgreSQL:
+
+```sh
+make backup-postgres
+BACKUP_FILE=/absolute/path/to/backup.dump make restore-postgres
+BACKUP_FILE=/absolute/path/to/backup.dump make verify-postgres-restore
+```
+
+9. Build metadata:
+
+- backend binaries and Docker images embed `version`, `commit`, and `build_time`
+- CI tags Docker builds with branch and commit-sha metadata for rollback-friendly traceability
+
+10. Operations runbook:
+
+- rollback, backup configuration, and restore verification are documented in [`docs/07-operations-runbook.md`](./docs/07-operations-runbook.md)
+
+11. Observability stack:
+
+```sh
+docker compose up -d prometheus grafana
+```
+
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
+- default Grafana credentials come from `.env` via `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`
+- Prometheus loads baseline alert rules from `deploy/observability/prometheus/rules/devlens-alerts.yml`
+- OTLP tracing can be enabled with `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT=<host:port>`
+- provisioned Grafana dashboards now cover backend overview, workers, GitHub API usage, and sync/webhook operations
+- worker, queue lag, sync duration, webhook delay, PostgreSQL, ClickHouse, and GitHub API metrics are exposed through `/metrics`
+
 ## Organization API
 
 Current `Organization` shape:
@@ -93,25 +186,24 @@ Behavior notes:
 - `slug` must be lowercase and may contain letters, numbers, and hyphens
 - `GET` queries exclude soft-deleted organizations (`deleted_at IS NOT NULL`)
 - `updatedAt` is nullable until update behavior is implemented
-- authentication is still deferred, so member write endpoints currently accept `userId` in request body
 - organization members currently use `hard delete` because the PostgreSQL schema does not define `deleted_at` for `organization_members`
 - repositories are treated as long-lived records for metrics and sync history, so this phase uses `isActive` and `archivedAt` instead of delete endpoints
 - repository list supports `page`, `pageSize`, `status`, `search`, `sortBy`, and `sortOrder`
-- manual sync persists pull requests and pull request reviews into PostgreSQL
+- manual sync persists repository metadata, pull requests, reviews, commits, workflow runs, deployments, and file changes
 - incremental sync currently uses `repositories.last_synced_at` as the cutoff
 - `last_synced_at` is a coarse repository-level checkpoint and may need to evolve into finer-grained sync checkpoints in a future phase
 - webhook handling validates `X-Hub-Signature-256`, stores `github_delivery_id`, and enqueues sync jobs asynchronously
 - metrics are calculated from PostgreSQL raw data and stored in ClickHouse `metrics_daily`
-- `deployments` and `file_changes` raw schema exist in PostgreSQL for analytics completeness, but ingestion for those sources is intentionally deferred
+- deployment, workflow, commit, and file-change raw analytics are synced into ClickHouse for dashboard, hotspot, and insight calculations
 - hotspot ranking reads raw `file_changes` from ClickHouse
 - deployment filtering by `environment` reads raw deployment analytics data from ClickHouse when available
-- current sync still uses a server-side `GITHUB_TOKEN`; GitHub App installation flow is planned but not implemented yet
+- GitHub sync can resolve installation access through the backend GitHub App flow without exposing installation tokens to the frontend
 
-## Planned GitHub App Connection Contract
+## GitHub App Connection Flow
 
-The next backend milestone will move GitHub connectivity from a static server token to a GitHub App installation flow. The frontend should treat this as the long-term integration path for both public and private repositories.
+The backend supports GitHub App installation as the primary integration path for both public and private repositories.
 
-Planned frontend-visible states:
+Frontend-visible states:
 
 - `not_connected`
 - `installation_required`
@@ -119,7 +211,7 @@ Planned frontend-visible states:
 - `syncing`
 - `sync_failed`
 
-Planned backend responsibilities:
+Backend responsibilities:
 
 - provide installation start and callback endpoints for GitHub App setup
 - expose connection status per organization so the frontend can decide whether to show connect, install, repo selection, or sync UI
@@ -127,7 +219,7 @@ Planned backend responsibilities:
 - persist installation and repository access metadata in PostgreSQL
 - trigger initial sync after the user selects repositories to connect
 
-Planned endpoints are documented in [`docs/openapi.yaml`](./docs/openapi.yaml) and described as upcoming contract work, not current production behavior.
+The endpoint contract is documented in [`docs/openapi.yaml`](./docs/openapi.yaml).
 
 Example requests:
 
@@ -218,7 +310,7 @@ Implementation notes:
 - parses `Link` headers to expose the next page number
 - tracks rate limit headers from GitHub responses
 - retries temporary failures such as `429`, `500`, `502`, `503`, `504`, and secondary rate limit responses
-- accepts a `TokenProvider` so future GitHub App installation tokens can be introduced without changing sync orchestration code
+- accepts a `TokenProvider` so app installation tokens and fallback token strategies can be swapped without changing sync orchestration code
 
 New environment variables:
 
@@ -253,16 +345,32 @@ NATS_URL=nats://nats:4222
 Notes:
 
 - `ListPullRequests` accepts caller-provided `state`; the Step 2 sync flow will use `state=all` by default
-- GitHub App installation token support is intentionally deferred in this phase
+- GitHub App installation token support is available through the backend integration flow
 - sync jobs now persist `status`, `progress`, `startedAt`, `finishedAt`, and `errorMessage` in PostgreSQL
 - manual sync execution is currently inline for the current milestone
 - webhook events are accepted asynchronously: the handler stores the delivery and enqueues a pending sync job, then an in-process worker processes that job
 - pull request upsert uses `github_pr_id` as the primary external identity
 - pull request data also enforces `(repository_id, number)` as a secondary consistency constraint
 - pull request review upsert uses `github_review_id` as the provider identity
-- full repository sync from webhook and direct event projection are intentionally deferred
-- metrics recalculation is triggered by `repository.sync.completed` events on NATS JetStream
-- deployment ingestion and file change ingestion are intentionally deferred in this branch; the schema and repositories are prepared so dashboards can safely return `0` or empty lists until those sources are populated
+- webhook-created sync jobs now run as full repository syncs when repository mapping is available
+- direct event projection is implemented for supported webhook resource types alongside sync-job enqueue
+- sync orchestration remains PostgreSQL-backed; NATS JetStream is used for downstream derived workloads after sync completion
+- `repository.sync.completed` is published as a domain event, then fanned out to `metrics.calculate` and `insights.generate`
+- deployment ingestion, workflow ingestion, commit ingestion, and file-change ingestion are implemented and feed analytics storage
+
+## Deployment And Operations
+
+- primary operational guidance lives in [`docs/07-operations-runbook.md`](./docs/07-operations-runbook.md)
+- data retention, cleanup, and ClickHouse backup/restore notes live in [`docs/09-data-lifecycle-and-backup.md`](./docs/09-data-lifecycle-and-backup.md)
+- security-sensitive secret handling and rotation guidance lives in [`docs/10-security-hardening.md`](./docs/10-security-hardening.md)
+
+Production-like deployment expectations today:
+
+- deploy a versioned backend artifact or image
+- provision PostgreSQL, ClickHouse, and NATS outside the app process
+- run migrations before shifting write traffic
+- inject secrets through the environment or platform secret manager
+- verify health, readiness, metrics scrape, worker activity, webhook retry flow, and one known repository metrics path after rollout
 
 ## Local Services
 

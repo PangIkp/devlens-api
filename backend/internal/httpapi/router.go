@@ -4,8 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -18,23 +20,50 @@ type ClickHouseHealthChecker interface {
 	Check(context.Context) error
 }
 
+type NATSHealthChecker interface {
+	Check(context.Context) error
+}
+
 type Dependencies struct {
-	Postgres            PostgresHealthChecker
-	ClickHouse          ClickHouseHealthChecker
-	Organizations       *OrganizationHandler
-	OrganizationMembers *OrganizationMemberHandler
-	Repositories        *RepositoryHandler
-	Metrics             *MetricsHandler
-	SyncJobs            *SyncJobHandler
-	GitHubWebhook       *GitHubWebhookHandler
+	Postgres                      PostgresHealthChecker
+	ClickHouse                    ClickHouseHealthChecker
+	NATS                          NATSHealthChecker
+	AppMetrics                    *observability.Metrics
+	AllowedOrigins                []string
+	RateLimitRequests             int
+	RateLimitWindow               time.Duration
+	Auth                          *AuthHandler
+	Authenticator                 middleware.Authenticator
+	Organizations                 *OrganizationHandler
+	OrganizationMembers           *OrganizationMemberHandler
+	Me                            *MeHandler
+	GitHubConnections             *GitHubConnectionHandler
+	PullRequests                  *PullRequestHandler
+	Repositories                  *RepositoryHandler
+	Metrics                       *MetricsHandler
+	Insights                      *InsightHandler
+	SyncJobs                      *SyncJobHandler
+	GitHubWebhook                 *GitHubWebhookHandler
+	OrganizationRuleSettings      *OrganizationRuleSettingsHandler
+	OrganizationRetentionSettings *OrganizationRetentionSettingsHandler
 }
 
 func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	router := chi.NewRouter()
+	rateLimiter := middleware.NewRateLimiter(deps.RateLimitRequests, deps.RateLimitWindow)
+	httpMetrics := middleware.NewHTTPMetrics()
 
 	router.Use(chimiddleware.RequestID)
+	router.Use(middleware.TraceID())
+	router.Use(middleware.NoStore())
+	router.Use(middleware.CORS(deps.AllowedOrigins))
+	router.Use(middleware.RateLimit(rateLimiter))
+	router.Use(httpMetrics.Middleware())
 	router.Use(middleware.Recoverer(logger))
 	router.Use(middleware.RequestLogger(logger))
+	router.Use(middleware.OptionalAuth(deps.Authenticator))
+
+	router.Get("/metrics", metricsHandler(httpMetrics, deps.AppMetrics).ServeHTTP)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, r, http.StatusNotFound, Error{
@@ -51,18 +80,34 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 	})
 
 	router.Route("/api/v1", func(r chi.Router) {
-		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse).ServeHTTP)
+		r.Get("/health", NewHealthHandler(deps.Postgres, deps.ClickHouse, deps.NATS).ServeHTTP)
+		r.Get("/readiness", NewReadinessHandler(deps.Postgres, deps.ClickHouse, deps.NATS).ServeHTTP)
+		if deps.Auth != nil {
+			deps.Auth.RegisterRoutes(r)
+		}
+		if deps.Me != nil {
+			deps.Me.RegisterRoutes(r)
+		}
 		if deps.Organizations != nil {
 			deps.Organizations.RegisterRoutes(r)
 		}
 		if deps.OrganizationMembers != nil {
 			deps.OrganizationMembers.RegisterRoutes(r)
 		}
+		if deps.GitHubConnections != nil {
+			deps.GitHubConnections.RegisterRoutes(r)
+		}
 		if deps.Repositories != nil {
 			deps.Repositories.RegisterRoutes(r)
 		}
+		if deps.PullRequests != nil {
+			deps.PullRequests.RegisterRoutes(r)
+		}
 		if deps.Metrics != nil {
 			deps.Metrics.RegisterRoutes(r)
+		}
+		if deps.Insights != nil {
+			deps.Insights.RegisterRoutes(r)
 		}
 		if deps.SyncJobs != nil {
 			deps.SyncJobs.RegisterRoutes(r)
@@ -70,7 +115,26 @@ func NewRouter(logger *slog.Logger, deps Dependencies) http.Handler {
 		if deps.GitHubWebhook != nil {
 			deps.GitHubWebhook.RegisterRoutes(r)
 		}
+		if deps.OrganizationRuleSettings != nil {
+			deps.OrganizationRuleSettings.RegisterRoutes(r)
+		}
+		if deps.OrganizationRetentionSettings != nil {
+			deps.OrganizationRetentionSettings.RegisterRoutes(r)
+		}
 	})
 
 	return router
+}
+
+func metricsHandler(httpMetrics *middleware.HTTPMetrics, appMetrics *observability.Metrics) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		if httpMetrics != nil {
+			_, _ = w.Write([]byte(httpMetrics.Render()))
+		}
+		if appMetrics != nil {
+			_, _ = w.Write([]byte(appMetrics.Render()))
+		}
+	})
 }

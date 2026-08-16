@@ -9,19 +9,33 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
+	"github.com/PangIkp/devlens/backend/internal/auth"
+	"github.com/PangIkp/devlens/backend/internal/authorization"
 	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 	"github.com/PangIkp/devlens/backend/internal/config"
+	"github.com/PangIkp/devlens/backend/internal/githubapp"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
+	"github.com/PangIkp/devlens/backend/internal/githubconnection"
 	"github.com/PangIkp/devlens/backend/internal/githubwebhook"
 	"github.com/PangIkp/devlens/backend/internal/httpapi"
+	"github.com/PangIkp/devlens/backend/internal/insightbus"
+	"github.com/PangIkp/devlens/backend/internal/insights"
+	"github.com/PangIkp/devlens/backend/internal/metricdefinition"
 	"github.com/PangIkp/devlens/backend/internal/metrics"
 	"github.com/PangIkp/devlens/backend/internal/metricsbus"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/PangIkp/devlens/backend/internal/organization"
 	"github.com/PangIkp/devlens/backend/internal/organizationmember"
+	"github.com/PangIkp/devlens/backend/internal/orgretention"
+	"github.com/PangIkp/devlens/backend/internal/orgrulesettings"
 	"github.com/PangIkp/devlens/backend/internal/postgres"
+	"github.com/PangIkp/devlens/backend/internal/pullrequest"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
 	"github.com/PangIkp/devlens/backend/internal/syncjob"
+	"github.com/PangIkp/devlens/backend/internal/userprofile"
 )
 
 type App struct {
@@ -31,26 +45,43 @@ type App struct {
 	postgres        *postgres.DB
 	clickhouse      *clickhouse.DB
 	worker          *syncjob.Worker
+	webhookWorker   *githubwebhook.Worker
 	metricsBus      *metricsbus.Client
 	metricsConsumer *metricsbus.Consumer
+	insightBus      *insightbus.Client
+	insightConsumer *insightbus.Consumer
+	tracing         *observability.Tracing
+	appMetrics      *observability.Metrics
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
 	logger := newLogger(cfg)
+	appMetrics := observability.NewMetrics()
+
+	tracing, err := observability.SetupTracing(ctx, observability.TracingConfig{
+		Enabled:          cfg.Tracing.Enabled,
+		ServiceName:      cfg.Tracing.ServiceName,
+		ExporterEndpoint: cfg.Tracing.ExporterEndpoint,
+		Insecure:         cfg.Tracing.Insecure,
+		SampleRatio:      cfg.Tracing.SampleRatio,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("setup tracing: %w", err)
+	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, cfg.Postgres.ConnectTimeout)
 	defer cancel()
 
-	postgresDB, err := postgres.Open(connectCtx, cfg.Postgres)
+	postgresDB, err := postgres.Open(connectCtx, cfg.Postgres, appMetrics)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
 	var clickhouseDB *clickhouse.DB
-	if db, err := clickhouse.Open(cfg.ClickHouse); err != nil {
+	if db, err := clickhouse.Open(cfg.ClickHouse, appMetrics); err != nil {
 		logger.Warn("clickhouse unavailable during startup", "error", err)
 	} else {
-		if err := clickhouse.EnsureSchema(ctx, db); err != nil {
+		if err := clickhouse.EnsureSchema(ctx, db, cfg.DataLifecycle); err != nil {
 			logger.Warn("clickhouse schema initialization failed", "error", err)
 			db.Close()
 		} else {
@@ -60,44 +91,151 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	organizationRepository := organization.NewRepository(postgresDB)
 	organizationService := organization.NewService(organizationRepository)
-	organizationHandler := httpapi.NewOrganizationHandler(organizationService)
+	authRepository := auth.NewRepository(postgresDB)
+	authService := auth.NewService(authRepository, 15*time.Minute, 30*24*time.Hour)
+	auditService := auditlog.NewService(postgresDB)
+	authHandler := httpapi.NewAuthHandler(authService, auditService)
+	authorizationRepository := authorization.NewRepository(postgresDB)
+	authorizationService := authorization.NewService(authorizationRepository)
+	organizationHandler := httpapi.NewOrganizationHandler(organizationService, authorizationService, auditService)
+	userRepository := userprofile.NewRepository(postgresDB)
+	userService := userprofile.NewService(userRepository)
+	meHandler := httpapi.NewMeHandler(userService)
 	organizationMemberRepository := organizationmember.NewRepository(postgresDB)
 	organizationMemberService := organizationmember.NewService(organizationMemberRepository)
-	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService)
+	organizationMemberHandler := httpapi.NewOrganizationMemberHandler(organizationMemberService, authorizationService, auditService)
+	pullRequestRepository := pullrequest.NewRepository(postgresDB)
+	pullRequestService := pullrequest.NewService(pullRequestRepository)
+	pullRequestHandler := httpapi.NewPullRequestHandler(pullRequestService, authorizationService)
 	repositoryStore := devrepository.NewRepository(postgresDB)
 	repositoryService := devrepository.NewService(repositoryStore)
-	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService)
-	metricsService := metrics.NewService(postgresDB, clickhouseDB)
-	metricsHandler := httpapi.NewMetricsHandler(metricsService)
-	githubClient, err := githubclient.New(githubclient.Config{
+	repositoryHandler := httpapi.NewRepositoryHandler(repositoryService, authorizationService, auditService)
+	metricsRules := metrics.RuleConfig{
+		DefaultDayType:         cfg.Metrics.DefaultDayType,
+		HotspotCommitWeight:    cfg.Metrics.HotspotCommitWeight,
+		HotspotAdditionsWeight: cfg.Metrics.HotspotAdditionsWeight,
+		HotspotDeletionsWeight: cfg.Metrics.HotspotDeletionsWeight,
+	}
+	metricDefinitionRepository := metricdefinition.NewRepository(postgresDB)
+	metricsRules, err = metricDefinitionRepository.LoadMetricsRuleConfig(ctx, metricsRules)
+	if err != nil {
+		return nil, fmt.Errorf("load metric definition config: %w", err)
+	}
+	metricsService := metrics.NewService(postgresDB, clickhouseDB, metricsRules)
+	metricsHandler := httpapi.NewMetricsHandler(metricsService, authorizationService)
+	insightRules := insights.RuleConfig{
+		LargePR: insights.LargePRRuleConfig{
+			Enabled:                     true,
+			FilesThreshold:              cfg.Insights.LargePRFilesThreshold,
+			TotalChangesThreshold:       cfg.Insights.LargePRTotalChangesThreshold,
+			HighSeverityFilesThreshold:  cfg.Insights.LargePRHighSeverityFilesThreshold,
+			HighSeverityChangeThreshold: cfg.Insights.LargePRHighSeverityChangesThreshold,
+		},
+		SlowReview: insights.SlowReviewRuleConfig{
+			Enabled:                        true,
+			WaitHoursThreshold:             cfg.Insights.SlowReviewWaitHoursThreshold,
+			HighSeverityWaitHoursThreshold: cfg.Insights.SlowReviewHighSeverityWaitHours,
+		},
+		Hotspot: insights.HotspotRuleConfig{
+			Enabled:                    true,
+			ScoreThreshold:             cfg.Insights.HotspotScoreThreshold,
+			HighSeverityScoreThreshold: cfg.Insights.HotspotHighSeverityScoreThreshold,
+			TopFilesLimit:              cfg.Insights.HotspotTopFilesLimit,
+		},
+		DeploymentFailure: insights.DeploymentFailureRuleConfig{
+			Enabled:                 true,
+			MinimumDeployments:      cfg.Insights.DeploymentMinimumCount,
+			FailureRateThreshold:    cfg.Insights.DeploymentFailureRateThreshold,
+			HighSeverityFailureRate: cfg.Insights.DeploymentHighSeverityFailureRate,
+		},
+		ReviewConcentration: insights.ReviewConcentrationRuleConfig{
+			Enabled:                    true,
+			MinimumReviewCount:         cfg.Insights.ReviewConcentrationMinimumCount,
+			ShareThreshold:             cfg.Insights.ReviewConcentrationShareThreshold,
+			HighSeverityShareThreshold: cfg.Insights.ReviewConcentrationHighSeverityShare,
+		},
+		Bottleneck: insights.BottleneckRuleConfig{
+			Enabled:                         true,
+			MinimumMergedCount:              cfg.Insights.BottleneckMinimumMergedCount,
+			AverageCycleHoursThreshold:      cfg.Insights.BottleneckAverageCycleHoursThreshold,
+			HighSeverityCycleHoursThreshold: cfg.Insights.BottleneckHighSeverityCycleHours,
+			StaleOpenCountThreshold:         cfg.Insights.BottleneckStaleOpenCountThreshold,
+			HighSeverityStaleOpenThreshold:  cfg.Insights.BottleneckHighSeverityStaleOpenCount,
+			StaleOpenAgeDays:                cfg.Insights.BottleneckStaleOpenAgeDays,
+		},
+		AutoReopen: insights.AutoReopenRuleConfig{
+			OnReviewed:      cfg.Insights.AutoReopenOnReviewed,
+			OnDismissed:     cfg.Insights.AutoReopenOnDismissed,
+			MinimumSeverity: cfg.Insights.AutoReopenMinimumSeverity,
+		},
+		Deduplicate: insights.DeduplicateRuleConfig{
+			Enabled: cfg.Insights.DeduplicateEnabled,
+			Version: cfg.Insights.DeduplicateVersion,
+		},
+	}
+	insightRepository := insights.NewRepository(postgresDB)
+	insightService := insights.NewService(insightRepository, insightRules)
+	orgRuleSettingsRepository := orgrulesettings.NewRepository(postgresDB)
+	orgRuleSettingsService := orgrulesettings.NewService(orgRuleSettingsRepository, insightRules, metricsRules)
+	insightService.SetRuleConfigResolver(orgRuleSettingsService)
+	metricsService.SetRuleConfigResolver(orgRuleSettingsService)
+	orgRuleSettingsHandler := httpapi.NewOrganizationRuleSettingsHandler(orgRuleSettingsService, authorizationService, auditService)
+	orgRetentionRepository := orgretention.NewRepository(postgresDB)
+	orgRetentionService := orgretention.NewService(orgRetentionRepository, cfg.DataLifecycle.AnalyticsRawRetentionDays)
+	orgRetentionHandler := httpapi.NewOrganizationRetentionSettingsHandler(orgRetentionService, authorizationService, auditService)
+	insightHandler := httpapi.NewInsightHandler(insightService, authorizationService, auditService)
+	fallbackGitHubClient, err := githubclient.New(githubclient.Config{
 		BaseURL:        cfg.GitHub.BaseURL,
 		UserAgent:      cfg.GitHub.UserAgent,
 		HTTPTimeout:    cfg.GitHub.HTTPTimeout,
 		MaxRetries:     cfg.GitHub.MaxRetries,
 		InitialBackoff: cfg.GitHub.InitialBackoff,
 		MaxBackoff:     cfg.GitHub.MaxBackoff,
+		Metrics:        appMetrics,
 	}, githubclient.StaticTokenProvider{Value: cfg.GitHub.Token})
 	if err != nil {
 		return nil, fmt.Errorf("initialize github client: %w", err)
 	}
+	githubAppClient, err := githubapp.New(cfg.GitHub)
+	if err != nil {
+		return nil, fmt.Errorf("initialize github app client: %w", err)
+	}
+	githubConnectionRepository := githubconnection.NewRepository(postgresDB)
+	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient, appMetrics)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
-	syncJobService := syncjob.NewService(syncJobRepository, githubClient)
-	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService)
-	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval)
-	webhookRepository := githubwebhook.NewRepository(postgresDB)
-	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret)
-	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService)
+	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient, appMetrics)
+	syncJobService.ConfigureRateLimitThrottle(cfg.Sync.GitHubRateLimitRemaining)
+	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
+	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, cfg.Sync.WorkerBatchSize, cfg.Sync.WorkerConcurrency, cfg.Sync.JobTimeout, appMetrics)
+	githubConnectionService := githubconnection.NewService(githubConnectionRepository, githubAppClient, syncJobService)
+	githubConnectionHandler := httpapi.NewGitHubConnectionHandler(githubConnectionService, authorizationService, auditService)
+	webhookRepository := githubwebhook.NewRepository(postgresDB, cfg.DataLifecycle.WebhookPayloadRetentionDays)
+	webhookService := githubwebhook.NewService(webhookRepository, cfg.GitHub.WebhookSecret, githubConnectionService, appMetrics)
+	webhookService.ConfigureRetryProcessing(cfg.Sync.WebhookRetryConcurrency, cfg.Sync.WebhookRetryTimeout)
+	webhookHandler := httpapi.NewGitHubWebhookHandler(webhookService, authorizationService, auditService)
+	webhookWorker := githubwebhook.NewWorker(logger, webhookService, cfg.Sync.WebhookRetryInterval, cfg.Sync.WebhookRetryBatchSize, appMetrics)
 
 	var metricsBusClient *metricsbus.Client
 	var metricsConsumer *metricsbus.Consumer
+	var insightBusClient *insightbus.Client
+	var insightConsumer *insightbus.Consumer
 	if clickhouseDB != nil {
-		if client, err := metricsbus.Open(cfg.NATS.URL); err != nil {
+		if client, err := metricsbus.Open(cfg.NATS.URL, appMetrics); err != nil {
 			logger.Warn("metrics bus unavailable during startup", "error", err)
 		} else {
 			metricsBusClient = client
 			metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
 		}
-		syncJobService.SetCompletionPublisher(metricsbus.NewPublisher(logger, metricsBusClient, metricsService))
+		if client, err := insightbus.Open(cfg.NATS.URL, appMetrics); err != nil {
+			logger.Warn("insight bus unavailable during startup", "error", err)
+		} else {
+			insightBusClient = client
+			insightConsumer = insightbus.NewConsumer(logger, client, insightService)
+		}
+		syncJobService.SetCompletionPublisher(syncjob.NewCompositePublisher(
+			metricsbus.NewPublisher(logger, metricsBusClient, metricsService),
+			insightbus.NewPublisher(logger, insightBusClient),
+		))
 	}
 
 	var clickhouseHealthChecker httpapi.ClickHouseHealthChecker
@@ -105,15 +243,30 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		clickhouseHealthChecker = clickhouseDB
 	}
 
+	natsHealthChecker := buildNATSHealthChecker(clickhouseDB != nil, metricsBusClient, insightBusClient)
+
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
-		Postgres:            postgresDB,
-		ClickHouse:          clickhouseHealthChecker,
-		Organizations:       organizationHandler,
-		OrganizationMembers: organizationMemberHandler,
-		Repositories:        repositoryHandler,
-		Metrics:             metricsHandler,
-		SyncJobs:            syncJobHandler,
-		GitHubWebhook:       webhookHandler,
+		Postgres:                      postgresDB,
+		ClickHouse:                    clickhouseHealthChecker,
+		NATS:                          natsHealthChecker,
+		AppMetrics:                    appMetrics,
+		AllowedOrigins:                cfg.HTTP.AllowedOrigins,
+		RateLimitRequests:             cfg.HTTP.RateLimit.Requests,
+		RateLimitWindow:               cfg.HTTP.RateLimit.Window,
+		Auth:                          authHandler,
+		Authenticator:                 authService,
+		Me:                            meHandler,
+		Organizations:                 organizationHandler,
+		OrganizationMembers:           organizationMemberHandler,
+		GitHubConnections:             githubConnectionHandler,
+		PullRequests:                  pullRequestHandler,
+		Repositories:                  repositoryHandler,
+		Metrics:                       metricsHandler,
+		Insights:                      insightHandler,
+		SyncJobs:                      syncJobHandler,
+		GitHubWebhook:                 webhookHandler,
+		OrganizationRuleSettings:      orgRuleSettingsHandler,
+		OrganizationRetentionSettings: orgRetentionHandler,
 	})
 
 	server := &http.Server{
@@ -131,9 +284,58 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		postgres:        postgresDB,
 		clickhouse:      clickhouseDB,
 		worker:          syncWorker,
+		webhookWorker:   webhookWorker,
 		metricsBus:      metricsBusClient,
 		metricsConsumer: metricsConsumer,
+		insightBus:      insightBusClient,
+		insightConsumer: insightConsumer,
+		tracing:         tracing,
+		appMetrics:      appMetrics,
 	}, nil
+}
+
+type natsChecker interface {
+	Check(context.Context) error
+}
+
+type compositeNATSHealthChecker struct {
+	checkers []natsChecker
+}
+
+func (c compositeNATSHealthChecker) Check(ctx context.Context) error {
+	for _, checker := range c.checkers {
+		if checker == nil {
+			continue
+		}
+		if err := checker.Check(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type staticNATSHealthChecker struct {
+	err error
+}
+
+func (c staticNATSHealthChecker) Check(context.Context) error {
+	return c.err
+}
+
+func buildNATSHealthChecker(requireNATS bool, checkers ...natsChecker) httpapi.NATSHealthChecker {
+	items := make([]natsChecker, 0, len(checkers))
+	for _, checker := range checkers {
+		if checker != nil {
+			items = append(items, checker)
+		}
+	}
+	if len(items) == 0 {
+		if requireNATS {
+			return staticNATSHealthChecker{err: fmt.Errorf("nats connection unavailable")}
+		}
+		return nil
+	}
+	return compositeNATSHealthChecker{checkers: items}
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -155,10 +357,20 @@ func (a *App) Run(ctx context.Context) error {
 	if a.worker != nil {
 		go a.worker.Run(ctx)
 	}
+	if a.webhookWorker != nil {
+		go a.webhookWorker.Run(ctx)
+	}
 	if a.metricsConsumer != nil {
 		go func() {
 			if err := a.metricsConsumer.Run(ctx); err != nil {
 				a.logger.Error("metrics consumer stopped", "error", err)
+			}
+		}()
+	}
+	if a.insightConsumer != nil {
+		go func() {
+			if err := a.insightConsumer.Run(ctx); err != nil {
+				a.logger.Error("insight consumer stopped", "error", err)
 			}
 		}()
 	}
@@ -192,6 +404,12 @@ func (a *App) close() {
 	}
 	if a.metricsBus != nil {
 		a.metricsBus.Close()
+	}
+	if a.insightBus != nil {
+		a.insightBus.Close()
+	}
+	if a.tracing != nil {
+		_ = a.tracing.Shutdown(context.Background())
 	}
 }
 

@@ -7,14 +7,16 @@ const (
 	StatusRunning   = "running"
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
+	StatusCanceled  = "canceled"
 
 	ModeIncremental = "incremental"
 	ModeFull        = "full"
 )
 
 type CreateSyncRequest struct {
-	Mode string  `json:"mode"`
-	From *string `json:"from"`
+	Mode           string  `json:"mode"`
+	From           *string `json:"from"`
+	IdempotencyKey string  `json:"-"`
 }
 
 type ListParams struct {
@@ -44,14 +46,25 @@ type SyncJobResponse struct {
 }
 
 type createParams struct {
-	RepositoryID string
-	TriggeredBy  *string
+	RepositoryID   string
+	TriggeredBy    *string
+	IdempotencyKey *string
+}
+
+type checkpointRecord struct {
+	Value           *string
+	Status          string
+	LastProcessedAt *time.Time
 }
 
 type repositoryTarget struct {
-	ID           string
-	FullName     string
-	LastSyncedAt *time.Time
+	ID                           string
+	FullName                     string
+	LastSyncedAt                 *time.Time
+	GitHubInstallationRepository *string
+	IsActive                     bool
+	InstallationID               *int64
+	InstallationStatus           *string
 }
 
 type repositoryMetadata struct {
@@ -60,6 +73,37 @@ type repositoryMetadata struct {
 	DefaultBranch *string
 	IsActive      bool
 	ArchivedAt    *time.Time
+}
+
+type fileChangeInput struct {
+	FilePath    string
+	Additions   int
+	Deletions   int
+	CommitCount int
+}
+
+type commitEventInput struct {
+	GitHubCommitSHA string
+	Author          string
+	AuthorEmail     string
+	Message         string
+	AuthoredAt      time.Time
+}
+
+type workflowRunInput struct {
+	GitHubWorkflowRunID int64
+	WorkflowName        string
+	Status              string
+	Conclusion          string
+	StartedAt           *time.Time
+	CompletedAt         *time.Time
+}
+
+type deploymentInput struct {
+	GitHubDeploymentID int64
+	Environment        string
+	Status             string
+	DeployedAt         time.Time
 }
 
 type pullRequestInput struct {

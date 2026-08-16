@@ -146,21 +146,42 @@ func (q *Queries) GetSyncJobByID(ctx context.Context, id pgtype.UUID) (GetSyncJo
 }
 
 const getSyncJobRepositoryTarget = `-- name: GetSyncJobRepositoryTarget :one
-SELECT id, full_name, last_synced_at
-FROM repositories
-WHERE id = $1
+SELECT
+    r.id,
+    r.full_name,
+    r.last_synced_at,
+    r.github_installation_repository_id,
+    r.is_active,
+    gi.installation_id,
+    gi.status AS installation_status
+FROM repositories r
+LEFT JOIN github_installation_repositories gir ON gir.id = r.github_installation_repository_id
+LEFT JOIN github_installations gi ON gi.id = gir.github_installation_id
+WHERE r.id = $1
 `
 
 type GetSyncJobRepositoryTargetRow struct {
-	ID           pgtype.UUID
-	FullName     string
-	LastSyncedAt pgtype.Timestamptz
+	ID                             pgtype.UUID
+	FullName                       string
+	LastSyncedAt                   pgtype.Timestamptz
+	GithubInstallationRepositoryID pgtype.UUID
+	IsActive                       bool
+	InstallationID                 pgtype.Int8
+	InstallationStatus             pgtype.Text
 }
 
 func (q *Queries) GetSyncJobRepositoryTarget(ctx context.Context, id pgtype.UUID) (GetSyncJobRepositoryTargetRow, error) {
 	row := q.db.QueryRow(ctx, getSyncJobRepositoryTarget, id)
 	var i GetSyncJobRepositoryTargetRow
-	err := row.Scan(&i.ID, &i.FullName, &i.LastSyncedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.FullName,
+		&i.LastSyncedAt,
+		&i.GithubInstallationRepositoryID,
+		&i.IsActive,
+		&i.InstallationID,
+		&i.InstallationStatus,
+	)
 	return i, err
 }
 

@@ -33,11 +33,12 @@ type UpdateParams struct {
 }
 
 type Repository struct {
+	db      *postgres.DB
 	queries *sqlcgen.Queries
 }
 
 func NewRepository(db *postgres.DB) *Repository {
-	return &Repository{queries: db.Queries()}
+	return &Repository{db: db, queries: db.Queries()}
 }
 
 func (r *Repository) EnsureOrganizationExists(ctx context.Context, organizationID string) error {
@@ -106,8 +107,30 @@ func (r *Repository) GetByID(ctx context.Context, memberID string) (MemberRespon
 	return toGetResponse(row), nil
 }
 
-func (r *Repository) UpdateRole(ctx context.Context, params UpdateParams) (MemberResponse, error) {
-	row, err := r.queries.UpdateOrganizationMemberRole(ctx, sqlcgen.UpdateOrganizationMemberRoleParams{
+// UpdateRoleWithOwnerGuard changes a member's role. When demoting a member away
+// from owner, it locks the organization's owner rows for the duration of the
+// transaction so a concurrent demotion/removal can't race past the
+// last-owner check.
+func (r *Repository) UpdateRoleWithOwnerGuard(ctx context.Context, params UpdateParams, organizationID string, currentRole string) (MemberResponse, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return MemberResponse{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := r.queries.WithTx(tx)
+
+	if currentRole == "owner" && params.Role != "owner" {
+		owners, err := q.LockOrganizationOwnerRows(ctx, parseUUID(organizationID))
+		if err != nil {
+			return MemberResponse{}, fmt.Errorf("lock organization owner rows: %w", err)
+		}
+		if len(owners) <= 1 {
+			return MemberResponse{}, ErrLastOwnerConflict
+		}
+	}
+
+	row, err := q.UpdateOrganizationMemberRole(ctx, sqlcgen.UpdateOrganizationMemberRoleParams{
 		ID:   parseUUID(params.ID),
 		Role: params.Role,
 	})
@@ -117,26 +140,47 @@ func (r *Repository) UpdateRole(ctx context.Context, params UpdateParams) (Membe
 		}
 		return MemberResponse{}, fmt.Errorf("update organization member role: %w", err)
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MemberResponse{}, fmt.Errorf("commit transaction: %w", err)
+	}
 	return toUpdateResponse(row), nil
 }
 
-func (r *Repository) Delete(ctx context.Context, memberID string) error {
-	affected, err := r.queries.DeleteOrganizationMember(ctx, parseUUID(memberID))
+// DeleteWithOwnerGuard removes a member. When removing an owner, it locks the
+// organization's owner rows for the duration of the transaction so a
+// concurrent demotion/removal can't race past the last-owner check.
+func (r *Repository) DeleteWithOwnerGuard(ctx context.Context, organizationID string, memberID string, currentRole string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := r.queries.WithTx(tx)
+
+	if currentRole == "owner" {
+		owners, err := q.LockOrganizationOwnerRows(ctx, parseUUID(organizationID))
+		if err != nil {
+			return fmt.Errorf("lock organization owner rows: %w", err)
+		}
+		if len(owners) <= 1 {
+			return ErrLastOwnerConflict
+		}
+	}
+
+	affected, err := q.DeleteOrganizationMember(ctx, parseUUID(memberID))
 	if err != nil {
 		return fmt.Errorf("delete organization member: %w", err)
 	}
 	if affected == 0 {
 		return ErrMemberNotFound
 	}
-	return nil
-}
 
-func (r *Repository) CountOwners(ctx context.Context, organizationID string) (int64, error) {
-	count, err := r.queries.CountOrganizationOwners(ctx, parseUUID(organizationID))
-	if err != nil {
-		return 0, fmt.Errorf("count organization owners: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
 	}
-	return count, nil
+	return nil
 }
 
 func toCreateResponse(row sqlcgen.OrganizationMember) MemberResponse {

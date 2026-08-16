@@ -1,0 +1,7 @@
+.cache
+bin
+tmp
+coverage.out
+*.test
+*.log
+Dockerfile

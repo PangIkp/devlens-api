@@ -13,6 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/PangIkp/devlens/backend/internal/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const defaultPerPage = 30
@@ -27,6 +32,10 @@ type Client interface {
 	ListPullRequests(context.Context, string, string, ListOptions) (Page[PullRequest], error)
 	ListReviews(context.Context, string, string, int, ListOptions) (Page[Review], error)
 	ListCommits(context.Context, string, string, ListOptions) (Page[Commit], error)
+	ListPullRequestFiles(context.Context, string, string, int, ListOptions) (Page[PullRequestFile], error)
+	ListWorkflowRuns(context.Context, string, string, ListOptions) (Page[WorkflowRun], error)
+	ListDeployments(context.Context, string, string, ListOptions) (Page[Deployment], error)
+	ListDeploymentStatuses(context.Context, string, string, int64, ListOptions) (Page[DeploymentStatus], error)
 }
 
 type TokenProvider interface {
@@ -40,6 +49,7 @@ type Config struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	Metrics        *observability.Metrics
 }
 
 type HTTPClient struct {
@@ -50,6 +60,7 @@ type HTTPClient struct {
 	maxRetries     int
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	metrics        *observability.Metrics
 	sleep          func(context.Context, time.Duration) error
 }
 
@@ -109,6 +120,7 @@ func New(cfg Config, tokenProvider TokenProvider) (*HTTPClient, error) {
 		maxRetries:     cfg.MaxRetries,
 		initialBackoff: cfg.InitialBackoff,
 		maxBackoff:     cfg.MaxBackoff,
+		metrics:        cfg.Metrics,
 		sleep:          sleepWithContext,
 	}, nil
 }
@@ -161,6 +173,46 @@ func (c *HTTPClient) ListCommits(ctx context.Context, owner, repo string, option
 	return Page[Commit]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
 }
 
+func (c *HTTPClient) ListPullRequestFiles(ctx context.Context, owner, repo string, pullNumber int, options ListOptions) (Page[PullRequestFile], error) {
+	query := options.queryValues()
+	var items []PullRequestFile
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/files", owner, repo, pullNumber), query, &items)
+	if err != nil {
+		return Page[PullRequestFile]{}, err
+	}
+	return Page[PullRequestFile]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListWorkflowRuns(ctx context.Context, owner, repo string, options ListOptions) (Page[WorkflowRun], error) {
+	query := options.queryValues()
+	var payload WorkflowRunList
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/runs", owner, repo), query, &payload)
+	if err != nil {
+		return Page[WorkflowRun]{}, err
+	}
+	return Page[WorkflowRun]{Items: payload.WorkflowRuns, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListDeployments(ctx context.Context, owner, repo string, options ListOptions) (Page[Deployment], error) {
+	query := options.queryValues()
+	var items []Deployment
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/deployments", owner, repo), query, &items)
+	if err != nil {
+		return Page[Deployment]{}, err
+	}
+	return Page[Deployment]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
+func (c *HTTPClient) ListDeploymentStatuses(ctx context.Context, owner, repo string, deploymentID int64, options ListOptions) (Page[DeploymentStatus], error) {
+	query := options.queryValues()
+	var items []DeploymentStatus
+	meta, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/deployments/%d/statuses", owner, repo, deploymentID), query, &items)
+	if err != nil {
+		return Page[DeploymentStatus]{}, err
+	}
+	return Page[DeploymentStatus]{Items: items, NextPage: meta.nextPage, RateLimit: meta.rateLimit}, nil
+}
+
 type responseMeta struct {
 	nextPage  int
 	rateLimit RateLimit
@@ -170,13 +222,27 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 	var meta responseMeta
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		started := time.Now()
+		spanCtx, span := otel.Tracer("devlens/github").Start(ctx, fmt.Sprintf("github %s %s", method, path))
 		req, err := c.newRequest(ctx, method, path, query)
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
 			return responseMeta{}, err
 		}
+		span.SetAttributes(
+			attribute.String("http.method", method),
+			attribute.String("url.path", path),
+			attribute.Int("devlens.github.attempt", attempt+1),
+		)
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.httpClient.Do(req.WithContext(spanCtx))
 		if err != nil {
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, 0, "transport_error", time.Since(started), -1)
+			}
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
 			if attempt == c.maxRetries || !shouldRetryTransport(err) {
 				return responseMeta{}, fmt.Errorf("perform github request: %w", err)
 			}
@@ -194,13 +260,36 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			err = decodeJSONBody(resp.Body, target)
 			if err != nil {
+				if c.metrics != nil {
+					c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "decode_error", time.Since(started), meta.rateLimit.Remaining)
+				}
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
 				return responseMeta{}, err
 			}
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "ok", time.Since(started), meta.rateLimit.Remaining)
+			}
+			span.SetAttributes(
+				attribute.Int("http.status_code", resp.StatusCode),
+				attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+			)
+			span.SetStatus(codes.Ok, "")
+			span.End()
 			return meta, nil
 		}
 
 		apiErr := parseAPIError(resp)
 		if shouldRetryResponse(resp, apiErr) && attempt < c.maxRetries {
+			if c.metrics != nil {
+				c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "retry", time.Since(started), meta.rateLimit.Remaining)
+			}
+			span.SetAttributes(
+				attribute.Int("http.status_code", resp.StatusCode),
+				attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+			)
+			span.SetStatus(codes.Error, apiErr.Error())
+			span.End()
 			waitFor := retryDelay(resp, apiErr, c.backoffDuration(attempt))
 			if err := c.sleep(ctx, waitFor); err != nil {
 				return responseMeta{}, err
@@ -208,6 +297,15 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, query url.Valu
 			continue
 		}
 
+		if c.metrics != nil {
+			c.metrics.RecordGitHubRequest(method, path, resp.StatusCode, "error", time.Since(started), meta.rateLimit.Remaining)
+		}
+		span.SetAttributes(
+			attribute.Int("http.status_code", resp.StatusCode),
+			attribute.Int("devlens.github.rate_limit_remaining", meta.rateLimit.Remaining),
+		)
+		span.SetStatus(codes.Error, apiErr.Error())
+		span.End()
 		return responseMeta{}, apiErr
 	}
 

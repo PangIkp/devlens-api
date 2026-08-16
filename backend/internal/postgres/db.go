@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/PangIkp/devlens/backend/internal/config"
+	"github.com/PangIkp/devlens/backend/internal/observability"
 	"github.com/PangIkp/devlens/backend/internal/postgres/sqlcgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,7 +16,7 @@ type DB struct {
 	queries *sqlcgen.Queries
 }
 
-func Open(ctx context.Context, cfg config.PostgresConfig) (*DB, error) {
+func Open(ctx context.Context, cfg config.PostgresConfig, metrics *observability.Metrics) (*DB, error) {
 	poolConfig, err := pgxpool.ParseConfig(cfg.ConnectionString())
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres config: %w", err)
@@ -27,6 +28,7 @@ func Open(ctx context.Context, cfg config.PostgresConfig) (*DB, error) {
 	poolConfig.MaxConnIdleTime = cfg.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = cfg.HealthCheckPeriod
 	poolConfig.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
+	poolConfig.ConnConfig.Tracer = newQueryTracer(metrics)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -68,4 +70,8 @@ func (db *DB) Queries() *sqlcgen.Queries {
 
 func (db *DB) Begin(ctx context.Context) (pgx.Tx, error) {
 	return db.pool.Begin(ctx)
+}
+
+func (db *DB) Pool() *pgxpool.Pool {
+	return db.pool
 }

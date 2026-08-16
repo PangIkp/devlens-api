@@ -54,7 +54,7 @@ func TestServiceCreateSuccess(t *testing.T) {
 		},
 	})
 
-	_, err := svc.Create(context.Background(), CreateOrganizationRequest{
+	_, err := svc.Create(context.Background(), "user-1", CreateOrganizationRequest{
 		GithubID: 123,
 		Slug:     "devlens",
 		Name:     " DevLens ",
@@ -74,7 +74,7 @@ func TestServiceCreateValidationError(t *testing.T) {
 		},
 	})
 
-	_, err := svc.Create(context.Background(), CreateOrganizationRequest{})
+	_, err := svc.Create(context.Background(), "user-1", CreateOrganizationRequest{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -113,7 +113,7 @@ func TestServiceListPassThrough(t *testing.T) {
 		},
 	})
 
-	result, err := svc.List(context.Background(), ListParams{Page: 2, PageSize: 10})
+	result, err := svc.List(context.Background(), "user-1", ListParams{Page: 2, PageSize: 10})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -131,7 +131,7 @@ func TestServiceCreateConflictPassThrough(t *testing.T) {
 		},
 	})
 
-	_, err := svc.Create(context.Background(), CreateOrganizationRequest{
+	_, err := svc.Create(context.Background(), "user-1", CreateOrganizationRequest{
 		GithubID: 1,
 		Slug:     "devlens",
 		Name:     "DevLens",
@@ -219,7 +219,7 @@ func TestServiceCreateSlugValidationError(t *testing.T) {
 		},
 	})
 
-	_, err := svc.Create(context.Background(), CreateOrganizationRequest{
+	_, err := svc.Create(context.Background(), "user-1", CreateOrganizationRequest{
 		GithubID: 1,
 		Slug:     "DevLens",
 		Name:     "DevLens",

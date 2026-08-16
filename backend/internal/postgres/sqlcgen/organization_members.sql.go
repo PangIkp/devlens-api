@@ -100,6 +100,7 @@ SELECT id, organization_id, user_id, role
 FROM organization_members
 WHERE organization_id = $1
 ORDER BY id ASC
+LIMIT 1000
 `
 
 func (q *Queries) ListOrganizationMembers(ctx context.Context, organizationID pgtype.UUID) ([]OrganizationMember, error) {
@@ -120,6 +121,34 @@ func (q *Queries) ListOrganizationMembers(ctx context.Context, organizationID pg
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockOrganizationOwnerRows = `-- name: LockOrganizationOwnerRows :many
+SELECT id
+FROM organization_members
+WHERE organization_id = $1
+  AND role = 'owner'
+FOR UPDATE
+`
+
+func (q *Queries) LockOrganizationOwnerRows(ctx context.Context, organizationID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockOrganizationOwnerRows, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

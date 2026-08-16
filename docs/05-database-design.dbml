@@ -1,73 +1,244 @@
-
 /*
-DevLens - Database Design (MVP)
+DevLens - Database Design (MVP / Target Model)
 
 Related Documents
 - 01-business-logic-architecture.md
+- 03-backend-roadmap.md
 - 04-metric-definitions.md
+- 06-api-design.md
+- openapi.yaml
 
 Legend
 [PG] = PostgreSQL
 [CH] = ClickHouse (Logical model only)
+
+Design Goals
+- PostgreSQL stores transactional/application state.
+- ClickHouse stores event/analytics data and aggregates.
+- GitHub App is the primary integration model.
+- Dashboard reads calculated data from storage, not GitHub directly.
+- Webhook and worker processing must be idempotent.
+- The model must support initial sync, resume sync, backfill, metric rebuild,
+  data retention, and future provider expansion.
 */
 
-/* ===========================
-   PostgreSQL
-=========================== */
+/* ==================================================
+1. Design Conventions
+================================================== */
+
+/*
+Audit Convention
+
+Business / Configuration Tables
+- created_at
+- created_by
+- updated_at
+- updated_by
+- deleted_at
+- deleted_by
+
+Operational Tables
+- created_at
+- updated_at
+- status timestamps that describe execution lifecycle
+
+Analytics Tables
+- event_at / metric_date
+- ingested_at
+- calculated_at
+- metric_version where applicable
+
+Notes
+- *_by logically refers to users.id.
+- Audit references are intentionally not drawn as DBML refs to keep the
+  diagram readable.
+- Audit user IDs can be null when an action is performed by the system.
+*/
+
+/*
+Soft Delete Strategy
+
+Soft Delete
+- users
+- organizations
+- github_installations
+- repositories
+- metric_definitions
+
+Lifecycle / Status instead of Soft Delete
+- github_installation_repositories
+- sync_jobs
+- sync_checkpoints
+- webhook_deliveries
+- insight_statuses
+
+No Soft Delete
+- ClickHouse event tables
+- ClickHouse aggregate tables
+
+Reason
+- Configuration data may need restore/history.
+- Operational and event data should preserve execution/history state.
+- Analytics retention should be managed by retention policy / TTL rather
+  than CRUD-style soft delete.
+*/
+
+/*
+Relation Strategy
+
+PostgreSQL
+- Use real foreign keys for core business relations.
+
+ClickHouse
+- Use logical relationships only.
+- Do not draw cross-database foreign-key lines.
+
+Audit Fields
+- created_by / updated_by / deleted_by logically reference users.id.
+- They intentionally do not use [ref] in this DBML.
+*/
+
+/*
+Naming Convention
+
+Primary Key
+- id
+
+External Provider Identifier
+- github_*_id for GitHub-specific source IDs in the current MVP
+
+Foreign Key
+- xxx_id
+
+Timestamp
+- *_at
+
+Boolean
+- is_*
+
+Status
+- status
+- *_status
+
+Versioned Metrics
+- metric_version
+- algorithm_version
+*/
+
+/* ==================================================
+2. PostgreSQL - Identity and Core Domain
+================================================== */
 
 Table users {
   id uuid [pk]
-  email varchar [unique, not null]
+  email varchar [not null, unique]
   name varchar
   avatar_url varchar
-  created_at timestamp
+
+  status varchar [not null, default: 'active']
+  deactivated_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp
+  deleted_at timestamp
+  deleted_by uuid
 }
 
 Table organizations {
   id uuid [pk]
-  github_id bigint [unique, not null]
-  slug varchar [unique, not null]
+
+  github_id bigint [unique]
+  slug varchar [not null, unique]
   name varchar [not null]
+
+  created_at timestamp [not null]
+  created_by uuid
   updated_at timestamp
+  updated_by uuid
   deleted_at timestamp
-  created_at timestamp
+  deleted_by uuid
 }
 
 Table organization_members {
   id uuid [pk]
-  organization_id uuid [ref: > organizations.id]
-  user_id uuid [ref: > users.id]
-  role varchar
+
+  organization_id uuid [not null, ref: > organizations.id]
+  user_id uuid [not null, ref: > users.id]
+
+  role varchar [not null]
+
+  created_at timestamp [not null]
+  created_by uuid
+  updated_at timestamp
+  updated_by uuid
+
+  indexes {
+    (organization_id, user_id) [unique]
+  }
 }
 
+/* ==================================================
+3. PostgreSQL - GitHub App Integration
+================================================== */
+
+/*
+GitHub App installation for an organization/account.
+
+Installation access tokens are intentionally NOT stored permanently.
+The backend generates/caches short-lived installation tokens at runtime.
+*/
 Table github_installations {
   id uuid [pk]
-  organization_id uuid [ref: > organizations.id]
-  installation_id bigint [unique]
-  account_login varchar
+
+  organization_id uuid [not null, ref: > organizations.id]
+  installation_id bigint [not null, unique]
+
+  account_login varchar [not null]
   account_type varchar
   target_type varchar
-  status varchar
+
+  status varchar [not null]
   permissions_json json
+
   installed_by_github_user_id bigint
+  installed_at timestamp [not null]
   suspended_at timestamp
-  installed_at timestamp
+  disconnected_at timestamp
+
+  created_at timestamp [not null]
+  created_by uuid
   updated_at timestamp
+  updated_by uuid
+  deleted_at timestamp
+  deleted_by uuid
 }
 
+/*
+Snapshot/state of repositories accessible through one GitHub installation.
+
+This table is the source for the frontend "accessible repositories" flow
+before a repository is selected for DevLens monitoring.
+*/
 Table github_installation_repositories {
   id uuid [pk]
-  github_installation_id uuid [ref: > github_installations.id]
+
+  github_installation_id uuid [not null, ref: > github_installations.id]
   github_repository_id bigint [not null]
+
   full_name varchar [not null]
   private boolean [not null]
   default_branch varchar
+
   installation_status varchar [not null]
   selection_status varchar [not null]
+
   permissions_json json
+
+  last_discovered_at timestamp
   last_synced_at timestamp
   sync_error_message text
-  created_at timestamp
+
+  created_at timestamp [not null]
   updated_at timestamp
 
   indexes {
@@ -75,151 +246,662 @@ Table github_installation_repositories {
   }
 }
 
+/*
+Repository selected by the user and actively managed by DevLens.
+*/
 Table repositories {
   id uuid [pk]
-  organization_id uuid [ref: > organizations.id, not null]
+
+  organization_id uuid [not null, ref: > organizations.id]
   github_installation_repository_id uuid [ref: > github_installation_repositories.id]
-  github_id bigint [unique, not null]
+
+  github_id bigint [not null, unique]
   name varchar [not null]
-  full_name varchar [unique, not null]
+  full_name varchar [not null, unique]
   default_branch varchar
-  is_active boolean [not null]
+
+  is_active boolean [not null, default: true]
   archived_at timestamp
+
   last_synced_at timestamp
+  initial_sync_status varchar
+  initial_sync_completed_at timestamp
+  sync_error_message text
+
   created_at timestamp [not null]
+  created_by uuid
   updated_at timestamp
+  updated_by uuid
+  deleted_at timestamp
+  deleted_by uuid
 }
+
+/* ==================================================
+4. PostgreSQL - Sync and Webhook Operations
+================================================== */
 
 Table sync_jobs {
   id uuid [pk]
-  repository_id uuid [ref: > repositories.id]
-  status varchar
-  progress int
+
+  repository_id uuid [not null, ref: > repositories.id]
+
+  job_type varchar [not null]
+  status varchar [not null]
+  progress int [not null, default: 0]
+
+  idempotency_key varchar
+  triggered_by uuid
+
+  error_code varchar
   error_message text
+
   started_at timestamp
   finished_at timestamp
-  created_at timestamp
-  updated_at timestamp
-}
 
-Table webhook_deliveries {
-  id uuid [pk]
-  repository_id uuid [ref: > repositories.id]
-  github_delivery_id varchar [unique]
-  event_type varchar
-  action varchar
-  payload json
-  sync_job_id uuid [ref: > sync_jobs.id]
-  processed boolean
-  received_at timestamp
-  updated_at timestamp
-}
-
-Table pull_requests {
-  id uuid [pk]
-  repository_id uuid [ref: > repositories.id, not null]
-  github_pr_id bigint [unique, not null]
-  number int [not null]
-  title varchar [not null]
-  author varchar [not null]
-  state varchar [not null]
-  is_draft boolean [not null, default: false]
   created_at timestamp [not null]
-  merged_at timestamp
-  closed_at timestamp
-  additions int [not null]
-  deletions int [not null]
-  files_changed int [not null]
+  updated_at timestamp
 
   indexes {
-    (repository_id, number) [unique]
-  }
-}
-
-Table pull_request_reviews {
-  id uuid [pk]
-  pull_request_id uuid [ref: > pull_requests.id, not null]
-  github_review_id bigint [unique, not null]
-  reviewer varchar [not null]
-  review_requested_at timestamp
-  first_review_at timestamp
-  review_submitted_at timestamp
-  state varchar [not null]
-}
-
-Table deployments {
-  id uuid [pk]
-  repository_id uuid [ref: > repositories.id, not null]
-  environment varchar [not null]
-  status varchar [not null]
-  deployed_at timestamp [not null]
-}
-
-Table file_changes {
-  id uuid [pk]
-  pull_request_id uuid [ref: > pull_requests.id, not null]
-  file_path varchar [not null]
-  additions int [not null]
-  deletions int [not null]
-  commit_count int [not null]
-}
-
-/* ===========================
-   ClickHouse (Logical Tables)
-=========================== */
-
-Table metrics_daily {
-  repository_id uuid
-  metric_date date
-  pr_cycle_time_minutes decimal
-  review_wait_minutes decimal
-  average_review_minutes decimal
-  average_files_changed decimal
-  average_additions decimal
-  average_deletions decimal
-  deployment_frequency decimal
-  change_failure_rate decimal
-  review_coverage decimal
-  pr_count int
-  merged_pr_count int
-  reviewed_pr_count int
-  review_wait_sample_count int
-  review_time_sample_count int
-  successful_deployment_count int
-  failed_deployment_count int
-  calculated_at timestamp
-
-  indexes {
-    (repository_id, metric_date) [pk]
+    idempotency_key
+    (repository_id, status)
   }
 }
 
 /*
-Metric Mapping
+Checkpoint allows initial/incremental sync to resume without restarting the
+entire repository sync.
+
+Examples:
+- pull_requests page/cursor
+- reviews page/cursor
+- changed_files page/cursor
+- workflows page/cursor
+- deployments page/cursor
+*/
+Table sync_checkpoints {
+  id uuid [pk]
+
+  sync_job_id uuid [not null, ref: > sync_jobs.id]
+  repository_id uuid [not null, ref: > repositories.id]
+
+  resource_type varchar [not null]
+  checkpoint_key varchar [not null]
+  checkpoint_value text
+
+  status varchar [not null]
+  last_processed_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp
+
+  indexes {
+    (sync_job_id, resource_type, checkpoint_key) [unique]
+    (repository_id, resource_type)
+  }
+}
+
+/*
+GitHub webhook delivery log.
+
+github_delivery_id provides hard idempotency for GitHub retries.
+Webhook handlers should validate/store/enqueue quickly and avoid heavy
+processing in the HTTP request.
+*/
+Table webhook_deliveries {
+  id uuid [pk]
+
+  repository_id uuid [ref: > repositories.id]
+  github_installation_id uuid [ref: > github_installations.id]
+  sync_job_id uuid [ref: > sync_jobs.id]
+
+  github_delivery_id varchar [not null, unique]
+  event_type varchar [not null]
+  action varchar
+
+  processing_status varchar [not null]
+  retry_count int [not null, default: 0]
+  next_retry_at timestamp
+  payload json
+  payload_retention_until timestamp
+
+  error_message text
+
+  received_at timestamp [not null]
+  processed_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp
+}
+
+/* ==================================================
+5. PostgreSQL - Governance and Metric Configuration
+================================================== */
+
+Table audit_logs {
+  id uuid [pk]
+
+  organization_id uuid [ref: > organizations.id]
+  actor_user_id uuid
+
+  action varchar [not null]
+  resource_type varchar [not null]
+  resource_id uuid
+
+  metadata_json json
+
+  created_at timestamp [not null]
+
+  indexes {
+    (organization_id, created_at)
+    (resource_type, resource_id)
+  }
+}
+
+/*
+Versioned metric definition/configuration.
+
+Formula text is descriptive metadata. Runtime calculation logic remains in
+versioned application code, while this table records which definition/version
+is active and supports rebuild/auditability.
+*/
+Table metric_definitions {
+  id uuid [pk]
+
+  metric_key varchar [not null]
+  name varchar [not null]
+
+  metric_version int [not null]
+  algorithm_version varchar
+
+  unit varchar
+  description text
+  config_json json
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  created_by uuid
+  updated_at timestamp
+  updated_by uuid
+  deleted_at timestamp
+  deleted_by uuid
+
+  indexes {
+    (metric_key, metric_version) [unique]
+  }
+}
+
+/*
+State for generated insights.
+
+Insights themselves may be rebuilt from analytics data; this table stores
+application-level state such as reviewed/dismissed/reopened.
+*/
+Table insight_statuses {
+  id uuid [pk]
+
+  organization_id uuid [not null, ref: > organizations.id]
+  repository_id uuid [ref: > repositories.id]
+
+  insight_key varchar [not null]
+  insight_type varchar [not null]
+  status varchar [not null]
+
+  evidence_json json
+
+  reviewed_by uuid
+  reviewed_at timestamp
+  dismissed_at timestamp
+  reopened_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp
+
+  indexes {
+    (organization_id, insight_key) [unique]
+    (repository_id, status)
+  }
+}
+
+/* ==================================================
+6. ClickHouse - Event Data
+================================================== */
+
+/*
+ClickHouse Notes
+
+- These tables are logical analytics models.
+- No PostgreSQL-style foreign keys.
+- repository_id and other UUIDs logically reference PostgreSQL/core entities.
+- Event tables must tolerate duplicate and late-arriving GitHub events.
+- Physical ENGINE / PARTITION BY / ORDER BY / TTL are implementation concerns
+  and should be finalized in ClickHouse migration/schema files.
+*/
+
+/*
+Normalized Pull Request event/state observations.
+Logical Relation: repository_id -> repositories.id
+*/
+Table pull_request_events {
+  event_id uuid
+  repository_id uuid
+
+  github_pr_id bigint
+  pull_request_number int
+
+  author_login varchar
+  state varchar
+  is_draft boolean
+
+  event_type varchar
+  event_action varchar
+
+  pr_created_at timestamp
+  merged_at timestamp
+  closed_at timestamp
+
+  additions int
+  deletions int
+  files_changed int
+
+  source_delivery_id varchar
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/*
+Normalized review event/state observations.
+Logical Relation: repository_id -> repositories.id
+Logical Relation: github_pr_id -> pull_request_events.github_pr_id
+*/
+Table review_events {
+  event_id uuid
+  repository_id uuid
+
+  github_pr_id bigint
+  github_review_id bigint
+
+  reviewer_login varchar
+  reviewer_type varchar
+  state varchar
+
+  review_requested_at timestamp
+  review_submitted_at timestamp
+
+  source_delivery_id varchar
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/*
+Commit-level events required for churn, workload context, rebuilds and future
+metrics. DevLens should not store source code content.
+*/
+Table commit_events {
+  event_id uuid
+  repository_id uuid
+
+  github_commit_sha varchar
+
+  author_login varchar
+  author_type varchar
+
+  additions int
+  deletions int
+  files_changed int
+
+  committed_at timestamp
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/*
+GitHub Actions / workflow execution observations.
+*/
+Table workflow_events {
+  event_id uuid
+  repository_id uuid
+
+  github_workflow_run_id bigint
+  workflow_name varchar
+
+  status varchar
+  conclusion varchar
+
+  started_at timestamp
+  completed_at timestamp
+
+  source_delivery_id varchar
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/*
+Deployment / deployment-status observations.
+*/
+Table deployment_events {
+  event_id uuid
+  repository_id uuid
+
+  github_deployment_id bigint
+  environment varchar
+  status varchar
+
+  deployed_at timestamp
+
+  source_delivery_id varchar
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/*
+Changed-file observations used by PR Size, Code Churn and Hotspot Score.
+*/
+Table file_change_events {
+  event_id uuid
+  repository_id uuid
+
+  github_pr_id bigint
+  github_commit_sha varchar
+
+  file_path varchar
+  change_type varchar
+
+  additions int
+  deletions int
+  commit_count int
+
+  event_at timestamp
+  ingested_at timestamp
+}
+
+/* ==================================================
+7. ClickHouse - Aggregate / Metric Data
+================================================== */
+
+/*
+Primary repository/day aggregate used by dashboard range queries.
+
+Count fields are stored to avoid incorrect "average of daily averages".
+
+MVP decision:
+- keep this as an application-managed aggregate table
+- do not add ClickHouse Materialized Views yet
+- reason: metric_version changes, business-day/calendar-day selection, and
+  date-range rebuild/backfill are easier to control explicitly in the metric engine
+*/
+Table repository_daily_metrics {
+  repository_id uuid
+  metric_date date
+
+  metric_version int
+
+  pr_cycle_time_minutes decimal
+  review_wait_minutes decimal
+  average_review_minutes decimal
+
+  average_files_changed decimal
+  average_additions decimal
+  average_deletions decimal
+
+  deployment_frequency decimal
+  change_failure_rate decimal
+  review_coverage decimal
+
+  pr_count int
+  merged_pr_count int
+  reviewed_pr_count int
+
+  review_wait_sample_count int
+  review_time_sample_count int
+
+  successful_deployment_count int
+  failed_deployment_count int
+
+  calculated_at timestamp
+}
+
+/*
+Per-PR calculated metric projection for drilldown and rebuild validation.
+*/
+Table pull_request_metrics {
+  repository_id uuid
+  github_pr_id bigint
+  pull_request_number int
+
+  metric_version int
+
+  cycle_time_minutes decimal
+  review_wait_minutes decimal
+  review_time_minutes decimal
+
+  files_changed int
+  additions int
+  deletions int
+
+  calculated_at timestamp
+}
+
+/*
+Daily reviewer distribution / process metrics.
+
+Used for workload distribution and review concentration analysis.
+This table is not a developer ranking table.
+*/
+Table reviewer_daily_metrics {
+  repository_id uuid
+  metric_date date
+
+  reviewer_login varchar
+  reviewer_type varchar
+
+  review_count int
+  reviewed_pr_count int
+  average_review_minutes decimal
+
+  metric_version int
+  calculated_at timestamp
+}
+
+/*
+File-level hotspot projection by repository/date.
+*/
+Table hotspot_metrics {
+  repository_id uuid
+  metric_date date
+
+  file_path varchar
+
+  change_count int
+  code_churn int
+  commit_count int
+  hotspot_score decimal
+
+  metric_version int
+  calculated_at timestamp
+}
+
+/* ==================================================
+8. Main Logical Relations
+==================================================
+
+PostgreSQL
+
+users
+- organization_members.user_id
+
+organizations
+- organization_members.organization_id
+- github_installations.organization_id
+- repositories.organization_id
+- audit_logs.organization_id
+- insight_statuses.organization_id
+
+github_installations
+- github_installation_repositories.github_installation_id
+- webhook_deliveries.github_installation_id
+
+github_installation_repositories
+- repositories.github_installation_repository_id
+
+repositories
+- sync_jobs.repository_id
+- sync_checkpoints.repository_id
+- webhook_deliveries.repository_id
+- insight_statuses.repository_id
+
+sync_jobs
+- sync_checkpoints.sync_job_id
+- webhook_deliveries.sync_job_id
+
+
+ClickHouse Logical Relations
+
+repositories
+- pull_request_events.repository_id
+- review_events.repository_id
+- commit_events.repository_id
+- workflow_events.repository_id
+- deployment_events.repository_id
+- file_change_events.repository_id
+- repository_daily_metrics.repository_id
+- pull_request_metrics.repository_id
+- reviewer_daily_metrics.repository_id
+- hotspot_metrics.repository_id
+*/
+
+/* ==================================================
+9. Metric Mapping
+==================================================
 
 PR Cycle Time
--> pull_requests.created_at
--> pull_requests.merged_at
+- pull_request_events.pr_created_at
+- pull_request_events.merged_at
+- pull_request_metrics.cycle_time_minutes
+- repository_daily_metrics.pr_cycle_time_minutes
+- repository_daily_metrics.merged_pr_count
 
 Review Wait Time
--> pull_request_reviews.review_requested_at
--> pull_request_reviews.first_review_at
+- review_events.review_requested_at
+- review_events.review_submitted_at / first valid review event
+- pull_request_metrics.review_wait_minutes
+- repository_daily_metrics.review_wait_minutes
+- repository_daily_metrics.review_wait_sample_count
+
+Review Time
+- review_events.review_requested_at
+- review_events.review_submitted_at
+- pull_request_metrics.review_time_minutes
+- repository_daily_metrics.average_review_minutes
+- repository_daily_metrics.review_time_sample_count
 
 PR Size
--> pull_requests.files_changed
--> pull_requests.additions
--> pull_requests.deletions
+- pull_request_events.files_changed
+- pull_request_events.additions
+- pull_request_events.deletions
+- pull_request_metrics.files_changed
+- pull_request_metrics.additions
+- pull_request_metrics.deletions
+- repository_daily_metrics.average_files_changed
+- repository_daily_metrics.average_additions
+- repository_daily_metrics.average_deletions
 
 Deployment Frequency
--> deployments.status
--> deployments.deployed_at
+- deployment_events.status
+- deployment_events.deployed_at
+- repository_daily_metrics.successful_deployment_count
+- repository_daily_metrics.deployment_frequency
 
 Change Failure Rate
--> deployments.status
+- deployment_events.status
+- repository_daily_metrics.successful_deployment_count
+- repository_daily_metrics.failed_deployment_count
+- repository_daily_metrics.change_failure_rate
+
+Review Coverage
+- pull_request_events.github_pr_id
+- review_events.github_pr_id
+- repository_daily_metrics.pr_count
+- repository_daily_metrics.reviewed_pr_count
+- repository_daily_metrics.review_coverage
 
 Hotspot Score
--> file_changes.file_path
--> file_changes.additions
--> file_changes.deletions
--> file_changes.commit_count
+- file_change_events.file_path
+- file_change_events.additions
+- file_change_events.deletions
+- file_change_events.commit_count
+- hotspot_metrics.change_count
+- hotspot_metrics.code_churn
+- hotspot_metrics.commit_count
+- hotspot_metrics.hotspot_score
+
+Workload Distribution (Planned)
+- pull_request_events.author_login
+- review_events.reviewer_login
+- reviewer_daily_metrics.review_count
+- reviewer_daily_metrics.reviewed_pr_count
+*/
+
+/* ==================================================
+10. Data Flow
+==================================================
+
+GitHub App
+  |
+  +--> Installation / Accessible Repositories
+  |        |
+  |        v
+  |   PostgreSQL
+  |   - github_installations
+  |   - github_installation_repositories
+  |   - repositories
+  |
+  +--> Initial Sync / Webhook
+           |
+           v
+      NATS JetStream
+           |
+           v
+        Workers
+           |
+      +----+----------------------+
+      |                           |
+      v                           v
+ PostgreSQL                  ClickHouse
+ - sync_jobs                 - *_events
+ - checkpoints               - raw normalized analytics
+ - webhook log
+                                  |
+                                  v
+                             Metric Worker
+                                  |
+                     +------------+-------------+
+                     |            |             |
+                     v            v             v
+             repository_daily  PR metrics   hotspot/reviewer
+                 metrics
+                     |
+                     v
+                Go Dashboard API
+                     |
+                     v
+               React Frontend
+*/
+
+/* ==================================================
+11. Implementation Notes
+==================================================
+
+- This file describes the target logical model based on the latest business
+  architecture and backend roadmap.
+- Current implementation may still contain transitional PostgreSQL tables for
+  pull_requests, pull_request_reviews, deployments or file_changes.
+- Do not silently rewrite existing production migrations to match this target
+  model. Use explicit migrations and data-migration/backfill plans.
+- ClickHouse physical schema (ENGINE, PARTITION BY, ORDER BY, TTL) must be
+  defined in ClickHouse migration/schema files, not inferred only from DBML.
+- GitHub installation access tokens must remain short-lived and must not be
+  persisted as long-lived secrets in these tables.
+- Future GitLab/Bitbucket support should introduce provider-agnostic canonical
+  event models without breaking existing metric contracts.
 */

@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PangIkp/devlens/backend/internal/auditlog"
+	"github.com/PangIkp/devlens/backend/internal/authorization"
+	"github.com/PangIkp/devlens/backend/internal/httpapi/middleware"
 	devrepository "github.com/PangIkp/devlens/backend/internal/repository"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,18 +21,32 @@ type RepositoryService interface {
 }
 
 type RepositoryHandler struct {
-	service RepositoryService
+	service    RepositoryService
+	authorizer AuthorizationService
+	audit      AuditLogger
 }
 
-func NewRepositoryHandler(service RepositoryService) *RepositoryHandler {
-	return &RepositoryHandler{service: service}
+func NewRepositoryHandler(service RepositoryService, deps ...any) *RepositoryHandler {
+	authz, auditLogger := resolveHandlerDeps(deps)
+	return &RepositoryHandler{service: service, authorizer: authz, audit: auditLogger}
 }
 
 func (h *RepositoryHandler) RegisterRoutes(r chi.Router) {
-	r.Post("/organizations/{organizationId}/repositories", h.create)
-	r.Get("/organizations/{organizationId}/repositories", h.list)
-	r.Get("/repositories/{repositoryId}", h.get)
-	r.Patch("/repositories/{repositoryId}", h.update)
+	if h.authorizer == nil {
+		r.Post("/organizations/{organizationId}/repositories", h.create)
+		r.Get("/organizations/{organizationId}/repositories", h.list)
+		r.Get("/repositories/{repositoryId}", h.get)
+		r.Patch("/repositories/{repositoryId}", h.update)
+		return
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAuth())
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Post("/organizations/{organizationId}/repositories", h.create)
+		r.With(requireOrganizationRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/organizations/{organizationId}/repositories", h.list)
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleMember, authorization.RoleAdmin, authorization.RoleOwner)).Get("/repositories/{repositoryId}", h.get)
+		r.With(requireRepositoryPathRoles(h.authorizer, authorization.RoleAdmin, authorization.RoleOwner)).Patch("/repositories/{repositoryId}", h.update)
+	})
 }
 
 func (h *RepositoryHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +67,19 @@ func (h *RepositoryHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(organizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "repository.create",
+		ResourceType:   "repository",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"githubId": item.GithubID,
+			"name":     item.Name,
+			"fullName": item.FullName,
+		},
+	})
 
 	WriteData(w, http.StatusCreated, item)
 }
@@ -120,6 +150,21 @@ func (h *RepositoryHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeRepositoryError(w, r, svcErr)
 		return
 	}
+	userID, _ := currentUserID(r)
+	recordAudit(r.Context(), h.audit, auditlog.Entry{
+		OrganizationID: stringRef(item.OrganizationID),
+		ActorUserID:    stringRef(userID),
+		Action:         "repository.update",
+		ResourceType:   "repository",
+		ResourceID:     stringRef(item.ID),
+		Metadata: map[string]any{
+			"name":          item.Name,
+			"fullName":      item.FullName,
+			"defaultBranch": item.DefaultBranch,
+			"isActive":      item.IsActive,
+			"archivedAt":    item.ArchivedAt,
+		},
+	})
 
 	WriteData(w, http.StatusOK, item)
 }

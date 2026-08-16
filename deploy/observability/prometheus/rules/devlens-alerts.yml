@@ -1,0 +1,86 @@
+groups:
+  - name: devlens-backend
+    rules:
+      - alert: DevLensHighHTTP5xxRatio
+        expr: |
+          sum(rate(devlens_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(devlens_http_requests_total[5m])), 1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens backend is serving elevated 5xx responses
+          description: HTTP 5xx ratio has been above 5% for at least 10 minutes.
+
+      - alert: DevLensHighAverageLatency
+        expr: |
+          (
+            sum(rate(devlens_http_request_duration_ms_sum[5m]))
+            /
+            clamp_min(sum(rate(devlens_http_request_duration_ms_count[5m])), 1)
+          ) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens backend average HTTP latency is elevated
+          description: Average HTTP request duration has exceeded 1000ms for at least 10 minutes.
+
+      - alert: DevLensNoTraffic
+        expr: sum(rate(devlens_http_requests_total[15m])) == 0
+        for: 30m
+        labels:
+          severity: info
+          service: devlens-api
+        annotations:
+          summary: DevLens backend has no observed HTTP traffic
+          description: No HTTP requests were observed for 30 minutes. Investigate only if traffic was expected.
+
+      - alert: DevLensQueueLagHigh
+        expr: max(devlens_queue_lag) > 25
+        for: 10m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens queue lag is elevated
+          description: Queue lag has stayed above 25 pending messages for at least 10 minutes.
+
+      - alert: DevLensGitHubRateLimitLow
+        expr: devlens_github_rate_limit_remaining{resource="core"} < 100
+        for: 5m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens GitHub API rate limit budget is low
+          description: The remaining GitHub core rate limit budget has been below 100 for at least 5 minutes.
+
+      - alert: DevLensSyncFailuresHigh
+        expr: sum(rate(devlens_sync_duration_ms_count{result="failed"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens sync jobs are failing
+          description: At least one sync job failure has been observed continuously over the last 15 minutes.
+
+      - alert: DevLensWebhookDelayHigh
+        expr: |
+          (
+            sum(rate(devlens_webhook_processing_delay_ms_sum[10m]))
+            /
+            clamp_min(sum(rate(devlens_webhook_processing_delay_ms_count[10m])), 1)
+          ) > 5000
+        for: 10m
+        labels:
+          severity: warning
+          service: devlens-api
+        annotations:
+          summary: DevLens webhook processing delay is elevated
+          description: Average webhook processing delay has exceeded 5 seconds for at least 10 minutes.
