@@ -41,6 +41,7 @@ func connectedRepositoryTarget(repositoryID string, fullName string) repositoryT
 		ID:                           repositoryID,
 		FullName:                     fullName,
 		GitHubInstallationRepository: &linkID,
+		IsActive:                     true,
 		InstallationID:               &installationID,
 		InstallationStatus:           &status,
 	}
@@ -482,6 +483,33 @@ func TestEnqueueRejectsRepositoryWithoutInstallationSelection(t *testing.T) {
 	_, err := svc.Enqueue(context.Background(), "repo-1", CreateSyncRequest{})
 	if !errors.Is(err, ErrRepositoryNotSelected) {
 		t.Fatalf("expected ErrRepositoryNotSelected, got %v", err)
+	}
+}
+
+func TestEnqueueRejectsDeactivatedRepository(t *testing.T) {
+	t.Parallel()
+
+	target := connectedRepositoryTarget("repo-1", "devlens-labs/devlens-api")
+	target.IsActive = false
+
+	svc := NewService(stubStore{
+		ensureRepositoryExistsFn: func(context.Context, string) error { return nil },
+		getRepositoryTargetFn: func(context.Context, string) (repositoryTarget, error) {
+			return target, nil
+		},
+		hasActiveJobFn: func(context.Context, string) (bool, error) {
+			t.Fatal("active job check should not run for a deactivated repository")
+			return false, nil
+		},
+		createFn: func(context.Context, createParams) (SyncJobResponse, error) {
+			t.Fatal("create should not run for a deactivated repository")
+			return SyncJobResponse{}, nil
+		},
+	}, stubGitHubClient{}, nil)
+
+	_, err := svc.Enqueue(context.Background(), "repo-1", CreateSyncRequest{})
+	if !errors.Is(err, ErrRepositoryDeactivated) {
+		t.Fatalf("expected ErrRepositoryDeactivated, got %v", err)
 	}
 }
 

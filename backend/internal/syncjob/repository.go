@@ -272,6 +272,7 @@ func (r *Repository) GetRepositoryTarget(ctx context.Context, repositoryID strin
 		FullName:                     row.FullName,
 		LastSyncedAt:                 optionalTimeValue(row.LastSyncedAt),
 		GitHubInstallationRepository: optionalUUIDText(row.GithubInstallationRepositoryID),
+		IsActive:                     row.IsActive,
 		InstallationID:               optionalInt64Value(row.InstallationID),
 		InstallationStatus:           optionalTextValue(row.InstallationStatus),
 	}, nil

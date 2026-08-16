@@ -62,6 +62,7 @@ type repositoryTarget struct {
 	FullName                     string
 	LastSyncedAt                 *time.Time
 	GitHubInstallationRepository *string
+	IsActive                     bool
 	InstallationID               *int64
 	InstallationStatus           *string
 }

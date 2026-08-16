@@ -412,6 +412,9 @@ func validateRepositoryTarget(target repositoryTarget) error {
 	}
 	switch strings.TrimSpace(*target.InstallationStatus) {
 	case "connected":
+		if !target.IsActive {
+			return ErrRepositoryDeactivated
+		}
 		return nil
 	case "installation_required":
 		return ErrRepositoryNotConnected

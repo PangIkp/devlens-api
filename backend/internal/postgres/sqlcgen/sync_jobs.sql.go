@@ -151,6 +151,7 @@ SELECT
     r.full_name,
     r.last_synced_at,
     r.github_installation_repository_id,
+    r.is_active,
     gi.installation_id,
     gi.status AS installation_status
 FROM repositories r
@@ -164,6 +165,7 @@ type GetSyncJobRepositoryTargetRow struct {
 	FullName                       string
 	LastSyncedAt                   pgtype.Timestamptz
 	GithubInstallationRepositoryID pgtype.UUID
+	IsActive                       bool
 	InstallationID                 pgtype.Int8
 	InstallationStatus             pgtype.Text
 }
@@ -176,6 +178,7 @@ func (q *Queries) GetSyncJobRepositoryTarget(ctx context.Context, id pgtype.UUID
 		&i.FullName,
 		&i.LastSyncedAt,
 		&i.GithubInstallationRepositoryID,
+		&i.IsActive,
 		&i.InstallationID,
 		&i.InstallationStatus,
 	)

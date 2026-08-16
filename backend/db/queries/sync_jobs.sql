@@ -11,6 +11,7 @@ SELECT
     r.full_name,
     r.last_synced_at,
     r.github_installation_repository_id,
+    r.is_active,
     gi.installation_id,
     gi.status AS installation_status
 FROM repositories r

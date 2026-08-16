@@ -31,6 +31,7 @@ type SyncJobHandler struct {
 const (
 	errorCodeGitHubInstallationRequired   = "GITHUB_INSTALLATION_REQUIRED"
 	errorCodeRepositoryOnboardingRequired = "REPOSITORY_ONBOARDING_REQUIRED"
+	errorCodeRepositoryDeactivated        = "REPOSITORY_DEACTIVATED"
 )
 
 func NewSyncJobHandler(service SyncJobService, deps ...any) *SyncJobHandler {
@@ -207,6 +208,8 @@ func writeSyncJobError(w http.ResponseWriter, r *http.Request, err error) {
 		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubInstallationRequired, "GitHub installation must be connected before syncing this repository"))
 	case errors.Is(err, syncjob.ErrRepositoryNotSelected):
 		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeRepositoryOnboardingRequired, "Repository must be selected from the GitHub installation before syncing"))
+	case errors.Is(err, syncjob.ErrRepositoryDeactivated):
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeRepositoryDeactivated, "Repository is deactivated. Reactivate it before starting a sync"))
 	case errors.Is(err, syncjob.ErrSyncJobNotFound):
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Sync job not found"))
 	case errors.Is(err, syncjob.ErrSyncJobConflict):
