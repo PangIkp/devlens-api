@@ -23,7 +23,7 @@ func NewRepository(db *postgres.DB) *Repository {
 
 func (r *Repository) EnsureOrganizationExists(ctx context.Context, organizationID string) error {
 	var exists bool
-	err := r.db.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id = $1)`, parseUUID(organizationID)).Scan(&exists)
+	err := r.db.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id = $1 AND deleted_at IS NULL)`, parseUUID(organizationID)).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("check organization exists: %w", err)
 	}

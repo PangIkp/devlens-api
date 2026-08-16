@@ -13,8 +13,8 @@ type DependencyStatus struct {
 }
 
 type HealthDependencies struct {
-	Postgres   DependencyStatus `json:"postgres"`
-	ClickHouse DependencyStatus `json:"clickhouse"`
+	Postgres   DependencyStatus  `json:"postgres"`
+	ClickHouse DependencyStatus  `json:"clickhouse"`
 	NATS       *DependencyStatus `json:"nats,omitempty"`
 }
 

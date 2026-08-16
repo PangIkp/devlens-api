@@ -183,6 +183,13 @@ WHERE pr.repository_id = $1
   AND pr.created_at < $3
   AND prr.review_requested_at IS NOT NULL
   AND COALESCE(prr.first_review_at, prr.review_submitted_at) IS NOT NULL
+  AND prr.reviewer IS NOT NULL
+  AND btrim(prr.reviewer) <> ''
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%[bot]'
+  AND lower(btrim(prr.reviewer)) NOT LIKE 'dependabot%'
+  AND lower(btrim(prr.reviewer)) NOT LIKE '%-bot'
+  AND lower(btrim(prr.reviewer)) <> 'github-actions'
+  AND lower(btrim(prr.reviewer)) <> 'web-flow'
 GROUP BY pr.number, pr.title
 HAVING EXTRACT(EPOCH FROM MIN(COALESCE(prr.first_review_at, prr.review_submitted_at) - prr.review_requested_at)) / 3600.0 >= $4
 ORDER BY review_requested_at DESC`
@@ -358,6 +365,13 @@ INNER JOIN pull_requests pr ON pr.id = prr.pull_request_id
 WHERE pr.repository_id = $1
   AND pr.created_at >= $2
   AND pr.created_at < $3
+  AND reviewer IS NOT NULL
+  AND btrim(reviewer) <> ''
+  AND lower(btrim(reviewer)) NOT LIKE '%[bot]'
+  AND lower(btrim(reviewer)) NOT LIKE 'dependabot%'
+  AND lower(btrim(reviewer)) NOT LIKE '%-bot'
+  AND lower(btrim(reviewer)) <> 'github-actions'
+  AND lower(btrim(reviewer)) <> 'web-flow'
 GROUP BY reviewer`
 
 	rows, err := r.db.Pool().Query(ctx, query, parseUUID(repositoryID), from, endExclusive(to))

@@ -308,9 +308,6 @@ func (s *Service) GetHotspots(ctx context.Context, repositoryID string, params H
 	files := aggregateHotspots(rows, s.resolveRules(ctx, repositoryID))
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].HotspotScore == files[j].HotspotScore {
-			if order == "asc" {
-				return files[i].FilePath < files[j].FilePath
-			}
 			return files[i].FilePath < files[j].FilePath
 		}
 		if order == "asc" {

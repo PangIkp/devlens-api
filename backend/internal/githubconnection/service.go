@@ -18,8 +18,8 @@ type store interface {
 	FindOrganizationIDByInstallationID(context.Context, int64) (*string, error)
 	UpsertInstallation(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
 	UpdateInstallationLifecycle(context.Context, int64, string, *time.Time, *time.Time) error
+	DisconnectInstallation(ctx context.Context, installationID int64, status string, disconnectedAt *time.Time) error
 	ReplaceAccessibleRepositories(context.Context, string, []accessibleRepositoryRecord) error
-	ClearRepositorySelections(context.Context, string) error
 	ListAccessibleRepositories(context.Context, ListAccessibleRepositoriesParams) (ListAccessibleRepositoriesResult, error)
 	GetAccessibleRepositoriesByGitHubIDs(context.Context, string, []int64) ([]accessibleRepositoryRecord, error)
 	LinkRepositoryAndMarkSelected(context.Context, string, int64, bool) (string, error)
@@ -412,11 +412,7 @@ func (s *Service) disconnectInstallation(ctx context.Context, installationID int
 		return err
 	}
 
-	if err := s.store.UpdateInstallationLifecycle(ctx, installationID, StateInstallationRequired, nil, disconnectedAt); err != nil {
-		return err
-	}
-
-	return s.store.ClearRepositorySelections(ctx, *organizationID)
+	return s.store.DisconnectInstallation(ctx, installationID, StateInstallationRequired, disconnectedAt)
 }
 
 func normalizeTargetType(value *string) *string {

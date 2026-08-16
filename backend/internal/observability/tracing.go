@@ -14,11 +14,11 @@ import (
 )
 
 type TracingConfig struct {
-	Enabled         bool
-	ServiceName     string
+	Enabled          bool
+	ServiceName      string
 	ExporterEndpoint string
-	Insecure        bool
-	SampleRatio     float64
+	Insecure         bool
+	SampleRatio      float64
 }
 
 type Tracing struct {

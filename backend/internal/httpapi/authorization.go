@@ -119,12 +119,7 @@ func requireWebhookDeliveryRoles(authorizer AuthorizationService, roles ...strin
 	return requireResourceRoles(
 		authorizer,
 		func(r *http.Request) (string, *Error) {
-			value := strings.TrimSpace(chi.URLParam(r, "deliveryId"))
-			if value == "" {
-				err := NewValidationError("request validation failed", ValidationIssue{Field: "deliveryId", Message: "is required"})
-				return "", &err
-			}
-			return value, nil
+			return validateUUIDPathParam("deliveryId", chi.URLParam(r, "deliveryId"))
 		},
 		func(ctx context.Context, userID string, resourceID string, roles ...string) error {
 			return authorizer.AuthorizeWebhookDelivery(ctx, userID, resourceID, roles...)

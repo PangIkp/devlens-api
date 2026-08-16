@@ -290,29 +290,91 @@ func (r *Repository) ReplaceAccessibleRepositories(ctx context.Context, organiza
 	return nil
 }
 
-func (r *Repository) ClearRepositorySelections(ctx context.Context, organizationID string) error {
-	installation, err := r.GetInstallation(ctx, organizationID)
+// DisconnectInstallation marks an installation as disconnected, clears its
+// repository selections, and deactivates every repository that was linked to
+// it, all in one transaction. Deactivating the repositories keeps them from
+// appearing as syncable in the UI or accepting manual sync requests once the
+// GitHub App connection backing them no longer exists.
+func (r *Repository) DisconnectInstallation(ctx context.Context, installationID int64, status string, disconnectedAt *time.Time) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin disconnect installation: %w", err)
 	}
-	if installation == nil {
-		return ErrInstallationNotFound
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var githubInstallationRowID pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM github_installations WHERE installation_id = $1`, installationID).Scan(&githubInstallationRowID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInstallationNotFound
+		}
+		return fmt.Errorf("find installation: %w", err)
 	}
 
-	if _, err := r.db.Pool().Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
+		UPDATE github_installations
+		SET status = $2,
+		    suspended_at = NULL,
+		    disconnected_at = $3,
+		    updated_at = NOW()
+		WHERE id = $1`,
+		githubInstallationRowID,
+		status,
+		toNullableTimestamp(disconnectedAt),
+	); err != nil {
+		return fmt.Errorf("update installation lifecycle: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT linked_repository_id
+		FROM github_installation_repositories
+		WHERE github_installation_id = $1 AND linked_repository_id IS NOT NULL`,
+		githubInstallationRowID,
+	)
+	if err != nil {
+		return fmt.Errorf("list linked repositories: %w", err)
+	}
+	linkedRepositoryIDs := make([]pgtype.UUID, 0)
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan linked repository id: %w", err)
+		}
+		linkedRepositoryIDs = append(linkedRepositoryIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate linked repositories: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
 		UPDATE github_installation_repositories
 		SET selection_status = $2,
 		    linked_repository_id = NULL,
 		    installation_status = $3,
 		    updated_at = NOW()
 		WHERE github_installation_id = $1`,
-		parseUUID(installation.ID),
+		githubInstallationRowID,
 		SelectionStatusNotSelected,
 		InstallationStatusInstallationRequired,
 	); err != nil {
 		return fmt.Errorf("clear repository selections: %w", err)
 	}
 
+	if len(linkedRepositoryIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE repositories
+			SET is_active = FALSE
+			WHERE id = ANY($1)`,
+			linkedRepositoryIDs,
+		); err != nil {
+			return fmt.Errorf("deactivate disconnected repositories: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit disconnect installation: %w", err)
+	}
 	return nil
 }
 

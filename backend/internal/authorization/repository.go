@@ -30,9 +30,10 @@ func NewRepository(db *postgres.DB) *Repository {
 func (r *Repository) GetOrganizationRole(ctx context.Context, userID string, organizationID string) (string, error) {
 	return r.getRole(
 		ctx,
-		`SELECT role
-FROM organization_members
-WHERE organization_id = $1 AND user_id = $2`,
+		`SELECT om.role
+FROM organization_members om
+INNER JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+WHERE om.organization_id = $1 AND om.user_id = $2`,
 		`SELECT EXISTS(
 SELECT 1
 FROM organizations
@@ -49,12 +50,14 @@ func (r *Repository) GetRepositoryRole(ctx context.Context, userID string, repos
 		ctx,
 		`SELECT om.role
 FROM repositories repo
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
 INNER JOIN organization_members om ON om.organization_id = repo.organization_id
 WHERE repo.id = $1 AND om.user_id = $2`,
 		`SELECT EXISTS(
 SELECT 1
-FROM repositories
-WHERE id = $1
+FROM repositories repo
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
+WHERE repo.id = $1
 )`,
 		ErrRepositoryNotFound,
 		repositoryID,
@@ -68,12 +71,15 @@ func (r *Repository) GetPullRequestRole(ctx context.Context, userID string, pull
 		`SELECT om.role
 FROM pull_requests pr
 INNER JOIN repositories repo ON repo.id = pr.repository_id
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
 INNER JOIN organization_members om ON om.organization_id = repo.organization_id
 WHERE pr.id = $1 AND om.user_id = $2`,
 		`SELECT EXISTS(
 SELECT 1
-FROM pull_requests
-WHERE id = $1
+FROM pull_requests pr
+INNER JOIN repositories repo ON repo.id = pr.repository_id
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
+WHERE pr.id = $1
 )`,
 		ErrPullRequestNotFound,
 		pullRequestID,
@@ -87,12 +93,15 @@ func (r *Repository) GetSyncJobRole(ctx context.Context, userID string, syncJobI
 		`SELECT om.role
 FROM sync_jobs sj
 INNER JOIN repositories repo ON repo.id = sj.repository_id
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
 INNER JOIN organization_members om ON om.organization_id = repo.organization_id
 WHERE sj.id = $1 AND om.user_id = $2`,
 		`SELECT EXISTS(
 SELECT 1
-FROM sync_jobs
-WHERE id = $1
+FROM sync_jobs sj
+INNER JOIN repositories repo ON repo.id = sj.repository_id
+INNER JOIN organizations o ON o.id = repo.organization_id AND o.deleted_at IS NULL
+WHERE sj.id = $1
 )`,
 		ErrSyncJobNotFound,
 		syncJobID,
@@ -106,13 +115,17 @@ func (r *Repository) GetWebhookDeliveryRole(ctx context.Context, userID string, 
 		`SELECT om.role
 FROM webhook_deliveries wd
 LEFT JOIN repositories repo ON repo.id = wd.repository_id
-LEFT JOIN github_installations gi ON gi.id = wd.installation_id
+LEFT JOIN github_installations gi ON gi.id = wd.github_installation_id
+INNER JOIN organizations o ON o.id = COALESCE(repo.organization_id, gi.organization_id) AND o.deleted_at IS NULL
 INNER JOIN organization_members om ON om.organization_id = COALESCE(repo.organization_id, gi.organization_id)
 WHERE wd.id = $1 AND om.user_id = $2`,
 		`SELECT EXISTS(
 SELECT 1
-FROM webhook_deliveries
-WHERE id = $1
+FROM webhook_deliveries wd
+LEFT JOIN repositories repo ON repo.id = wd.repository_id
+LEFT JOIN github_installations gi ON gi.id = wd.github_installation_id
+INNER JOIN organizations o ON o.id = COALESCE(repo.organization_id, gi.organization_id) AND o.deleted_at IS NULL
+WHERE wd.id = $1
 )`,
 		ErrWebhookDeliveryNotFound,
 		deliveryID,

@@ -57,12 +57,13 @@ type createSessionParams struct {
 }
 
 type rotateSessionParams struct {
-	SessionID        string
-	AccessTokenHash  string
-	RefreshTokenHash string
-	ExpiresAt        time.Time
-	RefreshExpiresAt time.Time
-	Now              time.Time
+	SessionID           string
+	OldRefreshTokenHash string
+	AccessTokenHash     string
+	RefreshTokenHash    string
+	ExpiresAt           time.Time
+	RefreshExpiresAt    time.Time
+	Now                 time.Time
 }
 
 func NewRepository(db *postgres.DB) *Repository {
@@ -190,6 +191,12 @@ func (r *Repository) TouchSession(ctx context.Context, sessionID string, at time
 	return nil
 }
 
+// RotateSession advances a session to a new access/refresh token pair. The
+// update is guarded by refresh_token_hash matching the hash the caller read
+// the session with, so two concurrent refreshes racing on the same
+// not-yet-rotated token can't both succeed: the loser affects zero rows and
+// gets ErrSessionNotFound instead of silently persisting tokens that get
+// clobbered by the winner.
 func (r *Repository) RotateSession(ctx context.Context, params rotateSessionParams) error {
 	query := `
 UPDATE user_sessions
@@ -200,7 +207,8 @@ SET access_token_hash = $2,
     last_used_at = $6,
     updated_at = $6
 WHERE id = $1
-  AND revoked_at IS NULL`
+  AND revoked_at IS NULL
+  AND refresh_token_hash = $7`
 
 	commandTag, err := r.db.Pool().Exec(ctx, query,
 		parseUUID(params.SessionID),
@@ -209,6 +217,7 @@ WHERE id = $1
 		params.ExpiresAt.UTC(),
 		params.RefreshExpiresAt.UTC(),
 		params.Now.UTC(),
+		params.OldRefreshTokenHash,
 	)
 	if err != nil {
 		return fmt.Errorf("rotate session: %w", err)

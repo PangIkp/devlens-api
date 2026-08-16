@@ -121,12 +121,13 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (SessionRespo
 	refreshExpiresAt := now.Add(s.refreshTokenTTL)
 
 	if err := s.repository.RotateSession(ctx, rotateSessionParams{
-		SessionID:        session.ID,
-		AccessTokenHash:  tokenHash(accessToken),
-		RefreshTokenHash: tokenHash(refreshToken),
-		ExpiresAt:        expiresAt,
-		RefreshExpiresAt: refreshExpiresAt,
-		Now:              now,
+		SessionID:           session.ID,
+		OldRefreshTokenHash: session.RefreshTokenHash,
+		AccessTokenHash:     tokenHash(accessToken),
+		RefreshTokenHash:    tokenHash(refreshToken),
+		ExpiresAt:           expiresAt,
+		RefreshExpiresAt:    refreshExpiresAt,
+		Now:                 now,
 	}); err != nil {
 		return SessionResponse{}, err
 	}

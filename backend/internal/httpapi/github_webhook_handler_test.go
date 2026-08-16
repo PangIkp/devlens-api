@@ -187,14 +187,14 @@ func TestGitHubWebhookRetryUsesAuthorizationWhenConfigured(t *testing.T) {
 			return githubwebhook.HandleResult{}, nil
 		},
 		retryFn: func(_ context.Context, deliveryID string) (githubwebhook.HandleResult, error) {
-			if deliveryID != "delivery-1" {
+			if deliveryID != "11111111-1111-1111-1111-111111111111" {
 				t.Fatalf("unexpected delivery id %q", deliveryID)
 			}
 			return githubwebhook.HandleResult{DeliveryID: deliveryID, EventType: "push"}, nil
 		},
 	}, stubWebhookAuthorizer{
 		authorizeWebhookDeliveryFn: func(_ context.Context, userID string, deliveryID string, roles ...string) error {
-			if userID == "" || deliveryID != "delivery-1" {
+			if userID == "" || deliveryID != "11111111-1111-1111-1111-111111111111" {
 				t.Fatalf("unexpected auth input user=%q delivery=%q", userID, deliveryID)
 			}
 			if len(roles) != 2 || roles[0] != authorization.RoleAdmin || roles[1] != authorization.RoleOwner {
@@ -204,7 +204,7 @@ func TestGitHubWebhookRetryUsesAuthorizationWhenConfigured(t *testing.T) {
 		},
 	}).RegisterRoutes(router)
 
-	req := httptest.NewRequest(http.MethodPost, "/github/webhook-deliveries/delivery-1/retry", nil)
+	req := httptest.NewRequest(http.MethodPost, "/github/webhook-deliveries/11111111-1111-1111-1111-111111111111/retry", nil)
 	req.Header.Set("Authorization", "Bearer token-1")
 	rec := httptest.NewRecorder()
 

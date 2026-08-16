@@ -12,9 +12,8 @@ type stubRepository struct {
 	listFn                     func(context.Context, string) ([]MemberResponse, error)
 	createFn                   func(context.Context, CreateParams) (MemberResponse, error)
 	getByIDFn                  func(context.Context, string) (MemberResponse, error)
-	updateRoleFn               func(context.Context, UpdateParams) (MemberResponse, error)
-	deleteFn                   func(context.Context, string) error
-	countOwnersFn              func(context.Context, string) (int64, error)
+	updateRoleWithOwnerGuardFn func(ctx context.Context, params UpdateParams, organizationID string, currentRole string) (MemberResponse, error)
+	deleteWithOwnerGuardFn     func(ctx context.Context, organizationID string, memberID string, currentRole string) error
 }
 
 func (s stubRepository) EnsureOrganizationExists(ctx context.Context, organizationID string) error {
@@ -37,16 +36,12 @@ func (s stubRepository) GetByID(ctx context.Context, memberID string) (MemberRes
 	return s.getByIDFn(ctx, memberID)
 }
 
-func (s stubRepository) UpdateRole(ctx context.Context, params UpdateParams) (MemberResponse, error) {
-	return s.updateRoleFn(ctx, params)
+func (s stubRepository) UpdateRoleWithOwnerGuard(ctx context.Context, params UpdateParams, organizationID string, currentRole string) (MemberResponse, error) {
+	return s.updateRoleWithOwnerGuardFn(ctx, params, organizationID, currentRole)
 }
 
-func (s stubRepository) Delete(ctx context.Context, memberID string) error {
-	return s.deleteFn(ctx, memberID)
-}
-
-func (s stubRepository) CountOwners(ctx context.Context, organizationID string) (int64, error) {
-	return s.countOwnersFn(ctx, organizationID)
+func (s stubRepository) DeleteWithOwnerGuard(ctx context.Context, organizationID string, memberID string, currentRole string) error {
+	return s.deleteWithOwnerGuardFn(ctx, organizationID, memberID, currentRole)
 }
 
 func TestServiceCreateSuccess(t *testing.T) {
@@ -145,7 +140,7 @@ func TestServiceUpdateMemberFromAnotherOrganization(t *testing.T) {
 				Role:           "member",
 			}, nil
 		},
-		updateRoleFn: func(context.Context, UpdateParams) (MemberResponse, error) {
+		updateRoleWithOwnerGuardFn: func(context.Context, UpdateParams, string, string) (MemberResponse, error) {
 			t.Fatal("update should not be called")
 			return MemberResponse{}, nil
 		},
@@ -155,6 +150,34 @@ func TestServiceUpdateMemberFromAnotherOrganization(t *testing.T) {
 	_, err := svc.Update(context.Background(), "org-1", "member-1", UpdateOrganizationMemberRequest{Role: &role})
 	if !errors.Is(err, ErrMemberNotFound) {
 		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestServiceUpdateLastOwnerConflict(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(stubRepository{
+		ensureOrganizationExistsFn: func(context.Context, string) error { return nil },
+		getByIDFn: func(_ context.Context, memberID string) (MemberResponse, error) {
+			return MemberResponse{
+				ID:             memberID,
+				OrganizationID: "org-1",
+				UserID:         "user-1",
+				Role:           "owner",
+			}, nil
+		},
+		updateRoleWithOwnerGuardFn: func(_ context.Context, params UpdateParams, organizationID string, currentRole string) (MemberResponse, error) {
+			if organizationID != "org-1" || currentRole != "owner" || params.Role != "member" {
+				t.Fatalf("unexpected guard args organizationID=%q currentRole=%q params=%+v", organizationID, currentRole, params)
+			}
+			return MemberResponse{}, ErrLastOwnerConflict
+		},
+	})
+
+	role := "member"
+	_, err := svc.Update(context.Background(), "org-1", "member-1", UpdateOrganizationMemberRequest{Role: &role})
+	if !errors.Is(err, ErrLastOwnerConflict) {
+		t.Fatalf("expected last owner conflict, got %v", err)
 	}
 }
 
@@ -171,15 +194,11 @@ func TestServiceDeleteLastOwnerConflict(t *testing.T) {
 				Role:           "owner",
 			}, nil
 		},
-		countOwnersFn: func(_ context.Context, organizationID string) (int64, error) {
-			if organizationID != "org-1" {
-				t.Fatalf("unexpected organization id %q", organizationID)
+		deleteWithOwnerGuardFn: func(_ context.Context, organizationID string, memberID string, currentRole string) error {
+			if organizationID != "org-1" || currentRole != "owner" {
+				t.Fatalf("unexpected guard args organizationID=%q currentRole=%q", organizationID, currentRole)
 			}
-			return 1, nil
-		},
-		deleteFn: func(context.Context, string) error {
-			t.Fatal("delete should not be called")
-			return nil
+			return ErrLastOwnerConflict
 		},
 	})
 
@@ -202,15 +221,11 @@ func TestServiceDeleteSuccess(t *testing.T) {
 				Role:           "admin",
 			}, nil
 		},
-		deleteFn: func(_ context.Context, memberID string) error {
-			if memberID != "member-1" {
-				t.Fatalf("unexpected member id %q", memberID)
+		deleteWithOwnerGuardFn: func(_ context.Context, organizationID string, memberID string, currentRole string) error {
+			if memberID != "member-1" || organizationID != "org-1" || currentRole != "admin" {
+				t.Fatalf("unexpected args organizationID=%q memberID=%q currentRole=%q", organizationID, memberID, currentRole)
 			}
 			return nil
-		},
-		countOwnersFn: func(context.Context, string) (int64, error) {
-			t.Fatal("count owners should not be called")
-			return 0, nil
 		},
 	})
 

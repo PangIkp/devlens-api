@@ -68,10 +68,10 @@ type payloadEnvelope struct {
 		} `json:"user"`
 	} `json:"review"`
 	Commits []struct {
-		ID      string `json:"id"`
-		Message string `json:"message"`
+		ID        string     `json:"id"`
+		Message   string     `json:"message"`
 		Timestamp *time.Time `json:"timestamp"`
-		Author  struct {
+		Author    struct {
 			Name     string `json:"name"`
 			Email    string `json:"email"`
 			Username string `json:"username"`
