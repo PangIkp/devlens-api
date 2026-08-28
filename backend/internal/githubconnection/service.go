@@ -17,7 +17,8 @@ type store interface {
 	GetInstallation(context.Context, string) (*installationRecord, error)
 	FindOrganizationIDByInstallationID(context.Context, int64) (*string, error)
 	FindInstallationLinkByInstallationID(context.Context, int64) (*installationLinkRecord, error)
-	UpsertInstallation(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
+	FindInstallationLinkByAccount(context.Context, int64, string, string, string) (*installationLinkRecord, error)
+	UpsertInstallation(context.Context, string, int64, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
 	UpdateInstallationLifecycle(context.Context, int64, string, *time.Time, *time.Time) error
 	DisconnectInstallation(ctx context.Context, installationID int64, status string, disconnectedAt *time.Time) error
 	ReplaceAccessibleRepositories(context.Context, string, []accessibleRepositoryRecord) error
@@ -147,6 +148,13 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 	if err != nil {
 		return ConnectionResponse{}, err
 	}
+	accountLink, err := s.store.FindInstallationLinkByAccount(ctx, installation.AccountGithubID, installation.AccountLogin, installation.AccountType, connectedByUserID)
+	if err != nil {
+		return ConnectionResponse{}, err
+	}
+	if accountLink != nil {
+		return ConnectionResponse{}, ErrInstallationLinkedToAnotherUser
+	}
 
 	status := deriveInstallationLifecycleStatus(installation)
 
@@ -157,7 +165,7 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 		targetType = "selected_repositories"
 	}
 
-	if _, err := s.store.UpsertInstallation(ctx, organizationID, installation.ID, optionalNonEmptyString(connectedByUserID), installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
+	if _, err := s.store.UpsertInstallation(ctx, organizationID, installation.ID, installation.AccountGithubID, optionalNonEmptyString(connectedByUserID), installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
 		return ConnectionResponse{}, err
 	}
 
@@ -418,7 +426,7 @@ func (s *Service) refreshInstallationByInstallationID(ctx context.Context, insta
 		targetType = "selected_repositories"
 	}
 
-	if _, err := s.store.UpsertInstallation(ctx, *organizationID, installation.ID, nil, installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
+	if _, err := s.store.UpsertInstallation(ctx, *organizationID, installation.ID, installation.AccountGithubID, nil, installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
 		return err
 	}
 
