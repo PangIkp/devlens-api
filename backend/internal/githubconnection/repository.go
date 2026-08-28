@@ -44,6 +44,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 				gir.linked_repository_id,
 				CASE
 					WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
+					WHEN repo.is_active = FALSE THEN 'not_selected'
 					WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 					WHEN latest_job.status = 'failed' THEN 'sync_failed'
 					WHEN latest_job.status = 'completed' THEN 'synced'
@@ -52,6 +53,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 				COALESCE(latest_job.error_message, gir.sync_error_message) AS sync_error_message,
 				COALESCE(latest_job.finished_at, gir.last_synced_at) AS last_synced_at
 			FROM github_installation_repositories gir
+			LEFT JOIN repositories repo ON repo.id = gir.linked_repository_id
 			LEFT JOIN LATERAL (
 				SELECT sj.status, sj.error_message, sj.finished_at
 				FROM sync_jobs sj
@@ -402,6 +404,7 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 			gir.installation_status,
 			CASE
 				WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
+				WHEN repo.is_active = FALSE THEN 'not_selected'
 				WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 				WHEN latest_job.status = 'failed' THEN 'sync_failed'
 				WHEN latest_job.status = 'completed' THEN 'synced'
@@ -410,6 +413,7 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 			gir.linked_repository_id,
 			COALESCE(latest_job.error_message, gir.sync_error_message) AS sync_error_message
 		FROM github_installation_repositories gir
+		LEFT JOIN repositories repo ON repo.id = gir.linked_repository_id
 		LEFT JOIN LATERAL (
 			SELECT sj.status, sj.error_message
 			FROM sync_jobs sj
@@ -480,6 +484,7 @@ func (r *Repository) GetAccessibleRepositoriesByGitHubIDs(ctx context.Context, o
 			gir.installation_status,
 			CASE
 				WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
+				WHEN repo.is_active = FALSE THEN 'not_selected'
 				WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 				WHEN latest_job.status = 'failed' THEN 'sync_failed'
 				WHEN latest_job.status = 'completed' THEN 'synced'
@@ -488,6 +493,7 @@ func (r *Repository) GetAccessibleRepositoriesByGitHubIDs(ctx context.Context, o
 			gir.linked_repository_id,
 			COALESCE(latest_job.error_message, gir.sync_error_message) AS sync_error_message
 		FROM github_installation_repositories gir
+		LEFT JOIN repositories repo ON repo.id = gir.linked_repository_id
 		LEFT JOIN LATERAL (
 			SELECT sj.status, sj.error_message
 			FROM sync_jobs sj

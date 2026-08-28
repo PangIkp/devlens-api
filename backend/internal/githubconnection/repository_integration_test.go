@@ -89,6 +89,75 @@ func TestDisconnectInstallationDeactivatesLinkedRepositoriesIntegration(t *testi
 	}
 }
 
+func TestGetInstallationDoesNotCountInactiveLinkedRepositoriesIntegration(t *testing.T) {
+	t.Parallel()
+
+	repo, db := openIntegrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UTC().UnixNano()
+	orgID := newIntegrationUUID()
+	installationRowID := newIntegrationUUID()
+	activeRepositoryID := newIntegrationUUID()
+	inactiveRepositoryID := newIntegrationUUID()
+	activeInstallationRepoID := newIntegrationUUID()
+	inactiveInstallationRepoID := newIntegrationUUID()
+	installationID := suffix
+
+	mustIntegrationExec(t, ctx, db, `INSERT INTO organizations (id, github_id, name, slug, created_at, deleted_at) VALUES ($1, $2, $3, $4, NOW(), NULL)`,
+		orgID, suffix, "Integration Count Org", fmt.Sprintf("integration-githubconn-count-%d", suffix))
+
+	mustIntegrationExec(t, ctx, db, `
+		INSERT INTO github_installations (id, organization_id, installation_id, account_login, account_type, target_type, status, permissions_json, installed_at, updated_at)
+		VALUES ($1, $2, $3, 'octocat', 'Organization', 'selected_repositories', $4, '{}'::jsonb, NOW(), NOW())`,
+		installationRowID, orgID, installationID, StateConnected)
+
+	mustIntegrationExec(t, ctx, db, `INSERT INTO repositories (id, organization_id, github_id, name, full_name, default_branch, is_active) VALUES ($1, $2, $3, 'active-repo', 'integration/active-repo', 'main', TRUE)`,
+		activeRepositoryID, orgID, suffix+1)
+	mustIntegrationExec(t, ctx, db, `INSERT INTO repositories (id, organization_id, github_id, name, full_name, default_branch, is_active) VALUES ($1, $2, $3, 'inactive-repo', 'integration/inactive-repo', 'main', FALSE)`,
+		inactiveRepositoryID, orgID, suffix+2)
+
+	mustIntegrationExec(t, ctx, db, `
+		INSERT INTO github_installation_repositories (id, github_installation_id, github_repository_id, name, owner_login, full_name, installation_status, selection_status, linked_repository_id, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active-repo', 'octocat', 'integration/active-repo', $4, $5, $6, NOW(), NOW()),
+		       ($7, $2, $8, 'inactive-repo', 'octocat', 'integration/inactive-repo', $4, $5, $9, NOW(), NOW())`,
+		activeInstallationRepoID, installationRowID, suffix+1, InstallationStatusAccessible, SelectionStatusSelected, activeRepositoryID,
+		inactiveInstallationRepoID, suffix+2, inactiveRepositoryID)
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	installation, err := repo.GetInstallation(ctx, orgID.String())
+	if err != nil {
+		t.Fatalf("get installation: %v", err)
+	}
+	if installation == nil {
+		t.Fatal("expected installation")
+	}
+	if installation.ConnectedRepositories != 1 {
+		t.Fatalf("expected 1 connected repository, got %d", installation.ConnectedRepositories)
+	}
+
+	items, err := repo.ListAccessibleRepositories(ctx, ListAccessibleRepositoriesParams{OrganizationID: orgID.String(), Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("list accessible repositories: %v", err)
+	}
+	statuses := make(map[string]string, len(items.Items))
+	for _, item := range items.Items {
+		statuses[item.FullName] = item.SelectionStatus
+	}
+	if statuses["integration/active-repo"] != SelectionStatusSelected {
+		t.Fatalf("expected active repo selected, got %q", statuses["integration/active-repo"])
+	}
+	if statuses["integration/inactive-repo"] != SelectionStatusNotSelected {
+		t.Fatalf("expected inactive repo not selected, got %q", statuses["integration/inactive-repo"])
+	}
+}
+
 func openIntegrationRepository(t *testing.T) (*Repository, *postgres.DB) {
 	t.Helper()
 
