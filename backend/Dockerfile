@@ -17,15 +17,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags="-s -w -X github.com/PangIkp/devlens/backend/internal/buildinfo.Version=${VERSION} -X github.com/PangIkp/devlens/backend/internal/buildinfo.Commit=${COMMIT} -X github.com/PangIkp/devlens/backend/internal/buildinfo.BuildTime=${BUILD_TIME}" \
   -o /out/devlens-api ./cmd/api
 
-FROM alpine:3.22
-
-RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 appuser
+FROM scratch
 
 WORKDIR /app
 
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /out/devlens-api /usr/local/bin/devlens-api
 
-USER appuser
+USER 10001:10001
 
 EXPOSE 8080
 

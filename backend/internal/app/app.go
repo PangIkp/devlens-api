@@ -78,15 +78,20 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	var clickhouseDB *clickhouse.DB
-	if db, err := clickhouse.Open(cfg.ClickHouse, appMetrics); err != nil {
-		logger.Warn("clickhouse unavailable during startup", "error", err)
-	} else {
-		if err := clickhouse.EnsureSchema(ctx, db, cfg.DataLifecycle); err != nil {
-			logger.Warn("clickhouse schema initialization failed", "error", err)
-			db.Close()
+	clickhouseEnabled := cfg.ClickHouse.DSN != ""
+	if clickhouseEnabled {
+		if db, err := clickhouse.Open(cfg.ClickHouse, appMetrics); err != nil {
+			logger.Warn("clickhouse unavailable during startup", "error", err)
 		} else {
-			clickhouseDB = db
+			if err := clickhouse.EnsureSchema(ctx, db, cfg.DataLifecycle); err != nil {
+				logger.Warn("clickhouse schema initialization failed", "error", err)
+				db.Close()
+			} else {
+				clickhouseDB = db
+			}
 		}
+	} else {
+		logger.Info("clickhouse disabled for this runtime profile")
 	}
 
 	organizationRepository := organization.NewRepository(postgresDB)
@@ -219,31 +224,33 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	var metricsConsumer *metricsbus.Consumer
 	var insightBusClient *insightbus.Client
 	var insightConsumer *insightbus.Consumer
-	if clickhouseDB != nil {
+	var metricsPublisher syncCompletionPublisher = metricsbus.NewPublisher(logger, nil, metricsService)
+	var insightPublisher syncCompletionPublisher = inlineInsightPublisher{service: insightService}
+	natsEnabled := cfg.NATS.URL != ""
+	if clickhouseDB != nil && natsEnabled {
 		if client, err := metricsbus.Open(cfg.NATS.URL, appMetrics); err != nil {
 			logger.Warn("metrics bus unavailable during startup", "error", err)
 		} else {
 			metricsBusClient = client
 			metricsConsumer = metricsbus.NewConsumer(logger, client, metricsService)
+			metricsPublisher = metricsbus.NewPublisher(logger, client, metricsService)
 		}
 		if client, err := insightbus.Open(cfg.NATS.URL, appMetrics); err != nil {
 			logger.Warn("insight bus unavailable during startup", "error", err)
 		} else {
 			insightBusClient = client
 			insightConsumer = insightbus.NewConsumer(logger, client, insightService)
+			insightPublisher = insightbus.NewPublisher(logger, client)
 		}
-		syncJobService.SetCompletionPublisher(syncjob.NewCompositePublisher(
-			metricsbus.NewPublisher(logger, metricsBusClient, metricsService),
-			insightbus.NewPublisher(logger, insightBusClient),
-		))
 	}
+	syncJobService.SetCompletionPublisher(syncjob.NewCompositePublisher(metricsPublisher, insightPublisher))
 
 	var clickhouseHealthChecker httpapi.ClickHouseHealthChecker
 	if clickhouseDB != nil {
 		clickhouseHealthChecker = clickhouseDB
 	}
 
-	natsHealthChecker := buildNATSHealthChecker(clickhouseDB != nil, metricsBusClient, insightBusClient)
+	natsHealthChecker := buildNATSHealthChecker(clickhouseDB != nil && natsEnabled, metricsBusClient, insightBusClient)
 
 	handler := httpapi.NewRouter(logger, httpapi.Dependencies{
 		Postgres:                      postgresDB,
@@ -320,6 +327,37 @@ type staticNATSHealthChecker struct {
 
 func (c staticNATSHealthChecker) Check(context.Context) error {
 	return c.err
+}
+
+type syncCompletionPublisher interface {
+	PublishRepositorySyncCompleted(context.Context, syncjob.SyncCompletedEvent) error
+}
+
+type inlineInsightPublisher struct {
+	service interface {
+		RefreshRepository(context.Context, string, string, time.Time, time.Time) error
+	}
+}
+
+func (p inlineInsightPublisher) PublishRepositorySyncCompleted(ctx context.Context, event syncjob.SyncCompletedEvent) error {
+	if p.service == nil {
+		return nil
+	}
+
+	from := event.From.UTC()
+	if from.IsZero() {
+		from, _ = time.Parse("2006-01-02", "1970-01-01")
+	}
+
+	to := event.To.UTC()
+	if to.IsZero() {
+		to = event.OccurredAt.UTC()
+	}
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+
+	return p.service.RefreshRepository(ctx, event.OrganizationID, event.RepositoryID, from, to)
 }
 
 func buildNATSHealthChecker(requireNATS bool, checkers ...natsChecker) httpapi.NATSHealthChecker {

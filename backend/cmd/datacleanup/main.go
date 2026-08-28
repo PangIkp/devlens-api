@@ -30,11 +30,16 @@ func main() {
 	defer pg.Close()
 
 	var ch *clickhouse.DB
-	if db, err := clickhouse.Open(cfg.ClickHouse, nil); err == nil {
-		ch = db
-		defer ch.Close()
-		if err := clickhouse.EnsureSchema(ctx, ch, cfg.DataLifecycle); err != nil {
-			fmt.Fprintf(os.Stderr, "ensure clickhouse schema: %v\n", err)
+	if cfg.ClickHouse.DSN != "" {
+		if db, err := clickhouse.Open(cfg.ClickHouse, nil); err == nil {
+			ch = db
+			defer ch.Close()
+			if err := clickhouse.EnsureSchema(ctx, ch, cfg.DataLifecycle); err != nil {
+				fmt.Fprintf(os.Stderr, "ensure clickhouse schema: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "open clickhouse: %v\n", err)
 			os.Exit(1)
 		}
 	}
