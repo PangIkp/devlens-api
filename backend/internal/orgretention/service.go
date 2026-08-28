@@ -56,7 +56,7 @@ func (s *Service) buildResponse(days *int, updatedAt *time.Time) Response {
 	}
 	return Response{
 		AnalyticsRawRetentionDays: effective,
-		Enforced:                  false,
+		Enforced:                  true,
 		UpdatedAt:                 updatedAt,
 	}
 }

@@ -685,10 +685,8 @@ paths:
       summary: Get analytics data retention settings for an organization
       description: >-
         Returns the organization's effective raw analytics data retention
-        window in days. `enforced` is currently always `false`: the override
-        is stored and reported here for the frontend to build against, but
-        actual deletion still runs on a single global ClickHouse TTL applied
-        to all organizations. Per-organization enforcement is a follow-up.
+        window in days. Raw analytics cleanup honors the stored
+        per-organization value when the data lifecycle cleanup command runs.
       operationId: getOrganizationRetentionSettings
       parameters:
         - $ref: "#/components/parameters/OrganizationId"
@@ -2414,10 +2412,8 @@ components:
         enforced:
           type: boolean
           description: >-
-            Always false today. The value is stored and reported here, but
-            data deletion still runs on a single global ClickHouse TTL
-            shared by all organizations; per-organization enforcement is a
-            follow-up.
+            True when raw analytics cleanup honors this organization's
+            effective retention window.
         updatedAt:
           type: string
           format: date-time
@@ -3180,6 +3176,8 @@ components:
           format: double
           minimum: 0
           maximum: 1
+        dataCoverage:
+          $ref: "#/components/schemas/DataCoverage"
 
     DashboardSummaryResponse:
       type: object
@@ -3201,6 +3199,31 @@ components:
         value:
           type: number
           format: double
+
+    DataCoverage:
+      type: object
+      required:
+        - requestedDays
+        - availableDays
+        - isPartial
+      properties:
+        requestedDays:
+          type: integer
+          minimum: 0
+          description: Number of calendar days requested by the date range.
+        availableDays:
+          type: integer
+          minimum: 0
+          description: Number of requested days with stored daily aggregate rows.
+        isPartial:
+          type: boolean
+          description: True when stored daily aggregates do not cover the full requested range.
+        oldestAvailableDate:
+          type: string
+          format: date
+        newestAvailableDate:
+          type: string
+          format: date
 
     PullRequestMetrics:
       type: object
@@ -3236,6 +3259,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MetricPoint"
+        dataCoverage:
+          $ref: "#/components/schemas/DataCoverage"
 
     PullRequestMetricsResponse:
       type: object
@@ -3277,6 +3302,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MetricPoint"
+        dataCoverage:
+          $ref: "#/components/schemas/DataCoverage"
 
     ReviewMetricsResponse:
       type: object
@@ -3317,6 +3344,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MetricPoint"
+        dataCoverage:
+          $ref: "#/components/schemas/DataCoverage"
 
     DeploymentMetricsResponse:
       type: object
