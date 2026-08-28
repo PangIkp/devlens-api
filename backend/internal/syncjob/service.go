@@ -323,7 +323,6 @@ func (s *Service) run(ctx context.Context, job SyncJobResponse, options syncOpti
 		Name:          repo.Name,
 		FullName:      repo.FullName,
 		DefaultBranch: stringPtr(repo.DefaultBranch),
-		IsActive:      !repo.Archived,
 		ArchivedAt:    archivedAt(repo.Archived, startedAt),
 	}, startedAt); err != nil {
 		return s.failJob(ctx, job, options.mode, runStarted, err)

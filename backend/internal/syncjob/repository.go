@@ -345,7 +345,6 @@ func (r *Repository) SyncRepositoryMetadata(ctx context.Context, repositoryID st
 		Name:          metadata.Name,
 		FullName:      metadata.FullName,
 		DefaultBranch: textPointerValue(metadata.DefaultBranch),
-		IsActive:      metadata.IsActive,
 		ArchivedAt:    toNullableTimestamp(metadata.ArchivedAt),
 		UpdatedAt:     toNullableTimestamp(&at),
 	})

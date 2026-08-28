@@ -307,9 +307,8 @@ UPDATE repositories
 SET name = $2,
     full_name = $3,
     default_branch = $4,
-    is_active = $5,
-    archived_at = $6,
-    updated_at = $7
+  archived_at = $5,
+  updated_at = $6
 WHERE id = $1
 `
 
@@ -318,7 +317,6 @@ type SyncRepositoryMetadataParams struct {
 	Name          string
 	FullName      string
 	DefaultBranch pgtype.Text
-	IsActive      bool
 	ArchivedAt    pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 }
@@ -329,7 +327,6 @@ func (q *Queries) SyncRepositoryMetadata(ctx context.Context, arg SyncRepository
 		arg.Name,
 		arg.FullName,
 		arg.DefaultBranch,
-		arg.IsActive,
 		arg.ArchivedAt,
 		arg.UpdatedAt,
 	)
