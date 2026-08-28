@@ -341,3 +341,33 @@ func TestCreateSyncJobHandlerRejectsRepositoryWithoutConnectedInstallation(t *te
 		t.Fatalf("unexpected body %+v", body)
 	}
 }
+
+func TestCreateSyncJobHandlerMapsInvalidGitHubAppCredentials(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	service := newStubSyncJobService()
+	service.enqueueFn = func(context.Context, string, syncjob.CreateSyncRequest) (syncjob.SyncJobResponse, error) {
+		return syncjob.SyncJobResponse{}, syncjob.ErrGitHubAppCredentialsInvalid
+	}
+	NewSyncJobHandler(service).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/repositories/8f1cd971-1fd9-4f4f-9f75-47f6ed14938d/sync", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error.Code != errorCodeGitHubAppCredentialsInvalid {
+		t.Fatalf("expected code %q, got %q", errorCodeGitHubAppCredentialsInvalid, body.Error.Code)
+	}
+	if strings.Contains(body.Error.Message, "github app request failed") {
+		t.Fatalf("expected sanitized body %+v", body)
+	}
+}

@@ -292,7 +292,7 @@ func (c *HTTPClient) execute(req *http.Request, target any) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("github app request failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return newAPIError(resp.StatusCode, req.URL.Path, body)
 	}
 
 	if target == nil {
@@ -334,6 +334,7 @@ func (c *HTTPClient) createJWT() (string, error) {
 }
 
 func parsePrivateKey(raw string) (*rsa.PrivateKey, error) {
+	raw = strings.ReplaceAll(raw, `\n`, "\n")
 	block, _ := pem.Decode([]byte(raw))
 	if block == nil {
 		return nil, errors.New("decode github app private key: invalid PEM")

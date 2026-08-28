@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/githubapp"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
 	"github.com/PangIkp/devlens/backend/internal/observability"
 )
@@ -40,6 +43,7 @@ type Service struct {
 	store                 store
 	githubClient          githubclient.Client
 	publisher             completionPublisher
+	logger                *slog.Logger
 	now                   func() time.Time
 	metrics               *observability.Metrics
 	sleep                 func(context.Context, time.Duration) error
@@ -99,6 +103,10 @@ func NewService(store store, githubClient githubclient.Client, metrics *observab
 		metrics:      metrics,
 		sleep:        sleepWithContext,
 	}
+}
+
+func (s *Service) SetLogger(logger *slog.Logger) {
+	s.logger = logger
 }
 
 func (s *Service) ConfigureRateLimitThrottle(minRemaining int) {
@@ -426,11 +434,65 @@ func validateRepositoryTarget(target repositoryTarget) error {
 func (s *Service) failJob(ctx context.Context, job SyncJobResponse, mode string, runStarted time.Time, err error) (SyncJobResponse, error) {
 	failedAt := s.now().UTC()
 	s.recordSyncDuration(mode, "failed", time.Since(runStarted))
-	failedJob, markErr := s.store.MarkFailed(ctx, job.ID, err.Error(), failedAt)
+	message := syncFailureMessage(err)
+	s.logSyncFailure(ctx, job, message)
+	failedJob, markErr := s.store.MarkFailed(ctx, job.ID, message, failedAt)
 	if markErr != nil {
 		return SyncJobResponse{}, markErr
 	}
 	return failedJob, nil
+}
+
+type githubAppIDProvider interface {
+	GitHubAppID() int64
+}
+
+func (s *Service) logSyncFailure(ctx context.Context, job SyncJobResponse, message string) {
+	if s == nil || s.logger == nil {
+		return
+	}
+
+	attrs := []any{
+		"sync_job_id", job.ID,
+		"repository_id", job.RepositoryID,
+		"error", message,
+	}
+	if orgID, err := s.store.GetRepositoryOrganizationID(ctx, job.RepositoryID); err == nil && strings.TrimSpace(orgID) != "" {
+		attrs = append(attrs, "organization_id", orgID)
+	}
+	if target, err := s.store.GetRepositoryTarget(ctx, job.RepositoryID); err == nil && target.InstallationID != nil {
+		attrs = append(attrs, "installation_id", *target.InstallationID)
+	}
+	if provider, ok := s.githubClient.(githubAppIDProvider); ok {
+		if appID := provider.GitHubAppID(); appID > 0 {
+			attrs = append(attrs, "app_id", appID)
+		}
+	}
+
+	s.logger.Error("sync job failed", attrs...)
+}
+
+func syncFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, githubapp.ErrAppCredentialsInvalid):
+		return ErrGitHubAppCredentialsInvalid.Error()
+	case errors.Is(err, githubapp.ErrInstallationNotFound):
+		return ErrRepositoryNotConnected.Error()
+	}
+
+	var githubErr *githubclient.APIError
+	if errors.As(err, &githubErr) {
+		switch githubErr.StatusCode {
+		case http.StatusUnauthorized:
+			return "github credentials are invalid"
+		case http.StatusForbidden, http.StatusNotFound:
+			return "github repository is not accessible by the configured credentials"
+		default:
+			return "github api request failed"
+		}
+	}
+
+	return err.Error()
 }
 
 func (s *Service) recordSyncDuration(mode, result string, duration time.Duration) {
