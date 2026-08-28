@@ -43,8 +43,9 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 				gir.github_installation_id,
 				gir.linked_repository_id,
 				CASE
-					WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
-					WHEN repo.is_active = FALSE THEN 'not_selected'
+					WHEN gir.linked_repository_id IS NULL THEN 'not_selected'
+					WHEN repo.id IS NULL OR repo.is_active = FALSE THEN 'not_selected'
+					WHEN gir.installation_status <> 'accessible' THEN 'not_selected'
 					WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 					WHEN latest_job.status = 'failed' THEN 'sync_failed'
 					WHEN latest_job.status = 'completed' THEN 'synced'
@@ -403,8 +404,9 @@ func (r *Repository) ListAccessibleRepositories(ctx context.Context, params List
 			gir.default_branch,
 			gir.installation_status,
 			CASE
-				WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
-				WHEN repo.is_active = FALSE THEN 'not_selected'
+				WHEN gir.linked_repository_id IS NULL THEN 'not_selected'
+				WHEN repo.id IS NULL OR repo.is_active = FALSE THEN 'not_selected'
+				WHEN gir.installation_status <> 'accessible' THEN 'not_selected'
 				WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 				WHEN latest_job.status = 'failed' THEN 'sync_failed'
 				WHEN latest_job.status = 'completed' THEN 'synced'
@@ -483,8 +485,9 @@ func (r *Repository) GetAccessibleRepositoriesByGitHubIDs(ctx context.Context, o
 			gir.default_branch,
 			gir.installation_status,
 			CASE
-				WHEN gir.linked_repository_id IS NULL THEN gir.selection_status
-				WHEN repo.is_active = FALSE THEN 'not_selected'
+				WHEN gir.linked_repository_id IS NULL THEN 'not_selected'
+				WHEN repo.id IS NULL OR repo.is_active = FALSE THEN 'not_selected'
+				WHEN gir.installation_status <> 'accessible' THEN 'not_selected'
 				WHEN latest_job.status IN ('pending', 'running') THEN 'syncing'
 				WHEN latest_job.status = 'failed' THEN 'sync_failed'
 				WHEN latest_job.status = 'completed' THEN 'synced'
@@ -589,6 +592,7 @@ func (r *Repository) LinkRepositoryAndMarkSelected(ctx context.Context, organiza
 	if _, err := tx.Exec(ctx, `
 		UPDATE repositories
 		SET github_installation_repository_id = $2,
+		    is_active = TRUE,
 		    initial_sync_status = $3,
 		    initial_sync_completed_at = NULL,
 		    sync_error_message = NULL,
@@ -630,7 +634,11 @@ func (r *Repository) FindInstallationIDByRepositoryFullName(ctx context.Context,
 		SELECT gi.installation_id
 		FROM github_installation_repositories gir
 		JOIN github_installations gi ON gi.id = gir.github_installation_id
-		WHERE gir.full_name = $1 AND gir.installation_status = 'accessible'
+		JOIN repositories repo ON repo.id = gir.linked_repository_id
+		WHERE gir.full_name = $1
+		  AND gir.installation_status = 'accessible'
+		  AND gi.status = 'connected'
+		  AND repo.is_active = TRUE
 		ORDER BY gi.updated_at DESC NULLS LAST, gi.installed_at DESC
 		LIMIT 1`, fullName).Scan(&installationID)
 	if err != nil {
