@@ -59,6 +59,9 @@ func TestHealthHandlerSuccess(t *testing.T) {
 	if body.Dependencies.Postgres.Status != "ok" {
 		t.Fatalf("expected postgres status ok, got %q", body.Dependencies.Postgres.Status)
 	}
+	if body.Dependencies.ClickHouse.Status != "disabled" {
+		t.Fatalf("expected clickhouse status disabled, got %q", body.Dependencies.ClickHouse.Status)
+	}
 	if body.Dependencies.NATS != nil {
 		t.Fatalf("expected nats dependency to be omitted for liveness, got %+v", *body.Dependencies.NATS)
 	}
@@ -154,8 +157,8 @@ func TestReadinessHandlerSuccess(t *testing.T) {
 	if body.Dependencies.NATS == nil {
 		t.Fatal("expected readiness to include nats dependency")
 	}
-	if body.Dependencies.NATS.Status != "ok" {
-		t.Fatalf("expected nats status ok, got %q", body.Dependencies.NATS.Status)
+	if body.Dependencies.NATS.Status != "disabled" {
+		t.Fatalf("expected nats status disabled, got %q", body.Dependencies.NATS.Status)
 	}
 }
 
@@ -240,6 +243,9 @@ func TestHealthHandlerIgnoresTypedNilClickHouse(t *testing.T) {
 
 	if body.Status != "ok" {
 		t.Fatalf("expected status ok, got %q", body.Status)
+	}
+	if body.Dependencies.ClickHouse.Status != "disabled" {
+		t.Fatalf("expected clickhouse status disabled, got %q", body.Dependencies.ClickHouse.Status)
 	}
 }
 

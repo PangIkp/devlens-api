@@ -57,12 +57,20 @@ func NewReadinessHandler(postgres PostgresHealthChecker, clickhouse ClickHouseHe
 }
 
 func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	clickhouseStatus := DependencyStatus{Status: "ok"}
+	if isNilChecker(h.clickhouse) {
+		clickhouseStatus = DependencyStatus{
+			Status:  "disabled",
+			Message: "ClickHouse disabled",
+		}
+	}
+
 	response := HealthResponse{
 		Status:    "ok",
 		Timestamp: time.Now().UTC(),
 		Dependencies: HealthDependencies{
 			Postgres:   DependencyStatus{Status: "ok"},
-			ClickHouse: DependencyStatus{Status: "ok"},
+			ClickHouse: clickhouseStatus,
 		},
 	}
 
@@ -87,7 +95,14 @@ func (h HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.mode == healthModeReadiness {
-		response.Dependencies.NATS = &DependencyStatus{Status: "ok"}
+		if isNilChecker(h.nats) {
+			response.Dependencies.NATS = &DependencyStatus{
+				Status:  "disabled",
+				Message: "NATS disabled",
+			}
+		} else {
+			response.Dependencies.NATS = &DependencyStatus{Status: "ok"}
+		}
 		if err := h.checkNATS(r.Context()); err != nil {
 			statusCode = http.StatusServiceUnavailable
 			response.Status = "degraded"

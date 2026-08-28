@@ -217,6 +217,19 @@ func TestLoadClickHouseTimeoutFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsEmptyClickHouseDSN(t *testing.T) {
+	t.Setenv("CLICKHOUSE_DSN", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.ClickHouse.DSN != "" {
+		t.Fatalf("expected empty clickhouse dsn, got %q", cfg.ClickHouse.DSN)
+	}
+}
+
 func TestLoadCORSAllowedOriginsFromEnv(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000, https://app.devlens.dev")
 

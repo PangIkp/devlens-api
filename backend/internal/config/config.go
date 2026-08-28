@@ -735,8 +735,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("CLICKHOUSE_INSERT_BATCH_SIZE must be greater than 0")
 	}
 
-	if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
-		return Config{}, fmt.Errorf("CLICKHOUSE_DSN must be a valid URL: %w", err)
+	if strings.TrimSpace(cfg.ClickHouse.DSN) != "" {
+		if _, err := url.ParseRequestURI(cfg.ClickHouse.DSN); err != nil {
+			return Config{}, fmt.Errorf("CLICKHOUSE_DSN must be a valid URL: %w", err)
+		}
 	}
 
 	return cfg, nil

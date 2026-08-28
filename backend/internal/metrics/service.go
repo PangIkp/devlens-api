@@ -134,8 +134,14 @@ func (s *Service) CalculateRepositoryMetrics(ctx context.Context, repositoryID s
 		payload = append(payload, row.toClickHouseRecord(repositoryID, calculatedAt, req.MetricVersion))
 	}
 
-	if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO metrics_daily", payload, clickhouseInsertBatchSize); err != nil {
-		return fmt.Errorf("insert metrics_daily rows: %w", err)
+	if err := s.upsertMetricsDaily(ctx, repositoryID, payload); err != nil {
+		return err
+	}
+
+	if s.ch != nil {
+		if err := s.ch.InsertJSONEachRowBatched(ctx, "INSERT INTO metrics_daily", payload, clickhouseInsertBatchSize); err != nil {
+			return fmt.Errorf("insert clickhouse metrics_daily rows: %w", err)
+		}
 	}
 
 	return nil
@@ -662,9 +668,6 @@ ORDER BY review_count DESC, prr.reviewer ASC`
 func (s *Service) ensureReady() error {
 	if s.pg == nil {
 		return fmt.Errorf("metrics postgres dependency is not configured")
-	}
-	if s.ch == nil {
-		return fmt.Errorf("metrics clickhouse dependency is not configured")
 	}
 	return nil
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PangIkp/devlens/backend/internal/clickhouse"
 	"github.com/PangIkp/devlens/backend/internal/postgres/sqlcgen"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -115,6 +114,10 @@ type hotspotRow struct {
 }
 
 func (s *Service) syncAnalyticsRawData(ctx context.Context, repositoryID pgtype.UUID, bounds dateBounds, syncedAt time.Time) error {
+	if s.ch == nil {
+		return nil
+	}
+
 	prs, err := s.pg.Queries().ListPullRequestsForAnalytics(ctx, sqlcgen.ListPullRequestsForAnalyticsParams{
 		RepositoryID: repositoryID,
 		MergedAt:     toTimestamp(bounds.From),
@@ -394,101 +397,129 @@ func nullableText(value pgtype.Text) *string {
 }
 
 func (s *Service) listMetricsDaily(ctx context.Context, repositoryID string, bounds dateBounds) ([]metricsDailyRecord, error) {
-	query := fmt.Sprintf(`
+	rows, err := s.pg.Pool().Query(ctx, `
 SELECT
-  metric_version,
-  repository_id,
-  metric_date,
-  pr_cycle_time_minutes,
-  review_wait_minutes,
-  average_review_minutes,
-  average_files_changed,
-  average_additions,
-  average_deletions,
-  deployment_frequency,
-  change_failure_rate,
-  review_coverage,
-  toInt32(pr_count) AS pr_count,
-  toInt32(merged_pr_count) AS merged_pr_count,
-  toInt32(reviewed_pr_count) AS reviewed_pr_count,
-  toInt32(review_wait_sample_count) AS review_wait_sample_count,
-  toInt32(review_time_sample_count) AS review_time_sample_count,
-  toInt32(successful_deployment_count) AS successful_deployment_count,
-  toInt32(failed_deployment_count) AS failed_deployment_count,
-  calculated_at
+	metric_version,
+	repository_id::text,
+	metric_date,
+	pr_cycle_time_minutes,
+	review_wait_minutes,
+	average_review_minutes,
+	average_files_changed,
+	average_additions,
+	average_deletions,
+	deployment_frequency,
+	change_failure_rate,
+	review_coverage,
+	pr_count,
+	merged_pr_count,
+	reviewed_pr_count,
+	review_wait_sample_count,
+	review_time_sample_count,
+	successful_deployment_count,
+	failed_deployment_count,
+	calculated_at
 FROM metrics_daily
-FINAL
-WHERE repository_id = '%s'
-  AND metric_date >= toDate('%s')
-  AND metric_date <= toDate('%s')
-ORDER BY metric_date ASC
-`, escapeString(repositoryID), formatDate(bounds.From), formatDate(bounds.ToInclusive))
-
-	rows, err := clickhouse.QueryJSONEachRow[metricsDailyRecord](ctx, s.ch, query)
+WHERE repository_id = $1
+  AND metric_version = $2
+  AND metric_date >= $3
+  AND metric_date <= $4
+ORDER BY metric_date ASC`,
+		parseUUID(repositoryID),
+		CurrentMetricVersion,
+		bounds.From.UTC(),
+		bounds.ToInclusive.UTC(),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("query metrics_daily: %w", err)
+		return nil, fmt.Errorf("query postgres metrics_daily: %w", err)
 	}
-	return rows, nil
+	defer rows.Close()
+
+	items := make([]metricsDailyRecord, 0)
+	for rows.Next() {
+		var item metricsDailyRecord
+		var metricDate time.Time
+		var calculatedAt time.Time
+		if err := rows.Scan(
+			&item.MetricVersion,
+			&item.RepositoryID,
+			&metricDate,
+			&item.PRCycleTimeMinutes,
+			&item.ReviewWaitMinutes,
+			&item.AverageReviewMinutes,
+			&item.AverageFilesChanged,
+			&item.AverageAdditions,
+			&item.AverageDeletions,
+			&item.DeploymentFrequency,
+			&item.ChangeFailureRate,
+			&item.ReviewCoverage,
+			&item.PRCount,
+			&item.MergedPRCount,
+			&item.ReviewedPRCount,
+			&item.ReviewWaitSampleCount,
+			&item.ReviewTimeSampleCount,
+			&item.SuccessfulDeploymentCount,
+			&item.FailedDeploymentCount,
+			&calculatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan postgres metrics_daily row: %w", err)
+		}
+		item.MetricDate = formatDate(metricDate.UTC())
+		item.CalculatedAt = formatTimestamp(calculatedAt.UTC())
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate postgres metrics_daily rows: %w", err)
+	}
+	return items, nil
 }
 
 func (s *Service) listDeployments(ctx context.Context, repositoryID string, bounds dateBounds, environment string) ([]deploymentRecord, error) {
-	query := fmt.Sprintf(`
-SELECT
-  id,
-  repository_id,
-  environment,
-  status,
-  deployed_at,
-  synced_at
-FROM deployments
-FINAL
-WHERE repository_id = '%s'
-  AND environment = '%s'
-  AND deployed_at >= toDateTime64('%s', 3, 'UTC')
-  AND deployed_at < toDateTime64('%s', 3, 'UTC')
-ORDER BY deployed_at ASC
-`, escapeString(repositoryID), escapeString(environment), formatTimestamp(bounds.From), formatTimestamp(bounds.ToExclusive))
-
-	rows, err := clickhouse.QueryJSONEachRow[deploymentRecord](ctx, s.ch, query)
+	rows, err := s.pg.Queries().ListDeploymentsForAnalytics(ctx, sqlcgen.ListDeploymentsForAnalyticsParams{
+		RepositoryID: parseUUID(repositoryID),
+		DeployedAt:   toTimestamp(bounds.From),
+		DeployedAt_2: toTimestamp(bounds.ToExclusive),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("query deployments: %w", err)
+		return nil, fmt.Errorf("list postgres deployments: %w", err)
 	}
-	return rows, nil
+
+	items := make([]deploymentRecord, 0, len(rows))
+	for _, row := range rows {
+		if !strings.EqualFold(strings.TrimSpace(row.Environment), environment) {
+			continue
+		}
+		items = append(items, deploymentRecord{
+			ID:           row.ID.String(),
+			RepositoryID: row.RepositoryID.String(),
+			Environment:  row.Environment,
+			Status:       row.Status,
+			DeployedAt:   formatTimestamp(row.DeployedAt.Time),
+		})
+	}
+	return items, nil
 }
 
 func (s *Service) listHotspotRows(ctx context.Context, repositoryID string, bounds dateBounds) ([]hotspotRow, error) {
-	query := fmt.Sprintf(`
-SELECT
-  fc.file_path,
-  fc.additions,
-  fc.deletions,
-  fc.commit_count
-FROM (
-  SELECT
-    pull_request_id,
-    file_path,
-    additions,
-    deletions,
-    commit_count
-  FROM file_changes FINAL
-) AS fc
-INNER JOIN (
-  SELECT
-    id,
-    repository_id,
-    created_at
-  FROM pull_requests FINAL
-) AS pr ON pr.id = fc.pull_request_id
-WHERE pr.repository_id = '%s'
-  AND pr.created_at >= toDateTime64('%s', 3, 'UTC')
-  AND pr.created_at < toDateTime64('%s', 3, 'UTC')
-`, escapeString(repositoryID), formatTimestamp(bounds.From), formatTimestamp(bounds.ToExclusive))
-
-	rows, err := clickhouse.QueryJSONEachRow[hotspotRow](ctx, s.ch, query)
+	fileChanges, err := s.pg.Queries().ListFileChangesForAnalytics(ctx, sqlcgen.ListFileChangesForAnalyticsParams{
+		RepositoryID: parseUUID(repositoryID),
+		MergedAt:     toTimestamp(bounds.From),
+		CreatedAt:    toTimestamp(bounds.ToExclusive),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("query hotspots: %w", err)
+		return nil, fmt.Errorf("list postgres hotspots: %w", err)
 	}
-	return rows, nil
+
+	items := make([]hotspotRow, 0, len(fileChanges))
+	for _, row := range fileChanges {
+		items = append(items, hotspotRow{
+			FilePath:    row.FilePath,
+			Additions:   row.Additions,
+			Deletions:   row.Deletions,
+			CommitCount: row.CommitCount,
+		})
+	}
+	return items, nil
 }
 
 func aggregateSummary(repositoryID string, bounds dateBounds, dayType string, rows []metricsDailyRecord) DashboardSummary {

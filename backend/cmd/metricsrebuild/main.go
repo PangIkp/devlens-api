@@ -55,16 +55,20 @@ func main() {
 	}
 	defer pg.Close()
 
-	ch, err := clickhouse.Open(cfg.ClickHouse, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "open clickhouse: %v\n", err)
-		os.Exit(1)
-	}
-	defer ch.Close()
+	var ch *clickhouse.DB
+	if cfg.ClickHouse.DSN != "" {
+		var err error
+		ch, err = clickhouse.Open(cfg.ClickHouse, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open clickhouse: %v\n", err)
+			os.Exit(1)
+		}
+		defer ch.Close()
 
-	if err := clickhouse.EnsureSchema(ctx, ch, cfg.DataLifecycle); err != nil {
-		fmt.Fprintf(os.Stderr, "ensure clickhouse schema: %v\n", err)
-		os.Exit(1)
+		if err := clickhouse.EnsureSchema(ctx, ch, cfg.DataLifecycle); err != nil {
+			fmt.Fprintf(os.Stderr, "ensure clickhouse schema: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	service := metrics.NewService(pg, ch, metrics.RuleConfig{
