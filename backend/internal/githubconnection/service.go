@@ -16,7 +16,8 @@ type store interface {
 	EnsureOrganizationExists(context.Context, string) error
 	GetInstallation(context.Context, string) (*installationRecord, error)
 	FindOrganizationIDByInstallationID(context.Context, int64) (*string, error)
-	UpsertInstallation(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
+	FindInstallationLinkByInstallationID(context.Context, int64) (*installationLinkRecord, error)
+	UpsertInstallation(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
 	UpdateInstallationLifecycle(context.Context, int64, string, *time.Time, *time.Time) error
 	DisconnectInstallation(ctx context.Context, installationID int64, status string, disconnectedAt *time.Time) error
 	ReplaceAccessibleRepositories(context.Context, string, []accessibleRepositoryRecord) error
@@ -92,7 +93,7 @@ func (s *Service) GetConnection(ctx context.Context, organizationID string) (Con
 	}, nil
 }
 
-func (s *Service) StartInstallation(ctx context.Context, organizationID string, req StartInstallationRequest) (StartInstallationResponse, error) {
+func (s *Service) StartInstallation(ctx context.Context, organizationID string, connectedByUserID string, req StartInstallationRequest) (StartInstallationResponse, error) {
 	if err := s.store.EnsureOrganizationExists(ctx, organizationID); err != nil {
 		return StartInstallationResponse{}, err
 	}
@@ -100,7 +101,12 @@ func (s *Service) StartInstallation(ctx context.Context, organizationID string, 
 		return StartInstallationResponse{}, ErrConnectionNotConfigured
 	}
 
-	state := organizationID + ":" + strconv.FormatInt(s.now().UTC().Unix(), 10)
+	stateParts := []string{organizationID}
+	if userID := strings.TrimSpace(connectedByUserID); userID != "" {
+		stateParts = append(stateParts, userID)
+	}
+	stateParts = append(stateParts, strconv.FormatInt(s.now().UTC().Unix(), 10))
+	state := strings.Join(stateParts, ":")
 	installURL, err := s.app.InstallURL(state, trimOptional(req.RedirectURL))
 	if err != nil {
 		return StartInstallationResponse{}, err
@@ -108,14 +114,14 @@ func (s *Service) StartInstallation(ctx context.Context, organizationID string, 
 	return StartInstallationResponse{InstallURL: installURL, State: state}, nil
 }
 
-func (s *Service) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string) (ConnectionResponse, error) {
+func (s *Service) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string, connectedByUserID string) (ConnectionResponse, error) {
 	if err := s.store.EnsureOrganizationExists(ctx, organizationID); err != nil {
 		return ConnectionResponse{}, err
 	}
 	if s.app == nil || !s.app.Enabled() {
 		return ConnectionResponse{}, ErrConnectionNotConfigured
 	}
-	if err := validateInstallationState(organizationID, state, s.now().UTC()); err != nil {
+	if err := validateInstallationState(organizationID, connectedByUserID, state, s.now().UTC()); err != nil {
 		return ConnectionResponse{}, err
 	}
 
@@ -126,11 +132,14 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 	// unique constraint on installation_id and fails as a raw 500 instead of
 	// a message the user can act on. Checked before the GitHub API call so
 	// the conflict is caught without spending a request on it.
-	linkedOrganizationID, err := s.store.FindOrganizationIDByInstallationID(ctx, installationID)
+	link, err := s.store.FindInstallationLinkByInstallationID(ctx, installationID)
 	if err != nil {
 		return ConnectionResponse{}, err
 	}
-	if linkedOrganizationID != nil && *linkedOrganizationID != organizationID {
+	if link != nil && link.ConnectedByUserID != nil && strings.TrimSpace(connectedByUserID) != "" && *link.ConnectedByUserID != connectedByUserID {
+		return ConnectionResponse{}, ErrInstallationLinkedToAnotherUser
+	}
+	if link != nil && link.OrganizationID != organizationID {
 		return ConnectionResponse{}, ErrInstallationLinkedToAnotherOrg
 	}
 
@@ -148,7 +157,7 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 		targetType = "selected_repositories"
 	}
 
-	if _, err := s.store.UpsertInstallation(ctx, organizationID, installation.ID, installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
+	if _, err := s.store.UpsertInstallation(ctx, organizationID, installation.ID, optionalNonEmptyString(connectedByUserID), installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
 		return ConnectionResponse{}, err
 	}
 
@@ -159,15 +168,22 @@ func (s *Service) CompleteInstallation(ctx context.Context, organizationID strin
 	return s.GetConnection(ctx, organizationID)
 }
 
-func validateInstallationState(organizationID string, state string, now time.Time) error {
+func validateInstallationState(organizationID string, connectedByUserID string, state string, now time.Time) error {
 	parts := strings.Split(strings.TrimSpace(state), ":")
-	if len(parts) != 2 {
+	if len(parts) != 2 && len(parts) != 3 {
 		return ErrInvalidInstallationState
 	}
 	if parts[0] != strings.TrimSpace(organizationID) {
 		return ErrInvalidInstallationState
 	}
-	issuedAtUnix, err := strconv.ParseInt(parts[1], 10, 64)
+	issuedAtIndex := 1
+	if len(parts) == 3 {
+		if strings.TrimSpace(connectedByUserID) == "" || parts[1] != strings.TrimSpace(connectedByUserID) {
+			return ErrInvalidInstallationState
+		}
+		issuedAtIndex = 2
+	}
+	issuedAtUnix, err := strconv.ParseInt(parts[issuedAtIndex], 10, 64)
 	if err != nil {
 		return ErrInvalidInstallationState
 	}
@@ -194,7 +210,7 @@ func (s *Service) ListAccessibleRepositories(ctx context.Context, params ListAcc
 	return s.store.ListAccessibleRepositories(ctx, params)
 }
 
-func (s *Service) Disconnect(ctx context.Context, organizationID string) error {
+func (s *Service) Disconnect(ctx context.Context, organizationID string, currentUserID string) error {
 	if err := s.store.EnsureOrganizationExists(ctx, organizationID); err != nil {
 		return err
 	}
@@ -205,6 +221,9 @@ func (s *Service) Disconnect(ctx context.Context, organizationID string) error {
 	}
 	if installation == nil {
 		return ErrInstallationNotFound
+	}
+	if installation.ConnectedByUserID != nil && strings.TrimSpace(currentUserID) != "" && *installation.ConnectedByUserID != currentUserID {
+		return ErrInstallationLinkedToAnotherUser
 	}
 
 	repositoryIDs, err := s.store.ListLinkedRepositoryIDs(ctx, organizationID)
@@ -399,7 +418,7 @@ func (s *Service) refreshInstallationByInstallationID(ctx context.Context, insta
 		targetType = "selected_repositories"
 	}
 
-	if _, err := s.store.UpsertInstallation(ctx, *organizationID, installation.ID, installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
+	if _, err := s.store.UpsertInstallation(ctx, *organizationID, installation.ID, nil, installation.AccountLogin, installation.AccountType, targetType, status, installation.Permissions, installation.InstalledByGithubID, installation.SuspendedAt); err != nil {
 		return err
 	}
 
@@ -451,6 +470,14 @@ func trimOptional(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func optionalNonEmptyString(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func int64Ptr(value int64) *int64 {

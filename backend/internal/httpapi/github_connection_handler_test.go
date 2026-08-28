@@ -15,23 +15,23 @@ import (
 
 type stubGitHubConnectionService struct {
 	getFn        func(context.Context, string) (githubconnection.ConnectionResponse, error)
-	startFn      func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
-	completeFn   func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
+	startFn      func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
+	completeFn   func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error)
 	listFn       func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
 	selectFn     func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
-	disconnectFn func(context.Context, string) error
+	disconnectFn func(context.Context, string, string) error
 }
 
 func (s stubGitHubConnectionService) GetConnection(ctx context.Context, organizationID string) (githubconnection.ConnectionResponse, error) {
 	return s.getFn(ctx, organizationID)
 }
 
-func (s stubGitHubConnectionService) StartInstallation(ctx context.Context, organizationID string, req githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
-	return s.startFn(ctx, organizationID, req)
+func (s stubGitHubConnectionService) StartInstallation(ctx context.Context, organizationID string, userID string, req githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+	return s.startFn(ctx, organizationID, userID, req)
 }
 
-func (s stubGitHubConnectionService) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string) (githubconnection.ConnectionResponse, error) {
-	return s.completeFn(ctx, organizationID, installationID, state)
+func (s stubGitHubConnectionService) CompleteInstallation(ctx context.Context, organizationID string, installationID int64, state string, userID string) (githubconnection.ConnectionResponse, error) {
+	return s.completeFn(ctx, organizationID, installationID, state, userID)
 }
 
 func (s stubGitHubConnectionService) ListAccessibleRepositories(ctx context.Context, params githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -42,11 +42,11 @@ func (s stubGitHubConnectionService) SelectRepositories(ctx context.Context, org
 	return s.selectFn(ctx, organizationID, req)
 }
 
-func (s stubGitHubConnectionService) Disconnect(ctx context.Context, organizationID string) error {
+func (s stubGitHubConnectionService) Disconnect(ctx context.Context, organizationID string, userID string) error {
 	if s.disconnectFn == nil {
 		return nil
 	}
-	return s.disconnectFn(ctx, organizationID)
+	return s.disconnectFn(ctx, organizationID, userID)
 }
 
 func TestGetGitHubConnectionHandler(t *testing.T) {
@@ -64,10 +64,10 @@ func TestGetGitHubConnectionHandler(t *testing.T) {
 				ConnectedRepositories: 2,
 			}, nil
 		},
-		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+		startFn: func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -102,10 +102,10 @@ func TestSelectGitHubRepositoriesHandler(t *testing.T) {
 		getFn: func(context.Context, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
-		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+		startFn: func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -159,10 +159,10 @@ func TestGetGitHubConnectionHandlerReturnsNotModifiedWhenETagMatches(t *testing.
 				State:          githubconnection.StateConnected,
 			}, nil
 		},
-		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+		startFn: func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -204,10 +204,10 @@ func TestDisconnectGitHubConnectionHandler(t *testing.T) {
 				State:          githubconnection.StateNotConnected,
 			}, nil
 		},
-		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+		startFn: func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -216,7 +216,7 @@ func TestDisconnectGitHubConnectionHandler(t *testing.T) {
 		selectFn: func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
 			return githubconnection.SelectRepositoriesResponse{}, nil
 		},
-		disconnectFn: func(_ context.Context, organizationID string) error {
+		disconnectFn: func(_ context.Context, organizationID string, _ string) error {
 			disconnectedOrgID = organizationID
 			return nil
 		},
@@ -254,10 +254,10 @@ func TestDisconnectGitHubConnectionHandlerReturnsNotFound(t *testing.T) {
 		getFn: func(context.Context, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
-		startFn: func(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
+		startFn: func(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error) {
 			return githubconnection.StartInstallationResponse{}, nil
 		},
-		completeFn: func(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error) {
+		completeFn: func(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error) {
 			return githubconnection.ConnectionResponse{}, nil
 		},
 		listFn: func(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error) {
@@ -266,7 +266,7 @@ func TestDisconnectGitHubConnectionHandlerReturnsNotFound(t *testing.T) {
 		selectFn: func(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error) {
 			return githubconnection.SelectRepositoriesResponse{}, nil
 		},
-		disconnectFn: func(context.Context, string) error {
+		disconnectFn: func(context.Context, string, string) error {
 			return githubconnection.ErrInstallationNotFound
 		},
 	}

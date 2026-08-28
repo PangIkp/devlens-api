@@ -16,12 +16,14 @@ import (
 
 type GitHubConnectionService interface {
 	GetConnection(context.Context, string) (githubconnection.ConnectionResponse, error)
-	StartInstallation(context.Context, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
-	CompleteInstallation(context.Context, string, int64, string) (githubconnection.ConnectionResponse, error)
+	StartInstallation(context.Context, string, string, githubconnection.StartInstallationRequest) (githubconnection.StartInstallationResponse, error)
+	CompleteInstallation(context.Context, string, int64, string, string) (githubconnection.ConnectionResponse, error)
 	ListAccessibleRepositories(context.Context, githubconnection.ListAccessibleRepositoriesParams) (githubconnection.ListAccessibleRepositoriesResult, error)
 	SelectRepositories(context.Context, string, githubconnection.SelectRepositoriesRequest) (githubconnection.SelectRepositoriesResponse, error)
-	Disconnect(context.Context, string) error
+	Disconnect(context.Context, string, string) error
 }
+
+const errorCodeGitHubInstallationAlreadyLinked = "GITHUB_INSTALLATION_ALREADY_LINKED"
 
 type GitHubConnectionHandler struct {
 	service    GitHubConnectionService
@@ -79,12 +81,12 @@ func (h *GitHubConnectionHandler) disconnect(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if svcErr := h.service.Disconnect(r.Context(), organizationID); svcErr != nil {
+	userID, _ := currentUserID(r)
+	if svcErr := h.service.Disconnect(r.Context(), organizationID, userID); svcErr != nil {
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
 
-	userID, _ := currentUserID(r)
 	recordAudit(r.Context(), h.audit, auditlog.Entry{
 		OrganizationID: stringRef(organizationID),
 		ActorUserID:    stringRef(userID),
@@ -117,12 +119,12 @@ func (h *GitHubConnectionHandler) startInstallation(w http.ResponseWriter, r *ht
 		}
 	}
 
-	item, svcErr := h.service.StartInstallation(r.Context(), organizationID, req)
+	userID, _ := currentUserID(r)
+	item, svcErr := h.service.StartInstallation(r.Context(), organizationID, userID, req)
 	if svcErr != nil {
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
-	userID, _ := currentUserID(r)
 	recordAudit(r.Context(), h.audit, auditlog.Entry{
 		OrganizationID: stringRef(organizationID),
 		ActorUserID:    stringRef(userID),
@@ -155,12 +157,12 @@ func (h *GitHubConnectionHandler) completeInstallation(w http.ResponseWriter, r 
 		return
 	}
 
-	item, svcErr := h.service.CompleteInstallation(r.Context(), organizationID, installationID, state)
+	userID, _ := currentUserID(r)
+	item, svcErr := h.service.CompleteInstallation(r.Context(), organizationID, installationID, state, userID)
 	if svcErr != nil {
 		writeGitHubConnectionError(w, r, svcErr)
 		return
 	}
-	userID, _ := currentUserID(r)
 	recordAudit(r.Context(), h.audit, auditlog.Entry{
 		OrganizationID: stringRef(organizationID),
 		ActorUserID:    stringRef(userID),
@@ -251,7 +253,9 @@ func writeGitHubConnectionError(w http.ResponseWriter, r *http.Request, err erro
 	case errors.Is(err, githubconnection.ErrConnectionNotConfigured):
 		WriteError(w, r, http.StatusConflict, NewConflictError("GitHub App is not configured"))
 	case errors.Is(err, githubconnection.ErrInstallationLinkedToAnotherOrg):
-		WriteError(w, r, http.StatusConflict, NewConflictError("This GitHub installation is already connected to a different organization. Disconnect it there first, or install the app on a different GitHub account or organization."))
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubInstallationAlreadyLinked, "This GitHub installation is already connected to a different organization. Disconnect it there first, or install the app on a different GitHub account or organization."))
+	case errors.Is(err, githubconnection.ErrInstallationLinkedToAnotherUser):
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubInstallationAlreadyLinked, "This GitHub installation is already connected to a different user. Disconnect it there first, or install the app on a different GitHub account or organization."))
 	case errors.Is(err, githubconnection.ErrInvalidInstallationState):
 		WriteError(w, r, http.StatusBadRequest, NewValidationError("request validation failed", FieldInvalid("state", "is invalid or expired")))
 	default:

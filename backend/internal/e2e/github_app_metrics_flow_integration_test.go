@@ -30,9 +30,10 @@ func TestGitHubAppInstallSelectSyncAndMetricsReadyIntegration(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	githubRepoID := int64(42001)
+	installationID := time.Now().UTC().UnixNano()
 	app := integrationGitHubApp{
 		installation: githubapp.Installation{
-			ID:           7001,
+			ID:           installationID,
 			AccountLogin: "pangikp",
 			AccountType:  "User",
 			TargetType:   "all",
@@ -59,7 +60,7 @@ func TestGitHubAppInstallSelectSyncAndMetricsReadyIntegration(t *testing.T) {
 	connectionRepo := githubconnection.NewRepository(db)
 	connectionSvc := githubconnection.NewService(connectionRepo, app, nil)
 
-	connection, err := connectionSvc.CompleteInstallation(ctx, orgID, 7001, orgID+":"+strconv.FormatInt(time.Now().UTC().Unix(), 10))
+	connection, err := connectionSvc.CompleteInstallation(ctx, orgID, installationID, orgID+":"+strconv.FormatInt(time.Now().UTC().Unix(), 10), "")
 	if err != nil {
 		t.Fatalf("complete installation: %v", err)
 	}

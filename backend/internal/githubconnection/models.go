@@ -85,6 +85,7 @@ type installationRecord struct {
 	ID                    string
 	OrganizationID        string
 	InstallationID        int64
+	ConnectedByUserID     *string
 	AccountLogin          *string
 	AccountType           *string
 	TargetType            *string

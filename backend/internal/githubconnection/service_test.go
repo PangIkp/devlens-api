@@ -16,7 +16,8 @@ type stubStore struct {
 	ensureFn          func(context.Context, string) error
 	getInstallationFn func(context.Context, string) (*installationRecord, error)
 	findOrgFn         func(context.Context, int64) (*string, error)
-	upsertFn          func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
+	findLinkFn        func(context.Context, int64) (*installationLinkRecord, error)
+	upsertFn          func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error)
 	updateLifeFn      func(context.Context, int64, string, *time.Time, *time.Time) error
 	disconnectFn      func(context.Context, int64, string, *time.Time) error
 	replaceFn         func(context.Context, string, []accessibleRepositoryRecord) error
@@ -35,8 +36,18 @@ func (s stubStore) GetInstallation(ctx context.Context, organizationID string) (
 func (s stubStore) FindOrganizationIDByInstallationID(ctx context.Context, installationID int64) (*string, error) {
 	return s.findOrgFn(ctx, installationID)
 }
-func (s stubStore) UpsertInstallation(ctx context.Context, organizationID string, installationID int64, accountLogin, accountType, targetType, status string, permissions map[string]string, installedByGitHubID int64, suspendedAt *time.Time) (*installationRecord, error) {
-	return s.upsertFn(ctx, organizationID, installationID, accountLogin, accountType, targetType, status, permissions, installedByGitHubID, suspendedAt)
+func (s stubStore) FindInstallationLinkByInstallationID(ctx context.Context, installationID int64) (*installationLinkRecord, error) {
+	if s.findLinkFn != nil {
+		return s.findLinkFn(ctx, installationID)
+	}
+	orgID, err := s.findOrgFn(ctx, installationID)
+	if orgID == nil || err != nil {
+		return nil, err
+	}
+	return &installationLinkRecord{OrganizationID: *orgID}, nil
+}
+func (s stubStore) UpsertInstallation(ctx context.Context, organizationID string, installationID int64, connectedByUserID *string, accountLogin, accountType, targetType, status string, permissions map[string]string, installedByGitHubID int64, suspendedAt *time.Time) (*installationRecord, error) {
+	return s.upsertFn(ctx, organizationID, installationID, connectedByUserID, accountLogin, accountType, targetType, status, permissions, installedByGitHubID, suspendedAt)
 }
 func (s stubStore) UpdateInstallationLifecycle(ctx context.Context, installationID int64, status string, suspendedAt *time.Time, disconnectedAt *time.Time) error {
 	return s.updateLifeFn(ctx, installationID, status, suspendedAt, disconnectedAt)
@@ -114,7 +125,7 @@ func TestGetConnectionReturnsNotConnectedWithoutInstallation(t *testing.T) {
 		ensureFn:          func(context.Context, string) error { return nil },
 		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
 		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			return nil, nil
 		},
 		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
@@ -135,6 +146,36 @@ func TestGetConnectionReturnsNotConnectedWithoutInstallation(t *testing.T) {
 	}
 }
 
+func TestStartInstallationBindsStateToUser(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			return nil, nil
+		},
+	}, stubApp{
+		enabled: true,
+		installURLFn: func(state string, _ string) (string, error) {
+			return "https://github.com/apps/devlens/installations/new?state=" + state, nil
+		},
+	}, nil)
+	service.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+
+	result, err := service.StartInstallation(context.Background(), "org-1", "user-1", StartInstallationRequest{})
+	if err != nil {
+		t.Fatalf("start installation: %v", err)
+	}
+	if result.State != "org-1:user-1:1700000000" {
+		t.Fatalf("unexpected state %q", result.State)
+	}
+	if err := validateInstallationState("org-1", "user-2", result.State, service.now()); !errors.Is(err, ErrInvalidInstallationState) {
+		t.Fatalf("expected state to reject a different user, got %v", err)
+	}
+}
+
 func TestSelectRepositoriesCreatesSyncJobs(t *testing.T) {
 	t.Parallel()
 
@@ -144,7 +185,7 @@ func TestSelectRepositoriesCreatesSyncJobs(t *testing.T) {
 			return &installationRecord{ID: "inst-1", InstallationID: 42, Status: StateConnected}, nil
 		},
 		findOrgFn: func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			return nil, nil
 		},
 		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
@@ -194,7 +235,7 @@ func TestHandleInstallationEventIgnoresUnknownInstallationForOutOfOrderCallback(
 		ensureFn:          func(context.Context, string) error { return nil },
 		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
 		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			t.Fatal("upsert should not run before installation is linked to an organization")
 			return nil, nil
 		},
@@ -238,7 +279,7 @@ func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
 		ensureFn:          func(context.Context, string) error { return nil },
 		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
 		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(_ context.Context, _ string, _ int64, _ string, _ string, _ string, status string, _ map[string]string, _ int64, _ *time.Time) (*installationRecord, error) {
+		upsertFn: func(_ context.Context, _ string, _ int64, _ *string, _ string, _ string, _ string, status string, _ map[string]string, _ int64, _ *time.Time) (*installationRecord, error) {
 			storedStatus = status
 			return &installationRecord{InstallationID: 42, Status: status}, nil
 		},
@@ -278,7 +319,7 @@ func TestCompleteInstallationMarksPermissionGap(t *testing.T) {
 	}, nil)
 
 	validState := "org-1:" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
-	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState)
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState, "user-1")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -297,7 +338,7 @@ func TestCompleteInstallationRejectsExpiredState(t *testing.T) {
 		ensureFn:          func(context.Context, string) error { return nil },
 		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
 		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			t.Fatal("upsert should not run for expired state")
 			return nil, nil
 		},
@@ -317,7 +358,7 @@ func TestCompleteInstallationRejectsExpiredState(t *testing.T) {
 	}, nil)
 	service.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
 
-	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, "org-1:1699990000")
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, "org-1:1699990000", "user-1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -336,7 +377,7 @@ func TestCompleteInstallationRejectsInstallationLinkedToAnotherOrganization(t *t
 			otherOrg := "org-2"
 			return &otherOrg, nil
 		},
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			t.Fatal("upsert should not run when the installation belongs to a different organization")
 			return nil, nil
 		},
@@ -349,9 +390,39 @@ func TestCompleteInstallationRejectsInstallationLinkedToAnotherOrganization(t *t
 	}, nil)
 
 	validState := "org-1:" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
-	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState)
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState, "user-1")
 	if !errors.Is(err, ErrInstallationLinkedToAnotherOrg) {
 		t.Fatalf("expected ErrInstallationLinkedToAnotherOrg, got %v", err)
+	}
+}
+
+func TestCompleteInstallationRejectsInstallationLinkedToAnotherUser(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(stubStore{
+		ensureFn:          func(context.Context, string) error { return nil },
+		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
+		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
+		findLinkFn: func(context.Context, int64) (*installationLinkRecord, error) {
+			otherUser := "user-2"
+			return &installationLinkRecord{OrganizationID: "org-1", ConnectedByUserID: &otherUser}, nil
+		},
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+			t.Fatal("upsert should not run when the installation belongs to a different user")
+			return nil, nil
+		},
+	}, stubApp{
+		enabled: true,
+		getFn: func(context.Context, int64) (githubapp.Installation, error) {
+			t.Fatal("github app fetch should not run when the installation belongs to a different user")
+			return githubapp.Installation{}, nil
+		},
+	}, nil)
+
+	validState := "org-1:" + strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	_, err := service.CompleteInstallation(context.Background(), "org-1", 42, validState, "user-1")
+	if !errors.Is(err, ErrInstallationLinkedToAnotherUser) {
+		t.Fatalf("expected ErrInstallationLinkedToAnotherUser, got %v", err)
 	}
 }
 
@@ -369,7 +440,7 @@ func TestHandleInstallationEventDeletedDisconnectsAndClearsRepositories(t *testi
 		findOrgFn: func(context.Context, int64) (*string, error) {
 			return &organizationID, nil
 		},
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			return nil, nil
 		},
 		disconnectFn: func(_ context.Context, installationID int64, status string, disconnectedAt *time.Time) error {
@@ -415,7 +486,7 @@ func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
 			organizationID := "org-1"
 			return &organizationID, nil
 		},
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			return nil, nil
 		},
 		disconnectFn: func(_ context.Context, _ int64, status string, disconnectedAt *time.Time) error {
@@ -444,7 +515,7 @@ func TestDisconnectCancelsActiveSyncJobsAndSoftDisconnects(t *testing.T) {
 		},
 	})
 
-	if err := service.Disconnect(context.Background(), "org-1"); err != nil {
+	if err := service.Disconnect(context.Background(), "org-1", "user-1"); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if len(canceledJobIDs) != 1 || canceledJobIDs[0] != "job-1" {
@@ -465,7 +536,7 @@ func TestDisconnectReturnsNotFoundWithoutInstallation(t *testing.T) {
 		ensureFn:          func(context.Context, string) error { return nil },
 		getInstallationFn: func(context.Context, string) (*installationRecord, error) { return nil, nil },
 		findOrgFn:         func(context.Context, int64) (*string, error) { return nil, nil },
-		upsertFn: func(context.Context, string, int64, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
+		upsertFn: func(context.Context, string, int64, *string, string, string, string, string, map[string]string, int64, *time.Time) (*installationRecord, error) {
 			return nil, nil
 		},
 		updateLifeFn: func(context.Context, int64, string, *time.Time, *time.Time) error { return nil },
@@ -477,7 +548,7 @@ func TestDisconnectReturnsNotFoundWithoutInstallation(t *testing.T) {
 		linkFn:     func(context.Context, string, int64, bool) (string, error) { return "", nil },
 	}, nil, nil)
 
-	err := service.Disconnect(context.Background(), "org-1")
+	err := service.Disconnect(context.Background(), "org-1", "user-1")
 	if !errors.Is(err, ErrInstallationNotFound) {
 		t.Fatalf("expected ErrInstallationNotFound, got %v", err)
 	}
