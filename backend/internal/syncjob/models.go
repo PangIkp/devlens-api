@@ -71,7 +71,6 @@ type repositoryMetadata struct {
 	Name          string
 	FullName      string
 	DefaultBranch *string
-	IsActive      bool
 	ArchivedAt    *time.Time
 }
 

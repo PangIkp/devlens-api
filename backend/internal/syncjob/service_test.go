@@ -347,7 +347,7 @@ func TestServiceCreateRunsManualSyncWithStateAll(t *testing.T) {
 			return SyncJobResponse{}, nil
 		},
 		syncRepositoryMetadataFn: func(_ context.Context, repositoryID string, metadata repositoryMetadata, _ time.Time) error {
-			if repositoryID != "repo-1" || metadata.FullName != "devlens-labs/devlens-api" || metadata.IsActive != true {
+			if repositoryID != "repo-1" || metadata.FullName != "devlens-labs/devlens-api" {
 				t.Fatalf("unexpected metadata %+v", metadata)
 			}
 			return nil

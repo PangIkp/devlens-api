@@ -119,6 +119,29 @@ type MetricDefinition struct {
 	DeletedBy        pgtype.UUID
 }
 
+type MetricsDaily struct {
+	RepositoryID              pgtype.UUID
+	MetricVersion             int32
+	MetricDate                pgtype.Date
+	PrCycleTimeMinutes        float64
+	ReviewWaitMinutes         float64
+	AverageReviewMinutes      float64
+	AverageFilesChanged       float64
+	AverageAdditions          float64
+	AverageDeletions          float64
+	DeploymentFrequency       float64
+	ChangeFailureRate         float64
+	ReviewCoverage            float64
+	PrCount                   int64
+	MergedPrCount             int64
+	ReviewedPrCount           int64
+	ReviewWaitSampleCount     int64
+	ReviewTimeSampleCount     int64
+	SuccessfulDeploymentCount int64
+	FailedDeploymentCount     int64
+	CalculatedAt              pgtype.Timestamptz
+}
+
 type Organization struct {
 	ID        pgtype.UUID
 	GithubID  int64
