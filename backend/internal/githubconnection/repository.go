@@ -63,7 +63,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 				LIMIT 1
 			) latest_job ON gir.linked_repository_id IS NOT NULL
 		)
-		SELECT gi.id, gi.organization_id, COALESCE(gi.installation_id, 0), gi.connected_by_user_id, gi.account_login, gi.account_type, gi.target_type, gi.status, gi.suspended_at,
+		SELECT gi.id, gi.organization_id, COALESCE(gi.installation_id, 0), COALESCE(gi.account_github_id, 0), gi.connected_by_user_id, gi.account_login, gi.account_type, gi.target_type, gi.status, gi.suspended_at,
 		       MAX(rs.last_synced_at) AS last_synced_at,
 		       MAX(rs.sync_error_message) FILTER (WHERE rs.derived_selection_status = 'sync_failed') AS last_sync_error,
 		       COUNT(*) FILTER (WHERE rs.derived_selection_status IN ('selected','syncing','sync_failed','synced'))::int AS connected_repositories,
@@ -76,7 +76,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 
 	var rec installationRecord
 	var id, orgID, connectedByUserID pgtype.UUID
-	var installationID int64
+	var installationID, accountGithubID int64
 	var accountLogin, accountType, targetType pgtype.Text
 	var suspendedAt, lastSyncedAt pgtype.Timestamptz
 	var lastSyncError pgtype.Text
@@ -84,6 +84,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 		&id,
 		&orgID,
 		&installationID,
+		&accountGithubID,
 		&connectedByUserID,
 		&accountLogin,
 		&accountType,
@@ -105,6 +106,7 @@ func (r *Repository) GetInstallation(ctx context.Context, organizationID string)
 	rec.ID = id.String()
 	rec.OrganizationID = orgID.String()
 	rec.InstallationID = installationID
+	rec.AccountGithubID = accountGithubID
 	rec.ConnectedByUserID = optionalUUIDText(connectedByUserID)
 	rec.AccountLogin = optionalText(accountLogin)
 	rec.AccountType = optionalText(accountType)
@@ -188,7 +190,33 @@ func (r *Repository) FindInstallationLinkByInstallationID(ctx context.Context, i
 	}, nil
 }
 
-func (r *Repository) UpsertInstallation(ctx context.Context, organizationID string, installationID int64, connectedByUserID *string, accountLogin, accountType, targetType string, status string, permissions map[string]string, installedByGitHubID int64, suspendedAt *time.Time) (*installationRecord, error) {
+func (r *Repository) FindInstallationLinkByAccount(ctx context.Context, accountGithubID int64, accountLogin string, accountType string, connectedByUserID string) (*installationLinkRecord, error) {
+	var organizationID pgtype.UUID
+	var existingConnectedByUserID pgtype.UUID
+	err := r.db.Pool().QueryRow(ctx, `
+		SELECT organization_id, connected_by_user_id
+		FROM github_installations
+		WHERE connected_by_user_id IS NOT NULL
+		  AND connected_by_user_id <> $4
+		  AND (
+		      ($1::bigint > 0 AND account_github_id = $1)
+		      OR ($1::bigint = 0 AND lower(account_login) = lower($2) AND account_type = $3)
+		  )
+		ORDER BY updated_at DESC NULLS LAST, installed_at DESC
+		LIMIT 1`, accountGithubID, strings.TrimSpace(accountLogin), strings.TrimSpace(accountType), uuidValue(optionalNonEmptyString(connectedByUserID))).Scan(&organizationID, &existingConnectedByUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find installation link by account: %w", err)
+	}
+	return &installationLinkRecord{
+		OrganizationID:    organizationID.String(),
+		ConnectedByUserID: optionalUUIDText(existingConnectedByUserID),
+	}, nil
+}
+
+func (r *Repository) UpsertInstallation(ctx context.Context, organizationID string, installationID int64, accountGithubID int64, connectedByUserID *string, accountLogin, accountType, targetType string, status string, permissions map[string]string, installedByGitHubID int64, suspendedAt *time.Time) (*installationRecord, error) {
 	permissionsJSON, err := json.Marshal(permissions)
 	if err != nil {
 		return nil, fmt.Errorf("marshal permissions: %w", err)
@@ -196,12 +224,13 @@ func (r *Repository) UpsertInstallation(ctx context.Context, organizationID stri
 
 	row := r.db.Pool().QueryRow(ctx, `
 		INSERT INTO github_installations (
-			id, organization_id, installation_id, connected_by_user_id, account_login, account_type, target_type, status, permissions_json, installed_by_github_user_id, suspended_at, installed_at, updated_at
+			id, organization_id, installation_id, account_github_id, connected_by_user_id, account_login, account_type, target_type, status, permissions_json, installed_by_github_user_id, suspended_at, installed_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, NOW(), NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, NOW(), NOW()
 		)
 		ON CONFLICT (organization_id) DO UPDATE SET
 			installation_id = EXCLUDED.installation_id,
+			account_github_id = COALESCE(EXCLUDED.account_github_id, github_installations.account_github_id),
 			connected_by_user_id = COALESCE(EXCLUDED.connected_by_user_id, github_installations.connected_by_user_id),
 			account_login = EXCLUDED.account_login,
 			account_type = EXCLUDED.account_type,
@@ -216,6 +245,7 @@ func (r *Repository) UpsertInstallation(ctx context.Context, organizationID stri
 		newUUID(),
 		parseUUID(organizationID),
 		installationID,
+		nullInt64(accountGithubID),
 		uuidValue(connectedByUserID),
 		nullString(accountLogin),
 		nullString(accountType),

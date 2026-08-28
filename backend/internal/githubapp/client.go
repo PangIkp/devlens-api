@@ -29,6 +29,7 @@ const (
 
 type Installation struct {
 	ID                  int64
+	AccountGithubID     int64
 	AccountLogin        string
 	AccountType         string
 	TargetType          string
@@ -170,6 +171,7 @@ func (c *HTTPClient) GetInstallation(ctx context.Context, installationID int64) 
 
 	return Installation{
 		ID:                  payload.ID,
+		AccountGithubID:     payload.Account.ID,
 		AccountLogin:        payload.Account.Login,
 		AccountType:         payload.Account.Type,
 		TargetType:          payload.RepositorySelection,
