@@ -37,17 +37,26 @@ type HotspotQueryParams struct {
 	SortOrder string
 }
 
+type DataCoverage struct {
+	RequestedDays       int     `json:"requestedDays"`
+	AvailableDays       int     `json:"availableDays"`
+	IsPartial           bool    `json:"isPartial"`
+	OldestAvailableDate *string `json:"oldestAvailableDate,omitempty"`
+	NewestAvailableDate *string `json:"newestAvailableDate,omitempty"`
+}
+
 type DashboardSummary struct {
-	MetricVersion       int     `json:"metricVersion"`
-	DayType             string  `json:"dayType"`
-	RepositoryID        string  `json:"repositoryId"`
-	From                string  `json:"from"`
-	To                  string  `json:"to"`
-	PRCycleTimeMinutes  float64 `json:"prCycleTimeMinutes"`
-	ReviewWaitMinutes   float64 `json:"reviewWaitMinutes"`
-	DeploymentFrequency float64 `json:"deploymentFrequency"`
-	ChangeFailureRate   float64 `json:"changeFailureRate"`
-	ReviewCoverage      float64 `json:"reviewCoverage"`
+	MetricVersion       int           `json:"metricVersion"`
+	DayType             string        `json:"dayType"`
+	RepositoryID        string        `json:"repositoryId"`
+	From                string        `json:"from"`
+	To                  string        `json:"to"`
+	PRCycleTimeMinutes  float64       `json:"prCycleTimeMinutes"`
+	ReviewWaitMinutes   float64       `json:"reviewWaitMinutes"`
+	DeploymentFrequency float64       `json:"deploymentFrequency"`
+	ChangeFailureRate   float64       `json:"changeFailureRate"`
+	ReviewCoverage      float64       `json:"reviewCoverage"`
+	DataCoverage        *DataCoverage `json:"dataCoverage,omitempty"`
 }
 
 type MetricPoint struct {
@@ -63,6 +72,7 @@ type PullRequestMetrics struct {
 	AverageAdditions        float64       `json:"averageAdditions"`
 	AverageDeletions        float64       `json:"averageDeletions"`
 	CycleTimeTrend          []MetricPoint `json:"cycleTimeTrend"`
+	DataCoverage            *DataCoverage `json:"dataCoverage,omitempty"`
 }
 
 type ReviewMetrics struct {
@@ -72,6 +82,7 @@ type ReviewMetrics struct {
 	AverageReviewMinutes float64       `json:"averageReviewMinutes"`
 	ReviewCoverage       float64       `json:"reviewCoverage"`
 	WaitTimeTrend        []MetricPoint `json:"waitTimeTrend"`
+	DataCoverage         *DataCoverage `json:"dataCoverage,omitempty"`
 }
 
 type DeploymentMetrics struct {
@@ -81,6 +92,7 @@ type DeploymentMetrics struct {
 	DeploymentFrequency float64       `json:"deploymentFrequency"`
 	ChangeFailureRate   float64       `json:"changeFailureRate"`
 	DeploymentTrend     []MetricPoint `json:"deploymentTrend"`
+	DataCoverage        *DataCoverage `json:"dataCoverage,omitempty"`
 }
 
 type HotspotFile struct {

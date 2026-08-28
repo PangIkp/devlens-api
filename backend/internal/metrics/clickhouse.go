@@ -529,6 +529,7 @@ func aggregateSummary(repositoryID string, bounds dateBounds, dayType string, ro
 		RepositoryID:  repositoryID,
 		From:          formatDate(bounds.From),
 		To:            formatDate(bounds.ToInclusive),
+		DataCoverage:  dataCoverage(bounds, rows),
 	}
 
 	var totalCycleWeighted float64
@@ -575,6 +576,7 @@ func aggregatePullRequestMetrics(bounds dateBounds, interval string, dayType str
 		MetricVersion:  CurrentMetricVersion,
 		DayType:        dayType,
 		CycleTimeTrend: make([]MetricPoint, 0),
+		DataCoverage:   dataCoverage(bounds, rows),
 	}
 
 	var totalCycleWeighted float64
@@ -618,6 +620,7 @@ func aggregateReviewMetrics(bounds dateBounds, interval string, dayType string, 
 		MetricVersion: CurrentMetricVersion,
 		DayType:       dayType,
 		WaitTimeTrend: make([]MetricPoint, 0),
+		DataCoverage:  dataCoverage(bounds, rows),
 	}
 
 	var totalWaitWeighted float64
@@ -662,6 +665,7 @@ func aggregateDeploymentMetrics(bounds dateBounds, interval string, dayType stri
 		MetricVersion:   CurrentMetricVersion,
 		DayType:         dayType,
 		DeploymentTrend: make([]MetricPoint, 0),
+		DataCoverage:    dataCoverage(bounds, rows),
 	}
 
 	var totalSuccessful int64
@@ -795,6 +799,48 @@ func intervalLabel(day time.Time, interval string) string {
 	default:
 		return formatDate(day)
 	}
+}
+
+func dataCoverage(bounds dateBounds, rows []metricsDailyRecord) *DataCoverage {
+	coverage := &DataCoverage{
+		RequestedDays: bounds.DaysInclusive,
+		IsPartial:     true,
+	}
+	if bounds.DaysInclusive <= 0 {
+		coverage.IsPartial = false
+		return coverage
+	}
+
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		day, err := time.Parse("2006-01-02", row.MetricDate)
+		if err != nil {
+			continue
+		}
+		day = day.UTC()
+		if day.Before(bounds.From) || day.After(bounds.ToInclusive) {
+			continue
+		}
+		label := formatDate(day)
+		seen[label] = struct{}{}
+	}
+
+	coverage.AvailableDays = len(seen)
+	coverage.IsPartial = coverage.AvailableDays < coverage.RequestedDays
+	if coverage.AvailableDays == 0 {
+		return coverage
+	}
+
+	dates := make([]string, 0, len(seen))
+	for date := range seen {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	oldest := dates[0]
+	newest := dates[len(dates)-1]
+	coverage.OldestAvailableDate = &oldest
+	coverage.NewestAvailableDate = &newest
+	return coverage
 }
 
 func weightedAverage(total float64, count int64) float64 {

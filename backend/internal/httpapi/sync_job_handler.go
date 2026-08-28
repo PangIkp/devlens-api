@@ -30,6 +30,7 @@ type SyncJobHandler struct {
 
 const (
 	errorCodeGitHubInstallationRequired   = "GITHUB_INSTALLATION_REQUIRED"
+	errorCodeGitHubAppCredentialsInvalid  = "GITHUB_APP_CREDENTIALS_INVALID"
 	errorCodeRepositoryOnboardingRequired = "REPOSITORY_ONBOARDING_REQUIRED"
 	errorCodeRepositoryDeactivated        = "REPOSITORY_DEACTIVATED"
 )
@@ -206,6 +207,8 @@ func writeSyncJobError(w http.ResponseWriter, r *http.Request, err error) {
 		WriteError(w, r, http.StatusNotFound, NewNotFoundError("Repository not found"))
 	case errors.Is(err, syncjob.ErrRepositoryNotConnected):
 		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubInstallationRequired, "GitHub installation must be connected before syncing this repository"))
+	case errors.Is(err, syncjob.ErrGitHubAppCredentialsInvalid):
+		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeGitHubAppCredentialsInvalid, "GitHub App credentials are invalid. Check the configured app ID and private key"))
 	case errors.Is(err, syncjob.ErrRepositoryNotSelected):
 		WriteError(w, r, http.StatusConflict, NewConflictErrorWithCode(errorCodeRepositoryOnboardingRequired, "Repository must be selected from the GitHub installation before syncing"))
 	case errors.Is(err, syncjob.ErrRepositoryDeactivated):

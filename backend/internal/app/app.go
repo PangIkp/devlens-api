@@ -209,6 +209,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	syncGitHubClient := githubapp.NewSyncClient(cfg.GitHub, githubAppClient, githubConnectionRepository, fallbackGitHubClient, appMetrics)
 	syncJobRepository := syncjob.NewRepository(postgresDB)
 	syncJobService := syncjob.NewService(syncJobRepository, syncGitHubClient, appMetrics)
+	syncJobService.SetLogger(logger)
 	syncJobService.ConfigureRateLimitThrottle(cfg.Sync.GitHubRateLimitRemaining)
 	syncJobHandler := httpapi.NewSyncJobHandler(syncJobService, authorizationService, auditService)
 	syncWorker := syncjob.NewWorker(logger, syncJobRepository, syncJobService, cfg.Sync.WorkerPollInterval, cfg.Sync.WorkerBatchSize, cfg.Sync.WorkerConcurrency, cfg.Sync.JobTimeout, appMetrics)

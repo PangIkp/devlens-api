@@ -119,18 +119,16 @@ command นี้จะ:
 - ClickHouse purge ใช้ mutation แบบ asynchronous
 - ถ้า reconnect หลัง installation ถูก purge ไปแล้ว จะถือเป็น onboarding ใหม่และต้อง initial sync ใหม่
 
-### Per-organization retention override (API-only, ยังไม่ enforce)
+### Per-organization retention override
 
 `GET/PUT /organizations/{organizationId}/settings/retention` ให้ organization ตั้งค่า
 `analyticsRawRetentionDays` ของตัวเองแยกจาก global default ได้ ค่าถูกเก็บใน table
 `organization_retention_settings` (Postgres)
 
-**ข้อจำกัดสำคัญ**: `ANALYTICS_RAW_RETENTION_DAYS` ที่ใช้ purge ข้อมูลจริงใน ClickHouse
-เป็น **table-level TTL ตัวเดียวครอบทุก organization** (ตั้งค่าตอน boot ผ่าน
-`clickhouse.EnsureSchema`, ดู §2) ไม่ใช่ per-row/per-org ดังนั้นค่าที่ตั้งผ่าน endpoint นี้
-**ยังไม่มีผลต่อการลบข้อมูลจริง** — response จะมี `enforced: false` เสมอเพื่อสื่อสารเรื่องนี้
-การทำ per-org enforcement จริงต้อง redesign เป็น per-row TTL column + ClickHouse mutation
-ซึ่งเป็นงาน infra แยกที่ยังไม่ได้ทำ (follow-up)
+`make data-cleanup` จะ honor ค่า per-organization นี้ตอนลบ raw analytics ใน ClickHouse
+โดยลบแยกตาม repository/pull request ids ของแต่ละ organization ส่วน `metrics_daily`
+ยังใช้ aggregate TTL จาก `ANALYTICS_AGGREGATE_RETENTION_DAYS`
+response ของ retention settings จึงส่ง `enforced: true`
 
 ## 7. Organization Rule Settings
 

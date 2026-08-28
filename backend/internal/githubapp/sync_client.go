@@ -32,6 +32,13 @@ func NewSyncClient(cfg config.GitHubConfig, app Client, lookup InstallationLooku
 	}
 }
 
+func (c *SyncClient) GitHubAppID() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.cfg.App.AppID
+}
+
 func (c *SyncClient) GetRepository(ctx context.Context, owner, repo string) (githubclient.Repository, error) {
 	client, err := c.clientForRepository(ctx, owner, repo)
 	if err != nil {

@@ -3,9 +3,12 @@ package syncjob
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/PangIkp/devlens/backend/internal/githubapp"
 	"github.com/PangIkp/devlens/backend/internal/githubclient"
 )
 
@@ -557,6 +560,20 @@ func TestProcessPendingFailsRepositoryWithoutConnectedInstallation(t *testing.T)
 	}
 	if failedMessage != ErrRepositoryNotConnected.Error() {
 		t.Fatalf("expected failure message %q, got %q", ErrRepositoryNotConnected.Error(), failedMessage)
+	}
+}
+
+func TestSyncFailureMessageSanitizesGitHubAppErrors(t *testing.T) {
+	t.Parallel()
+
+	credentialErr := &githubapp.APIError{StatusCode: http.StatusUnauthorized, Message: "Bad credentials"}
+	if got := syncFailureMessage(fmt.Errorf("create installation token: %w", credentialErr)); got != ErrGitHubAppCredentialsInvalid.Error() {
+		t.Fatalf("expected sanitized github credentials message, got %q", got)
+	}
+
+	installationErr := fmt.Errorf("create installation token: %w", githubapp.ErrInstallationNotFound)
+	if got := syncFailureMessage(installationErr); got != ErrRepositoryNotConnected.Error() {
+		t.Fatalf("expected repository not connected message, got %q", got)
 	}
 }
 

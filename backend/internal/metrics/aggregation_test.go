@@ -57,6 +57,35 @@ func TestAggregateSummaryWeightedAverages(t *testing.T) {
 	if summary.ReviewCoverage != float64(4)/float64(6) {
 		t.Fatalf("unexpected review coverage %v", summary.ReviewCoverage)
 	}
+	if summary.DataCoverage == nil || summary.DataCoverage.IsPartial {
+		t.Fatalf("expected complete data coverage, got %+v", summary.DataCoverage)
+	}
+}
+
+func TestDataCoverageReportsPartialRange(t *testing.T) {
+	t.Parallel()
+
+	bounds, err := normalizeBounds(mustDate("2026-07-01"), mustDate("2026-07-03"))
+	if err != nil {
+		t.Fatalf("normalize bounds: %v", err)
+	}
+
+	coverage := dataCoverage(bounds, []metricsDailyRecord{{MetricDate: "2026-07-02"}})
+	if coverage.RequestedDays != 3 {
+		t.Fatalf("expected 3 requested days, got %d", coverage.RequestedDays)
+	}
+	if coverage.AvailableDays != 1 {
+		t.Fatalf("expected 1 available day, got %d", coverage.AvailableDays)
+	}
+	if !coverage.IsPartial {
+		t.Fatal("expected partial coverage")
+	}
+	if coverage.OldestAvailableDate == nil || *coverage.OldestAvailableDate != "2026-07-02" {
+		t.Fatalf("unexpected oldest available date %+v", coverage.OldestAvailableDate)
+	}
+	if coverage.NewestAvailableDate == nil || *coverage.NewestAvailableDate != "2026-07-02" {
+		t.Fatalf("unexpected newest available date %+v", coverage.NewestAvailableDate)
+	}
 }
 
 func TestAggregateDeploymentMetricsUsesBusinessDayDenominator(t *testing.T) {

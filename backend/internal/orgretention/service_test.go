@@ -46,8 +46,8 @@ func TestGetReturnsGlobalDefaultWhenNoOverrideStored(t *testing.T) {
 	if response.AnalyticsRawRetentionDays != 180 {
 		t.Fatalf("expected global default 180, got %d", response.AnalyticsRawRetentionDays)
 	}
-	if response.Enforced {
-		t.Fatal("expected enforced to be false until per-org ClickHouse enforcement is built")
+	if !response.Enforced {
+		t.Fatal("expected enforced to be true")
 	}
 }
 
